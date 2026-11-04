@@ -1,6 +1,6 @@
 # meeniFX Studios
 
-Photomosaic video editor with a dockable, resizable multi-track timeline.
+Video editor with a dockable, resizable multi-track timeline.
 
 ## Requirements
 
