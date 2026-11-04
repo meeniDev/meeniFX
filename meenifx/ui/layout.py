@@ -12,10 +12,10 @@ saved by an older arrangement falls back to the default instead of breaking.
 import json
 import os
 
-from PyQt6.QtCore import QSettings, QStandardPaths, Qt
+from PyQt6.QtCore import QSettings, QStandardPaths, Qt, QTimer
 from PyQt6.QtWidgets import QApplication
 
-LAYOUT_VERSION = 6
+LAYOUT_VERSION = 8
 
 # key -> (dock title, default area, minimum size in pixels).
 # Preview is a normal dock (never the central widget) so it stays movable, floatable
@@ -34,8 +34,12 @@ SIDE_KEYS = ("project", "preview", "effects", "properties")
 # Docks that share the bottom area with the timeline (tabbed with it by default).
 BOTTOM_KEYS = ("timeline", "graph")
 
-# Roughly: left 18 %, preview the rest, right 20 %; timeline 30 % of the height.
+# Roughly: left 16 %, preview the rest, right 24 %; timeline 30 % of the dock area.
 LEFT_SHARE, RIGHT_SHARE, TIMELINE_SHARE = 0.16, 0.24, 0.30
+# The browser gets this much of the right column; the inspector takes the rest.
+INSPECTOR_SHARE = 0.55
+# QWIDGETSIZE_MAX: the "no maximum" value a pinned dock is released with.
+_UNBOUNDED = 16777215
 MIN_WINDOW = (1000, 600)
 
 
@@ -107,48 +111,114 @@ def build_default_layout(window, apply_sizes=False):
 
 
 def apply_default_sizes(window):
-    """Resize the docks to the default proportions using the live window geometry."""
+    """Resize the docks to the default proportions using their live geometry.
+
+    Two things made the old version miss: ``resizeDocks`` silently ignores a request
+    whose sizes do not add up to the space the dock area actually has, and it ignores
+    one that asks a column for less than it can physically shrink to. The window's size
+    is not the dock area's size (menu bar, toolbars and title bars are part of neither
+    share), so the Timeline used to stay at whatever height it was given - 60 % of the
+    window on a fresh layout. Every size below is measured from the docks themselves.
+    """
     docks = window.docks
-    width, height = max(window.width(), MIN_WINDOW[0]), max(window.height(), MIN_WINDOW[1])
-    left = max(DOCK_SPECS["project"][2][0], round(width * LEFT_SHARE))
-    right = max(DOCK_SPECS["effects"][2][0], round(width * RIGHT_SHARE))
-    preview = max(DOCK_SPECS["preview"][2][0], width - left - right)
-    window.resizeDocks([docks["project"], docks["preview"], docks["effects"]],
-                       [left, preview, right], Qt.Orientation.Horizontal)
+    project, preview, effects = docks["project"], docks["preview"], docks["effects"]
+    total_width = project.width() + preview.width() + effects.width()
+    if total_width > 0:
+        left, middle, right = _column_sizes(total_width, _column_minimums(docks))
+        window.resizeDocks([project, preview, effects], [left, middle, right],
+                           Qt.Orientation.Horizontal)
     _apply_inspector_split(window, docks)
-    _apply_vertical_sizes(window, docks, height)
+    _apply_timeline_split(window, docks)
+
+
+def _column_minimums(docks):
+    """The narrowest each side column can actually get.
+
+    ``DOCK_SPECS`` holds the design floor, but a panel can need much more (the Project
+    column's button row needs 384 px). Asking for less makes Qt drop the whole resize.
+    """
+    keys = ("project", "preview", "effects")
+    minimums = []
+    for key in keys:
+        dock = docks[key]
+        minimums.append(max(DOCK_SPECS[key][2][0], dock.minimumSizeHint().width(),
+                            dock.minimumWidth()))
+    return minimums
+
+
+def _column_sizes(total, minimums):
+    """Project | Preview | Effects widths that add up to exactly ``total``."""
+    if sum(minimums) >= total:
+        return list(minimums)
+    shares = (LEFT_SHARE, 1.0 - LEFT_SHARE - RIGHT_SHARE, RIGHT_SHARE)
+    sizes = [max(minimum, round(total * share)) for minimum, share in zip(minimums, shares)]
+    excess = sum(sizes) - total
+    for index in (0, 2, 1):  # give the slack back to the side columns first
+        take = min(excess, sizes[index] - minimums[index])
+        sizes[index] -= take
+        excess -= take
+        if excess <= 0:
+            break
+    sizes[1] = total - sizes[0] - sizes[2]
+    return sizes
 
 
 def _apply_inspector_split(window, docks):
     """Give the browser slightly more of the right column than the inspector."""
     effects, props = docks["effects"], docks["properties"]
-    available = effects.height() + props.height()
-    if available <= 0:
+    total = effects.height() + props.height()
+    if total <= 0:
         return
-    floor = DOCK_SPECS["properties"][2][1]
-    top = max(DOCK_SPECS["effects"][2][1], round(available * 0.55))
-    top = min(top, available - floor)
-    window.resizeDocks([effects, props], [top, max(floor, available - top)],
-                       Qt.Orientation.Vertical)
+    top = max(DOCK_SPECS["effects"][2][1], round(total * INSPECTOR_SHARE))
+    top = min(top, total - DOCK_SPECS["properties"][2][1])
+    top = max(DOCK_SPECS["effects"][2][1], top)
+    window.resizeDocks([effects, props], [top, total - top], Qt.Orientation.Vertical)
 
 
-def _apply_vertical_sizes(window, docks, window_height):
-    """Split the dock area so the Timeline takes ``TIMELINE_SHARE`` of the window.
+def _apply_timeline_split(window, docks):
+    """Split the dock area so the Timeline takes ``TIMELINE_SHARE`` of its height."""
+    total = docks["preview"].height() + docks["timeline"].height()
+    if total <= 0:
+        return
+    set_timeline_height(window, round(total * TIMELINE_SHARE))
 
-    The dock area is shorter than the window (menu bar, toolbars, status bar), and
-    ``resizeDocks`` silently drops a request whose sizes add up to more than that area.
-    Always ask for exactly the space the docks already have, or the Timeline keeps
-    whatever height it was given before.
+
+def timeline_limits(docks):
+    """Shortest and tallest the Timeline may become for the current dock area."""
+    total = docks["preview"].height() + docks["timeline"].height()
+    lowest = DOCK_SPECS["timeline"][2][1]
+    highest = max(lowest, total - DOCK_SPECS["preview"][2][1])
+    return lowest, highest
+
+
+def pin_timeline_height(window, height):
+    """Hold the Timeline at ``height`` px; call release_timeline_height() to free it.
+
+    ``resizeDocks`` on a docked pair moves the separator only part of the way, while a
+    fixed height is obeyed exactly, so both the default split and the separator drag
+    pin the dock for the duration and then hand it back to the layout.
     """
-    available = docks["preview"].height() + docks["timeline"].height()
-    if available <= 0:
-        available = max(MIN_WINDOW[1], window_height)
-    timeline = max(DOCK_SPECS["timeline"][2][1], round(window_height * TIMELINE_SHARE))
-    timeline = min(timeline, available - DOCK_SPECS["preview"][2][1])
-    timeline = max(DOCK_SPECS["timeline"][2][1], timeline)
-    window.resizeDocks([docks["preview"], docks["timeline"]],
-                       [max(DOCK_SPECS["preview"][2][1], available - timeline), timeline],
-                       Qt.Orientation.Vertical)
+    timeline = window.docks["timeline"]
+    lowest, highest = timeline_limits(window.docks)
+    if highest <= lowest:
+        return
+    target = int(max(lowest, min(int(height), highest)))
+    # Pin both ends: a maximum alone would only cap the dock, it would not grow it.
+    timeline.setMinimumHeight(target)
+    timeline.setMaximumHeight(target)
+
+
+def release_timeline_height(window):
+    """Undo pin_timeline_height() so the user can drag the Timeline again."""
+    timeline = window.docks["timeline"]
+    timeline.setMaximumHeight(_UNBOUNDED)
+    timeline.setMinimumHeight(DOCK_SPECS["timeline"][2][1])
+
+
+def set_timeline_height(window, height):
+    """Set the Timeline height now and leave it resizable afterwards."""
+    pin_timeline_height(window, height)
+    QTimer.singleShot(0, lambda: release_timeline_height(window))
 
 
 def _encode(blob):

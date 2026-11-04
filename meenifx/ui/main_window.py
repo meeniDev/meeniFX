@@ -7,10 +7,11 @@ import time
 
 import cv2
 import numpy as np
-from PyQt6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, QPoint, QRunnable, Qt, QThreadPool, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QActionGroup, QKeySequence
 from PyQt6.QtWidgets import (QAbstractSpinBox, QDockWidget, QLineEdit, QMainWindow,
-                             QMessageBox, QProgressDialog, QPlainTextEdit, QTextEdit, QToolBar)
+                             QMessageBox, QProgressDialog, QPlainTextEdit, QStyle, QTextEdit,
+                             QToolBar)
 
 from ..audio.demo import ensure_demo_audio
 from ..audio.engine import AudioEngine
@@ -155,7 +156,7 @@ class MainWindow(QMainWindow):
         self._prerender_dialog=None
         self._prerender_failed=False
         self._layout_ready=False; self._pending_default_sizes=False; self._shown=False
-        self._layout_touched=False
+        self._layout_touched=False; self._split_drag=None
         self._layout_save_timer=QTimer(self); self._layout_save_timer.setSingleShot(True)
         self._layout_save_timer.setInterval(600); self._layout_save_timer.timeout.connect(self._save_layout_now)
         self._connect_model(); self._build_ui(); self._connect_audio(); self._restore_layout(); self._bind_shortcuts(); self._connect_values()
@@ -826,10 +827,19 @@ class MainWindow(QMainWindow):
 
     def reset_layout(self):
         """Rebuild the default arrangement and overwrite the saved layout with it."""
-        self.build_default_layout(apply_sizes=True)
-        self._pending_default_sizes=False
-        self._save_layout_now()
+        self.build_default_layout(apply_sizes=False)
+        self._pending_default_sizes=True
+        # Re-docking recomputes the geometry, so the shares are applied on the next
+        # turn of the event loop, when there is a real dock area to measure.
+        QTimer.singleShot(0,self._force_default_sizes)
         self.bridge.status.emit("Layout reset to the default arrangement")
+
+    def _force_default_sizes(self):
+        """Apply the default shares after a reset, overriding the drag guard."""
+        self._layout_touched=False
+        dock_layout.apply_default_sizes(self)
+        self._pending_default_sizes=False
+        self._schedule_layout_save()
 
     def save_layout_preset(self):
         path=save_file(self,"Save layout preset",os.path.join(dock_layout.default_preset_dir(),"Editing.mfxlayout"),
@@ -912,6 +922,10 @@ class MainWindow(QMainWindow):
 
     def _on_dock_moved(self):
         """The user rearranged the docks: stop auto-sizing and save the new layout."""
+        if getattr(self,"_pending_default_sizes",False):
+            # Showing the window re-docks the panels itself; that is not the user
+            # rearranging anything, and it must not cancel the pending default sizes.
+            return
         if self._shown and self._layout_ready:
             self._layout_touched=True
         self._schedule_layout_save()
@@ -923,6 +937,54 @@ class MainWindow(QMainWindow):
         if final:
             self._pending_default_sizes=False
             self._schedule_layout_save()
+
+    # ------------------------------------------------- Preview/Timeline separator
+    def _timeline_splitter_band(self):
+        """The y range of the separator between the top row and the Timeline, or None.
+
+        Qt only accepts a drag of that separator that makes the bottom dock *bigger*;
+        dragging it back up does nothing at all, so the boundary is handled here: the
+        press pins the dock and the moves set its height, both directions included.
+        The band stops at the Timeline's top edge so its title bar stays draggable.
+        """
+        timeline=self.docks.get("timeline")
+        if timeline is None or timeline.isFloating() or not timeline.isVisible():return None
+        if self.dockWidgetArea(timeline)!=Qt.DockWidgetArea.BottomDockWidgetArea:return None
+        boundary=timeline.mapTo(self,QPoint(0,0)).y()
+        extent=self.style().pixelMetric(QStyle.PixelMetric.PM_DockWidgetSeparatorExtent,None,self)
+        return boundary-max(int(extent)+1,4),boundary
+
+    def _end_split_drag(self):
+        if self._split_drag is None:return
+        self._split_drag=None; self.unsetCursor()
+        dock_layout.release_timeline_height(self); self._schedule_layout_save()
+
+    def mousePressEvent(self,event):
+        band=self._timeline_splitter_band()
+        if (event.button()==Qt.MouseButton.LeftButton and band is not None
+                and band[0]<=event.position().y()<=band[1]):
+            self._split_drag=(event.position().y(),self.docks["timeline"].height())
+            self._pending_default_sizes=False; self._layout_touched=True
+            dock_layout.pin_timeline_height(self,self.docks["timeline"].height())
+            self.setCursor(Qt.CursorShape.SplitVCursor)
+            event.accept(); return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self,event):
+        drag=self._split_drag
+        if drag is not None:
+            if not (event.buttons() & Qt.MouseButton.LeftButton):
+                # The release went somewhere else: never leave the dock pinned.
+                self._end_split_drag(); event.accept(); return
+            start_y,timeline_height=drag
+            dock_layout.pin_timeline_height(self,timeline_height-int(event.position().y()-start_y))
+            event.accept(); return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self,event):
+        if self._split_drag is not None:
+            self._end_split_drag(); event.accept(); return
+        super().mouseReleaseEvent(event)
 
     def resizeEvent(self,event):
         super().resizeEvent(event); self._schedule_layout_save()

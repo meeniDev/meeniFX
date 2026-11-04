@@ -20,7 +20,7 @@ def test_text_and_icon_contrast_meets_4_5():
 
 
 def test_layout_version_and_docks(editor):
-    assert layout.LAYOUT_VERSION == 6
+    assert layout.LAYOUT_VERSION == 8
     assert "controls" not in editor.docks
 
 
@@ -34,6 +34,77 @@ def test_effects_and_properties_are_separate_labelled_docks(editor):
     entries = {action.text().strip() for action in editor._menu_view.actions() if action.isCheckable()}
     assert {"Effects", "Properties"} <= entries, f"View must label both panels, got {entries}"
     assert "" not in entries, "a panel entry with no text cannot be found in the View menu"
+
+
+def test_default_layout_gives_the_timeline_a_third(qapp, monkeypatch, tmp_path):
+    """The default shares must land on the docks, not be dropped by resizeDocks."""
+    from PyQt6.QtCore import QSettings
+
+    from meenifx.ui.main_window import MainWindow
+
+    monkeypatch.setattr(layout, "app_settings",
+                        lambda: QSettings(str(tmp_path / "layout.ini"), QSettings.Format.IniFormat))
+    monkeypatch.setattr(MainWindow, "_load_demo_project", lambda self: None)
+    window = MainWindow(qapp)
+    window.resize(1500, 950)
+    window.show()
+    pump(qapp, 0.4)
+    window.reset_layout()
+    pump(qapp, 0.3)
+
+    docks = window.docks
+    column = docks["preview"].height() + docks["timeline"].height()
+    assert column > 0
+    share = docks["timeline"].height() / column
+    assert 0.25 <= share <= 0.35, f"timeline takes {share:.0%} of the dock area, expected ~30%"
+    width = sum(docks[key].width() for key in ("project", "preview", "effects"))
+    project = docks["project"]
+    assert project.width() >= project.minimumSizeHint().width(), "the project column was squeezed below its content"
+    assert docks["preview"].width() > project.width(), "preview must stay the widest column"
+    assert project.width() < width * 0.30, "the project column is back to half the window"
+    window.close()
+
+
+def _mouse(kind, y, button=Qt.MouseButton.LeftButton):
+    from PyQt6.QtCore import QEvent, QPointF
+    from PyQt6.QtGui import QMouseEvent
+
+    held = Qt.MouseButton.LeftButton if kind != QEvent.Type.MouseButtonRelease else Qt.MouseButton.NoButton
+    return QMouseEvent(kind, QPointF(600, y), QPointF(600, y), button, held,
+                       Qt.KeyboardModifier.NoModifier)
+
+
+def test_the_timeline_separator_drags_smaller(editor, qapp):
+    """The Preview/Timeline boundary must shrink the timeline, not only grow it.
+
+    Qt's own separator drag only makes the bottom dock bigger and silently ignores the
+    other direction, so the window handles this boundary itself. The handlers are called
+    directly here: Qt delivers real separator presses to the main window (its own drag
+    depends on it), but a synthetic mouse event cannot be routed the same way offscreen.
+    """
+    from PyQt6.QtCore import QEvent
+
+    editor.reset_layout()
+    pump(qapp, 0.3)
+    timeline = editor.docks["timeline"]
+    # Start from a tall timeline: at the default 30 % it already sits near its minimum.
+    layout.set_timeline_height(editor, 430)
+    pump(qapp, 0.3)
+    start_height = timeline.height()
+    assert start_height > 380, f"could not grow the timeline for the test (at {start_height}px)"
+
+    band = editor._timeline_splitter_band()
+    assert band is not None, "the timeline separator is not reachable"
+    editor.mousePressEvent(_mouse(QEvent.Type.MouseButtonPress, band[1] - 2))
+    assert editor._split_drag is not None, "a press on the separator must start a drag"
+    for step in (30, 60, 90, 120):
+        editor.mouseMoveEvent(_mouse(QEvent.Type.MouseMove, band[1] - 2 + step))
+        pump(qapp, 0.02)
+    editor.mouseReleaseEvent(_mouse(QEvent.Type.MouseButtonRelease, band[1] + 118))
+    pump(qapp, 0.25)
+    assert timeline.height() < start_height - 60, (
+        f"timeline stayed at {timeline.height()}px after dragging the separator down")
+    assert timeline.maximumHeight() > 100000, "the drag left the timeline pinned in place"
 
 
 def test_top_bar_and_preview_row(editor):
