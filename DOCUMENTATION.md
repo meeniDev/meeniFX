@@ -27,7 +27,7 @@ table, one transform model.
 | Audio | numpy DSP, WASAPI capture, 16-bit WAV |
 | Project file | one `.mfxpf` (a ZIP, format v5) |
 | Source size | 98 modules, ~32 000 lines in `meenifx/` |
-| Tests | 46 files in `tests/`, headless with `QT_QPA_PLATFORM=offscreen` |
+| Tests | 40 `test_*.py` suites plus 9 driver scripts in `tests/`, headless with `QT_QPA_PLATFORM=offscreen` |
 
 ## 2. Running it
 
