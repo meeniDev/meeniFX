@@ -341,6 +341,21 @@ def test_anchor_point_can_be_keyframed():
     assert clip.transform["anchor_x"].key_at(20).value == pytest.approx(50.0)
 
 
+def test_anchor_preset_still_works_when_the_anchor_is_animated():
+    """The preset must read the animated anchor at the playhead, not the AnimatedValue."""
+    engine, clip = build_engine()
+    engine.session.project_size = engine.project_size()
+    engine.session.auto_keyframe.set(True)
+    engine.session.set_playhead(20)
+    engine.session.set_anchor(clip.id, 40.0, 30.0, keep_position=False)
+    assert engine.session.set_anchor_preset(clip.id, "bottom_right"), \
+        "a keyframed anchor must not break the anchor presets"
+    clip = _find(engine, clip.id)
+    values = T.evaluate(clip, 20)
+    expected_x, expected_y = T.anchor_for("bottom_right", engine.project_size(), (320, 180))
+    assert (values.anchor_x, values.anchor_y) == pytest.approx((expected_x, expected_y))
+
+
 # -------------------------------------------------------------------- text presets
 @pytest.mark.parametrize("preset", list(ANIM.TEXT_IN_PRESETS) + list(ANIM.TEXT_OUT_PRESETS))
 def test_every_text_preset_generates_editable_keyframes(preset):

@@ -392,15 +392,15 @@ def set_anchor(clip, anchor_x, anchor_y, frame=0, auto_key=False,
     keyframe at `frame` (Auto-Keyframe) and a static one shifts as a whole - the same
     rules the preview drag and the inspector use.
     """
-    transform = ensure_transform(clip)
     frame = max(0, int(frame or 0))
-    old_x = float(transform.get("anchor_x") or 0.0)
-    old_y = float(transform.get("anchor_y") or 0.0)
+    # The anchor can be animated itself (an anchor drag under Auto-Keyframe), so read it
+    # through evaluate(): the stored channel may be an AnimatedValue, not a number.
+    state = evaluate(clip, frame)
+    old_x, old_y = state.anchor_x, state.anchor_y
     new_x, new_y = float(anchor_x), float(anchor_y)
     if keep_position:
         # matrix() maps a fitted point p to target + RS*(p - centre - anchor), so shifting
         # the anchor by d moves the picture by -RS*d. Add RS*d to the position to undo it.
-        state = evaluate(clip, frame)
         theta = math.radians(state.rotation)
         cos_t, sin_t = math.cos(theta), math.sin(theta)
         sx = state.scale_x / 100.0 * (-1.0 if state.flip_h else 1.0)
