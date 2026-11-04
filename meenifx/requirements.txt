@@ -1,0 +1,6 @@
+PyQt6>=6.6
+opencv-python
+numpy
+pillow
+imageio
+imageio-ffmpeg

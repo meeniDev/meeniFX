@@ -1,0 +1,51 @@
+# ---- Python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# ---- PyInstaller / packaging output -----------------------------------------
+build/
+dist/
+dist_new/
+*.manifest
+
+# ---- Tool and editor state --------------------------------------------------
+.freebuff/
+.idea/
+.vscode/launch.json
+*.code-workspace
+
+# ---- Crash logs and local state ---------------------------------------------
+crash.log
+meenifx-errors.log
+*.log
+
+# ---- Projects (they never belong in the repo) -------------------------------
+*.mfxpf
+*.mfxpf.bak
+*.mfxpf.autosave
+Cache/
+Recordings/
+
+# ---- Generated media and screenshots ----------------------------------------
+# Test fixtures (mosaic-output.png, demo_audio/, flight-reacts-flight.gif) and the
+# tile assets in assets/ stay tracked - the tests and the PyInstaller spec need them.
+mosaic-output.mp4
+mosaic-output.gif
+flight-reacts-flight_mosaic.gif
+flight-reacts-flight-mosaic.gif
+snap_glow_probe.png
+graph_editor_preview.png
+*.tmp
+*.part
