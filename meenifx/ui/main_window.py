@@ -215,9 +215,12 @@ class MainWindow(QMainWindow):
         self.setDockNestingEnabled(True)
         self.setDockOptions(QMainWindow.DockOption.AnimatedDocks|QMainWindow.DockOption.AllowNestedDocks|
                             QMainWindow.DockOption.AllowTabbedDocks|QMainWindow.DockOption.GroupedDragging)
+        # The inspector is its own dock, so "Effects" and "Properties" can be moved,
+        # hidden and tabbed separately and each gets a labelled View entry.
         for key,widget in (("project",self.project_panel),("preview",self.preview_panel),
-                           ("effects",self.effects_panel),("timeline",self.timeline_panel),
-                           ("graph",self.graph_editor)):
+                           ("effects",self.effects_panel),
+                           ("properties",self.effects_panel.props_scroll),
+                           ("timeline",self.timeline_panel),("graph",self.graph_editor)):
             self._add_dock(key,widget)
         # Interactive editing lives on the picture, but only on screen: the overlay is
         # painted by the preview widget and never touches the rendered frame.
@@ -249,6 +252,7 @@ class MainWindow(QMainWindow):
         # session keyframe selection, so the two views can never disagree.
         self.timeline_panel.canvas.graph_editor_requested.connect(self._open_graph_editor_for)
         self.effects_panel.preview_requested.connect(self._preview_clip_range)
+        self.effects_panel.properties_requested.connect(self._raise_properties)
         self.timeline_panel.canvas.playhead_requested.connect(self._set_playhead)
         self.bridge.changed.connect(self.timeline_panel.canvas.update)
         self._menu_view.addSeparator(); self._menu_view.addAction("Markers List...",self.show_markers_list)
@@ -284,13 +288,15 @@ class MainWindow(QMainWindow):
         dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
         dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable|QDockWidget.DockWidgetFeature.DockWidgetMovable|QDockWidget.DockWidgetFeature.DockWidgetFloatable)
         self.addDockWidget(area,dock); self.docks[key]=dock; self._menu_view.addAction(dock.toggleViewAction())
-        if key=="effects":
-            # The tabs inside already say Effects / Properties; keep a slim title bar for move/float/close only.
-            dock.toggleViewAction().setText("Effects"); dock.setWindowTitle(" ")
         # Debounced save: a crash mid-drag can never leave a stale layout behind.
         dock.dockLocationChanged.connect(lambda _area:self._on_dock_moved())
         dock.topLevelChanged.connect(lambda _floating:self._on_dock_moved())
         dock.visibilityChanged.connect(lambda _visible:self._schedule_layout_save())
+
+    def _raise_properties(self):
+        """An effect was added: bring the inspector forward without forcing it open."""
+        dock=self.docks.get("properties")
+        if dock is not None and dock.isVisible():dock.raise_()
 
     def _build_actions(self):
         bar=self.menuBar(); file_menu=bar.addMenu("File")

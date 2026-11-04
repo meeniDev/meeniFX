@@ -23,7 +23,7 @@ w = MainWindow(app); w.show(); P = w.projects; P.autosave_timer.stop(); E = w.en
 QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
 from meenifx.ui import project_controller as PC
 PC.MissingMediaDialog.exec = lambda self: 0
-assert layout.LAYOUT_VERSION == 5
+assert layout.LAYOUT_VERSION == 6
 panel = w.project_panel
 assert "project" in w.docks and "controls" not in w.docks and w.dockWidgetArea(w.docks["project"]) == Qt.DockWidgetArea.LeftDockWidgetArea
 P.create_project(ProjectSettings.from_preset("720p 30", "PanelTest"), os.path.join(tmp, "p")); pump(2)

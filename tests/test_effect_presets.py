@@ -77,7 +77,7 @@ def preset_combo(window):
     for row in getattr(window.effects_panel, "_rows", ()):
         if row.get("kind") == "choice" and row.get("name") == "preset":
             return row["combo"]
-    for combo in window.effects_panel.findChildren(QComboBox):
+    for combo in window.findChildren(QComboBox):
         if combo.count() and combo.itemData(0) == "none":
             return combo
     return None
@@ -196,7 +196,7 @@ def test_the_active_preset_is_visible_when_the_card_is_collapsed(editor):
     badges = [label for label in window.effects_panel.findChildren(type(window.effects_panel.findChild(object))) ]
     del badges
     from PyQt6.QtWidgets import QLabel
-    texts = [label.text() for label in window.effects_panel.findChildren(QLabel)
+    texts = [label.text() for label in window.findChildren(QLabel)
              if label.objectName() == "presetBadge" and label.isVisible()
              and not label.isHidden()]
     assert "Vintage" in texts, f"the header should name the active preset, got {texts}"

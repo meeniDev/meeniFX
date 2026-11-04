@@ -329,7 +329,7 @@ def test_the_inspector_offers_the_same_gestures_as_switches(editor):
     window, clip = editor
     window.effects_panel.refresh_properties()
     pump(0.05)
-    labels = {box.text(): box for box in window.effects_panel.findChildren(QCheckBox)}
+    labels = {box.text(): box for box in window.findChildren(QCheckBox)}
     assert "Lock aspect ratio" in labels
     assert "Scale from center" in labels
     assert "Snap rotation" in labels

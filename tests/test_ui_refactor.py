@@ -1,5 +1,6 @@
 """Checks for the simplified UI: tokens, top bar, preview row, timeline toolbar, effect cards."""
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QFrame, QLabel, QPushButton, QToolButton
 
 from meenifx import tokens
@@ -19,8 +20,20 @@ def test_text_and_icon_contrast_meets_4_5():
 
 
 def test_layout_version_and_docks(editor):
-    assert layout.LAYOUT_VERSION == 5
+    assert layout.LAYOUT_VERSION == 6
     assert "controls" not in editor.docks
+
+
+def test_effects_and_properties_are_separate_labelled_docks(editor):
+    """The browser and the inspector are two docks, and View names both of them."""
+    docks = editor.docks
+    assert "effects" in docks and "properties" in docks
+    assert docks["properties"].widget() is editor.effects_panel.props_scroll
+    assert docks["properties"] not in editor.tabifiedDockWidgets(docks["effects"])
+    assert editor.dockWidgetArea(docks["properties"]) == Qt.DockWidgetArea.RightDockWidgetArea
+    entries = {action.text().strip() for action in editor._menu_view.actions() if action.isCheckable()}
+    assert {"Effects", "Properties"} <= entries, f"View must label both panels, got {entries}"
+    assert "" not in entries, "a panel entry with no text cannot be found in the View menu"
 
 
 def test_top_bar_and_preview_row(editor):

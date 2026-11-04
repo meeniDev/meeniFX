@@ -1,7 +1,8 @@
 """Effects browser and Properties editor.
 
-The Effects tab is a searchable tree of collapsible categories. The Properties tab shows
-one "Clip" card followed by one card per effect; each card header has a collapse arrow,
+They are two panels, each in its own dock: the browser is a searchable tree of
+collapsible categories, and the inspector (``props_scroll``) shows one "Clip" card
+followed by one card per effect; each card header has a collapse arrow,
 an enable toggle, the name, Reset and a "..." menu, and can be dragged to reorder.
 Rows come from each effect's `PARAMS` table, so a control can never write to a
 different key than the effect reads. Only numeric parameters get keyframe controls.
@@ -13,7 +14,7 @@ from PyQt6.QtCore import QMimeData, QPoint, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QDrag, QFont
 from PyQt6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, QFrame, QGridLayout,
                              QHBoxLayout, QLabel, QLineEdit, QMenu, QPlainTextEdit, QScrollArea,
-                             QTabWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
+                             QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
                              QWidget)
 
 from .. import tokens
@@ -157,16 +158,22 @@ class _EffectTree(QTreeWidget):
 
 
 class EffectsPanel(QWidget):
-    """Effect browser (tab 1) and clip/effect property cards (tab 2)."""
+    """Effect browser. The property cards live in ``props_scroll``, a dock of their own.
+
+    Both halves stay on this object (``refresh_properties``, ``properties_layout``,
+    ``_rows``) so there is still exactly one inspector; only the widget tree is split, so
+    the two docks can be moved, hidden and tabbed independently.
+    """
 
     effects_changed = pyqtSignal()
     # "Preview" in the text animation section: play this frame range in the window.
     preview_requested = pyqtSignal(int, int)
+    # An effect was added: the host should bring the Properties panel forward.
+    properties_requested = pyqtSignal()
 
     def __init__(self, engine, parent=None):
         super().__init__(parent)
         self.engine = engine
-        self.tabs = QTabWidget()
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search effects")
         self.search.setClearButtonEnabled(True)
@@ -181,7 +188,6 @@ class EffectsPanel(QWidget):
         page_layout.setSpacing(tokens.SP2)
         page_layout.addWidget(self.search)
         page_layout.addWidget(self.effect_tree, 1)
-        self.tabs.addTab(page, "Effects")
         self.properties = _CardHost()
         self.properties.card_dropped.connect(self._card_dropped)
         self.properties_layout = QVBoxLayout(self.properties)
@@ -192,10 +198,10 @@ class EffectsPanel(QWidget):
         self.props_scroll.setWidgetResizable(True)
         self.props_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.props_scroll.setWidget(self.properties)
-        self.tabs.addTab(self.props_scroll, "Properties")
+        # Parentless on purpose: MainWindow puts it straight into the Properties dock.
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.tabs)
+        layout.addWidget(page)
         self._rows = []
         self._built_key = None
         self._edit_before = None
@@ -288,7 +294,7 @@ class EffectsPanel(QWidget):
                 clip.effects.append({"effect_id": effect_id, "enabled": True,
                                      "params": copy.deepcopy(effect.capture_params())})
         self.engine.session.apply_to_clips([c.id for c in clips], "Add effect", add)
-        self.tabs.setCurrentIndex(1)
+        self.properties_requested.emit()
         self.refresh_properties()
 
     # --------------------------------------------------------------- properties

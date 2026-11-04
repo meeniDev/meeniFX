@@ -15,7 +15,7 @@ import os
 from PyQt6.QtCore import QSettings, QStandardPaths, Qt
 from PyQt6.QtWidgets import QApplication
 
-LAYOUT_VERSION = 5
+LAYOUT_VERSION = 6
 
 # key -> (dock title, default area, minimum size in pixels).
 # Preview is a normal dock (never the central widget) so it stays movable, floatable
@@ -25,11 +25,12 @@ DOCK_SPECS = {
     "project": ("Project", Qt.DockWidgetArea.LeftDockWidgetArea, (220, 200)),
     "preview": ("Preview", Qt.DockWidgetArea.RightDockWidgetArea, (300, 220)),
     "effects": ("Effects", Qt.DockWidgetArea.RightDockWidgetArea, (320, 200)),
+    "properties": ("Properties", Qt.DockWidgetArea.RightDockWidgetArea, (320, 160)),
     "timeline": ("Timeline", Qt.DockWidgetArea.BottomDockWidgetArea, (380, 150)),
     "graph": ("Graph Editor", Qt.DockWidgetArea.BottomDockWidgetArea, (360, 150)),
 }
 
-SIDE_KEYS = ("project", "preview", "effects")
+SIDE_KEYS = ("project", "preview", "effects", "properties")
 # Docks that share the bottom area with the timeline (tabbed with it by default).
 BOTTOM_KEYS = ("timeline", "graph")
 
@@ -88,6 +89,9 @@ def build_default_layout(window, apply_sizes=False):
     # Timeline is only *added* to the bottom area - splitting it against the preview
     # would move it inside the right column and it would stop spanning the window.
     window.splitDockWidget(docks["preview"], docks["effects"], Qt.Orientation.Horizontal)
+    # The browser and the inspector share the right column, stacked: both stay visible
+    # while an effect is edited, and each keeps its own title bar and View entry.
+    window.splitDockWidget(docks["effects"], docks["properties"], Qt.Orientation.Vertical)
     docks["project"].raise_()
     graph = docks.get("graph")
     if graph is not None and graph not in docks["timeline"].parentWidget().findChildren(type(graph)):
@@ -111,7 +115,21 @@ def apply_default_sizes(window):
     preview = max(DOCK_SPECS["preview"][2][0], width - left - right)
     window.resizeDocks([docks["project"], docks["preview"], docks["effects"]],
                        [left, preview, right], Qt.Orientation.Horizontal)
+    _apply_inspector_split(window, docks)
     _apply_vertical_sizes(window, docks, height)
+
+
+def _apply_inspector_split(window, docks):
+    """Give the browser slightly more of the right column than the inspector."""
+    effects, props = docks["effects"], docks["properties"]
+    available = effects.height() + props.height()
+    if available <= 0:
+        return
+    floor = DOCK_SPECS["properties"][2][1]
+    top = max(DOCK_SPECS["effects"][2][1], round(available * 0.55))
+    top = min(top, available - floor)
+    window.resizeDocks([effects, props], [top, max(floor, available - top)],
+                       Qt.Orientation.Vertical)
 
 
 def _apply_vertical_sizes(window, docks, window_height):
