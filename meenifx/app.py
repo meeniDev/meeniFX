@@ -35,11 +35,17 @@ class AppController:
     """Owns the editor window and the start window and moves between them."""
 
     def __init__(self, app, argv=()):
-        from .ui.start_window import StartWindow, show_on_startup
+        from .ui.start_window import StartWindow, prune_missing_on_startup, show_on_startup
         self.app = app
+        argv, quiet_recents = parse_no_recent(argv)
+        if quiet_recents:
+            # Tests and automation: never touch the user's recent list, and never claim the
+            # previous run crashed because of a throwaway session.
+            storage.disable_recents()
+        self.quiet_recents = quiet_recents or storage.recents_disabled()
         # Read before anything writes the marker back, and before a project is opened.
-        unclean = storage.crashed_session_info()
-        recovered = storage.crashed_session()
+        unclean = None if self.quiet_recents else storage.crashed_session_info()
+        recovered = None if self.quiet_recents else storage.crashed_session()
         # From here on the app is "running": if it dies before aboutToQuit, the next start
         # sees the marker and explains what happened. A clean quit clears it.
         storage.mark_session_open("")
@@ -62,6 +68,9 @@ class AppController:
         if unclean:
             # Report after the start window (or the recovered project) is on screen.
             QTimer.singleShot(1400, self.report_previous_crash)
+        if not self.quiet_recents and prune_missing_on_startup():
+            # Silent, and after the window is up: a few stat calls must not delay the start.
+            QTimer.singleShot(0, self._prune_missing_recents)
         paths = [a for a in argv if storage.is_project_file(a) and os.path.isfile(a)]
         if paths:
             QTimer.singleShot(0, lambda: self.open_project(paths[0]))
@@ -111,6 +120,11 @@ class AppController:
         dialog.activateWindow()
         return dialog
 
+    def _prune_missing_recents(self):
+        """Preferences: drop recent entries whose file is gone, without a word unless asked."""
+        if storage.prune_missing():
+            self.start.reload()
+
     def show_start(self):
         self.window.hide()
         self.start.reload()
@@ -142,6 +156,13 @@ class AppController:
                          "meeniFX Project Files (*.mfxpf)")
         if path:
             self.open_project(path)
+
+
+def parse_no_recent(argv):
+    """(remaining argv, asked for quiet recents) - strips ``--no-recent`` from the arguments."""
+    args = [str(a) for a in argv or ()]
+    remaining = [a for a in args if a != "--no-recent"]
+    return remaining, len(remaining) != len(args)
 
 
 def install_exception_log():

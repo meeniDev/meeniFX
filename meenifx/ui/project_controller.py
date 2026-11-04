@@ -208,7 +208,9 @@ class ProjectController(QObject):
         if not checked and not self.maybe_save():
             return False
         source, recovered = path, False
-        auto = storage.newer_autosave(path)
+        # --no-recent (tests, automation): the recovery question would block a scripted run,
+        # so the project file itself is opened and the autosave is left alone.
+        auto = None if storage.recents_disabled() else storage.newer_autosave(path)
         if auto:
             answer = QMessageBox.question(
                 self.w, "Recover unsaved work",

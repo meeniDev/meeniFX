@@ -1,4 +1,4 @@
-import os, sys, tempfile, time, zipfile, tracemalloc
+import os, sys, tempfile, time, zipfile, tracemalloc, shutil
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from meenifx.model.timeline import Timeline
@@ -88,3 +88,4 @@ cur, peak = tracemalloc.get_traced_memory(); tracemalloc.stop()
 assert sum(len(t.clips) for t in tl4.tracks) == N
 print(f"large: {N} clips, {N*6} keyframes, save+load {dt:.2f}s, peak {peak/1e6:.0f} MB, file {os.path.getsize(os.path.join(d,'big.mfxpf'))/1e3:.0f} KB")
 print("ALL OK")
+shutil.rmtree(d, ignore_errors=True)

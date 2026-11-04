@@ -12,6 +12,10 @@ if ROOT not in sys.path:
 
 # The preview and panel tests build real widgets; offscreen keeps them headless.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# Projects created by a test must never reach the user's real recent list (nor leave a
+# session marker behind): every test that builds one would otherwise appear in the start
+# window as a temp-folder entry, and its autosave would be offered for recovery.
+os.environ.setdefault("MEENIFX_NO_RECENT", "1")
 
 WIDTH, HEIGHT = 320, 180
 

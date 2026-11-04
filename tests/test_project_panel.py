@@ -1,5 +1,5 @@
 ﻿"""Headless test of the Project panel and layout."""
-import os, sys, tempfile, time
+import os, sys, tempfile, time, shutil
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import cv2, numpy as np
@@ -12,6 +12,10 @@ QCoreApplication.setOrganizationName("meeniFX"); QCoreApplication.setApplication
 QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, os.path.join(tmp, "cfg"))
 from meenifx.project import storage
 storage.RECENTS_FILE = os.path.join(tmp, "recents.json"); storage.SESSION_FILE = os.path.join(tmp, "session.json")
+# The scripts in this folder keep the recent list off (tests/conftest.py sets
+# MEENIFX_NO_RECENT for the pytest run). This one drives the list itself, but only
+# against the copy redirected above, so the user's real list stays untouched.
+storage.enable_recents()
 from meenifx.project.settings import ProjectSettings
 from meenifx.ui.main_window import MainWindow
 from meenifx.ui import layout, project_panel as PP
@@ -102,4 +106,6 @@ os.rename(vid + ".x", vid)
 
 # saved layout version
 P.shutdown(); w._save_layout_now(); assert str(w._settings.value("layoutVersion")) == "5"
-print("PANEL OK"); sys.stdout.flush(); os._exit(0)
+print("PANEL OK"); sys.stdout.flush()
+shutil.rmtree(tmp, ignore_errors=True)
+os._exit(0)

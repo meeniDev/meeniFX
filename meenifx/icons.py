@@ -224,6 +224,13 @@ def _draw(name, p, color):
         for x in (5.5, 10.5):
             for y in (4, 8, 12):
                 p.drawEllipse(QPointF(x, y), 1, 1)
+    elif name == "clean":
+        # Two sparkles: the usual "tidy this up" glyph, still readable at 16 px.
+        p.setBrush(fill); p.setPen(Qt.PenStyle.NoPen)
+        p.drawPolygon(_pts(9.6, 1.8, 10.9, 5.9, 15.0, 7.2, 10.9, 8.5,
+                           9.6, 12.6, 8.3, 8.5, 4.2, 7.2, 8.3, 5.9))
+        p.drawPolygon(_pts(4.0, 9.6, 4.8, 11.4, 6.6, 12.2, 4.8, 13.0,
+                           4.0, 14.8, 3.2, 13.0, 1.4, 12.2, 3.2, 11.4))
 
 
 def paint(painter, name, rect, color):

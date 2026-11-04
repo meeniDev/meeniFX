@@ -11,6 +11,10 @@ QCoreApplication.setOrganizationName("meeniFX"); QCoreApplication.setApplication
 QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, os.path.join(tmp, "cfg"))
 from meenifx.project import storage
 storage.RECENTS_FILE = os.path.join(tmp, "recents.json"); storage.SESSION_FILE = os.path.join(tmp, "session.json")
+# The scripts in this folder keep the recent list off (tests/conftest.py sets
+# MEENIFX_NO_RECENT for the pytest run). This one drives the list itself, but only
+# against the copy redirected above, so the user's real list stays untouched.
+storage.enable_recents()
 from meenifx.project.settings import ProjectSettings
 from meenifx.app import AppController
 from meenifx.ui import start_window as SW
@@ -79,4 +83,6 @@ import time; [app.processEvents() or time.sleep(0.05) for _ in range(10)]
 assert c2.projects.is_open and c2.window.isVisible(), "show-on-startup off opens last project"
 # argv
 SW.set_show_on_startup(True); c2.projects.shutdown()
-print("START OK"); sys.stdout.flush(); os._exit(0)
+print("START OK"); sys.stdout.flush()
+shutil.rmtree(tmp, ignore_errors=True)
+os._exit(0)

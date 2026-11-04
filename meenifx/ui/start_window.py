@@ -3,20 +3,23 @@ import os
 import shutil
 import time
 
-from PyQt6.QtCore import QSize, Qt, pyqtSignal, QSettings
+from PyQt6.QtCore import QRectF, QSize, Qt, pyqtSignal, QSettings
 from PyQt6.QtGui import QPixmap, QImage, QColor, QPainter, QIcon
 from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QHBoxLayout, QInputDialog,
                              QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton,
-                             QVBoxLayout, QWidget, QAbstractItemView)
+                             QToolButton, QVBoxLayout, QWidget, QAbstractItemView)
 
+from ..icons import icon
 from ..project import container, storage
 from ..project.settings import PROJECT_EXTENSION, PROJECT_FILTER, fps_text
 from .branding import app_icon, wordmark
 from .filedialogs import choose_folder, open_file
 from .layout import app_settings
+from .toast import Toast
 
 THUMB_SIZE = QSize(224, 126)
 SHOW_ON_STARTUP_KEY = "startup/showStartWindow"
+PRUNE_MISSING_KEY = "startup/pruneMissingProjects"
 
 
 def show_on_startup():
@@ -26,6 +29,16 @@ def show_on_startup():
 
 def set_show_on_startup(on):
     app_settings().setValue(SHOW_ON_STARTUP_KEY, bool(on))
+
+
+def prune_missing_on_startup():
+    """Preferences switch: drop entries whose file is gone when the window opens."""
+    value = app_settings().value(PRUNE_MISSING_KEY, True)
+    return value in (True, "true", "1", 1)
+
+
+def set_prune_missing_on_startup(on):
+    app_settings().setValue(PRUNE_MISSING_KEY, bool(on))
 
 
 def _placeholder(missing):
@@ -45,6 +58,29 @@ def _relative_time(timestamp):
     return time.strftime("%Y-%m-%d", time.localtime(timestamp))
 
 
+def _count_label(items, noun):
+    """The Clean up entry with its count, singular or plural: 1 missing project, 12 of them."""
+    return f"Remove {len(items)} {noun}" + ("" if len(items) == 1 else "s")
+
+
+def _paint_temp_badge(painter):
+    """Small "TEMP" label in the thumbnail corner: a project living in the temp folder."""
+    painter.save()
+    font = painter.font()
+    font.setPixelSize(8)
+    font.setBold(True)
+    painter.setFont(font)
+    text = "TEMP"
+    width = painter.fontMetrics().horizontalAdvance(text) + 8
+    rect = QRectF(THUMB_SIZE.width() - width - 4, 4, width, 12)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor(0, 0, 0, 150))
+    painter.drawRoundedRect(rect, 3, 3)
+    painter.setPen(QColor("#ffce6b"))
+    painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+    painter.restore()
+
+
 class ProjectInfo:
     """What a card shows; read from the container's meta entry only (never the timeline)."""
 
@@ -52,6 +88,9 @@ class ProjectInfo:
         self.path = path
         self.name = os.path.splitext(os.path.basename(path))[0]
         self.exists = os.path.isfile(path)
+        # Tests and automation leave projects behind in the system temp folder; the card
+        # says so, and the Clean up menu can drop them without touching real work.
+        self.in_temp = storage.is_in_temp(path)
         self.modified = 0.0
         self.detail = ""
         self.thumb = None
@@ -128,9 +167,18 @@ class StartWindow(QWidget):
         self.search.setPlaceholderText("Search")
         self.search.setClearButtonEnabled(True)
         self.search.setFixedWidth(200)
+        self.clean_button = QToolButton()
+        self.clean_button.setIcon(icon("clean"))
+        self.clean_button.setToolTip("Clean up the recent list")
+        self.clean_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.clean_button.setFixedSize(28, 28)
+        self.clean_menu = QMenu(self.clean_button)
+        self.clean_button.setMenu(self.clean_menu)
+        self.clean_menu.aboutToShow.connect(self._fill_clean_menu)
         self.sort = QComboBox()
         self.sort.addItems(["Last modified", "Name"])
         bar.addWidget(self.search)
+        bar.addWidget(self.clean_button)
         bar.addWidget(self.sort)
         main.addLayout(bar)
 
@@ -160,6 +208,7 @@ class StartWindow(QWidget):
         self.grid.itemActivated.connect(self._activate)
         self.grid.itemClicked.connect(self._activate)
         self.grid.customContextMenuRequested.connect(self._menu)
+        self.toast = Toast(self)
         self._infos = []
         self.reload()
 
@@ -195,6 +244,9 @@ class StartWindow(QWidget):
         if dim:
             painter.setOpacity(0.35)
         painter.drawPixmap((THUMB_SIZE.width() - pixmap.width()) // 2, (THUMB_SIZE.height() - pixmap.height()) // 2, pixmap)
+        painter.setOpacity(1.0)
+        if info.in_temp:
+            _paint_temp_badge(painter)
         painter.end()
         item.setIcon(QIcon(canvas))
         item.setData(Qt.ItemDataRole.UserRole, info.path)
@@ -207,6 +259,62 @@ class StartWindow(QWidget):
     def _info_for(self, item):
         path = item.data(Qt.ItemDataRole.UserRole)
         return next((i for i in self._infos if i.path == path), None)
+
+    def toast_message(self, text, kind="info", duration_ms=None):
+        self.toast.show_message(text, kind=kind, duration_ms=duration_ms)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self.toast.isVisible():
+            self.toast.reposition()
+
+    # ---- clean up -------------------------------------------------------
+    def _fill_clean_menu(self):
+        """Rebuild the menu each time it opens, so the counts are always current."""
+        missing = [i for i in self._infos if not i.exists]
+        temps = [i for i in self._infos if i.in_temp]
+        self.clean_menu.clear()
+        missing_action = self.clean_menu.addAction(
+            _count_label(missing, "missing project") if missing else "Remove missing projects")
+        missing_action.setEnabled(bool(missing))
+        missing_action.setToolTip("Drop every entry whose project file is gone (the list only)")
+        missing_action.triggered.connect(self._clean_missing)
+        temp_action = self.clean_menu.addAction(
+            _count_label(temps, "temp-folder project") if temps else "Remove temp-folder projects")
+        temp_action.setEnabled(bool(temps))
+        temp_action.setToolTip("Drop entries inside the system temp folder, where tests and "
+                               "automation leave throwaway projects")
+        temp_action.triggered.connect(self._clean_temp)
+
+    def _clean_missing(self):
+        removed = storage.prune_missing()
+        if removed:
+            self.reload()
+        self.toast_message(f"Removed {removed}" if removed else "Nothing to remove",
+                           duration_ms=1800)
+
+    def _clean_temp(self):
+        paths = [i.path for i in self._infos if i.in_temp]
+        if not paths:
+            return
+        dialog = TempCleanupDialog(len(paths), self)
+        if not dialog.exec():
+            return
+        removed = storage.remove_temp_recents()
+        trashed, failures = 0, []
+        if dialog.trash_folders():
+            for path in paths:
+                moved, messages = storage.trash_project(path)
+                trashed += moved
+                failures.extend(messages)
+        self.reload()
+        text = f"Removed {removed}"
+        if trashed:
+            text += f", moved {trashed} project{'s' if trashed != 1 else ''} to the Recycle Bin"
+        if failures:
+            text += f" ({len(failures)} could not be moved: {failures[0]})"
+        self.toast_message(text, kind="error" if failures else "info",
+                           duration_ms=4200 if failures else 2400)
 
     # ---- actions -------------------------------------------------------
     def _activate(self, item):
@@ -295,6 +403,40 @@ class StartWindow(QWidget):
                 return
 
 
+class TempCleanupDialog(QDialog):
+    """Confirm dropping the temp-folder projects, optionally moving their folders to the Bin."""
+
+    def __init__(self, count, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Remove temp-folder projects")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 14)
+        layout.setSpacing(10)
+        title = QLabel(f"{count} project{'s' if count != 1 else ''} in the system temp folder")
+        title.setStyleSheet("font-weight: 600;")
+        layout.addWidget(title)
+        note = QLabel("Tests and automation create their projects there. Removing them only edits "
+                      "this list; the files stay where they are unless you ask for the Recycle Bin.")
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #8a8f9a;")
+        layout.addWidget(note)
+        self.trash = QCheckBox("Also move the project folders to the Recycle Bin")
+        self.trash.setChecked(False)
+        self.trash.setToolTip("Only a folder that holds nothing but its project is moved; "
+                              "a folder with anything else in it is left alone")
+        layout.addWidget(self.trash)
+        buttons = QDialogButtonBox()
+        remove = buttons.addButton("Remove", QDialogButtonBox.ButtonRole.AcceptRole)
+        remove.setProperty("primary", True)
+        buttons.addButton("Cancel", QDialogButtonBox.ButtonRole.RejectRole)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def trash_folders(self):
+        return self.trash.isChecked()
+
+
 def show_in_folder(path):
     import subprocess
     import sys
@@ -315,6 +457,11 @@ class PreferencesDialog(QDialog):
         self.startup = QCheckBox("Show start window on startup")
         self.startup.setChecked(show_on_startup())
         layout.addWidget(self.startup)
+        self.prune_missing = QCheckBox("Remove missing projects from the list automatically at startup")
+        self.prune_missing.setChecked(prune_missing_on_startup())
+        self.prune_missing.setToolTip("Silently drops recent entries whose file is gone when the "
+                                      "window opens, so a deleted or moved project cannot linger")
+        layout.addWidget(self.prune_missing)
         from ..recording.settings import RecorderSettings
         self._recorder_settings = RecorderSettings.load()
         row = QHBoxLayout()
@@ -471,6 +618,7 @@ class PreferencesDialog(QDialog):
 
     def accept(self):
         set_show_on_startup(self.startup.isChecked())
+        set_prune_missing_on_startup(self.prune_missing.isChecked())
         self._recorder_settings.folder = self.rec_folder.text().strip()
         self._recorder_settings.save()
         self._apply_playback_settings()

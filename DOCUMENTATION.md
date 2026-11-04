@@ -47,7 +47,10 @@ command line, so double-clicking a project opens it once the association exists
 projects are a single `.mfxpf` container (settings, media references, columnar
 tracks/clips, effects, keyframes, markers, layout, thumbnails). Atomic saves with one
 `.bak`, 3-minute autosave, recovery after a crash, media never embedded. Missing media is
-flagged rather than fatal.
+flagged rather than fatal. The recent list is tidied from the start window's Clean up button
+(entries whose file is gone, or projects sitting in the system temp folder - with an optional
+move to the Recycle Bin) and pruned at startup unless the preference is turned off;
+`--no-recent` / `MEENIFX_NO_RECENT=1` keeps a run (tests, scripts, agents) off the list.
 
 **Timeline** — multi-track, frame-based, thumbnails and waveforms, split/razor, trim,
 move, Alt-drag time stretch, freeze frames, loop region, markers, per-clip fades with

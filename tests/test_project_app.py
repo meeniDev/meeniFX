@@ -13,6 +13,10 @@ QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, os.path
 
 from meenifx.project import storage
 storage.RECENTS_FILE = os.path.join(tmp, "recents.json"); storage.SESSION_FILE = os.path.join(tmp, "session.json")
+# The scripts in this folder keep the recent list off (tests/conftest.py sets
+# MEENIFX_NO_RECENT for the pytest run). This one drives the list itself, but only
+# against the copy redirected above, so the user's real list stays untouched.
+storage.enable_recents()
 from meenifx.ui.main_window import MainWindow
 from meenifx.ui import project_controller as PC
 from meenifx.media.reader import read_media

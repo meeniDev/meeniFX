@@ -1,6 +1,10 @@
-import os, sys, tempfile, time
+import os, sys, tempfile, time, shutil
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from meenifx.project import storage as S, container as C, ProjectSettings
+
+# This script is about the session marker, so it needs the recent list machinery on even
+# when the whole suite runs with MEENIFX_NO_RECENT set.
+S.enable_recents()
 
 d = tempfile.mkdtemp()
 def data(name):
@@ -36,3 +40,4 @@ S.mark_session_clean(sf); assert S.crashed_session(sf) is None
 os.makedirs(os.path.join(d, "a", "b")); open(os.path.join(d, "a", "b", "Clip.MP4"), "w").close()
 assert S.find_by_name(d, ["clip.mp4", "nope.mov"]) == {"clip.mp4": os.path.join(d, "a", "b", "Clip.MP4")}
 print("STORAGE OK")
+shutil.rmtree(d, ignore_errors=True)

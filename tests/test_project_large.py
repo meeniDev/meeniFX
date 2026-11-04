@@ -1,5 +1,5 @@
 """Large project through the real controller: 6000 clips / 36000 keyframes. Measures UI-thread stalls and memory."""
-import os, sys, tempfile, time, tracemalloc
+import os, sys, tempfile, time, tracemalloc, shutil
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from PyQt6.QtCore import QSettings, QCoreApplication, QThreadPool
@@ -10,6 +10,10 @@ QCoreApplication.setOrganizationName("meeniFX"); QCoreApplication.setApplication
 QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, os.path.join(tmp, "cfg"))
 from meenifx.project import storage
 storage.RECENTS_FILE = os.path.join(tmp, "recents.json"); storage.SESSION_FILE = os.path.join(tmp, "session.json")
+# The scripts in this folder keep the recent list off (tests/conftest.py sets
+# MEENIFX_NO_RECENT for the pytest run). This one drives the list itself, but only
+# against the copy redirected above, so the user's real list stays untouched.
+storage.enable_recents()
 from meenifx.project.settings import ProjectSettings
 from meenifx.model.keyframes import AnimatedValue, Keyframe
 from meenifx.ui.main_window import MainWindow
@@ -47,4 +51,6 @@ t = time.perf_counter(); w.timeline_panel.canvas.grab(); print(f"timeline repain
 # autosave write is off the UI thread
 t = time.perf_counter(); P.autosave(); ui = time.perf_counter() - t
 QThreadPool.globalInstance().waitForDone(20000); print(f"autosave UI-thread cost: {ui*1000:.0f} ms")
-print("LARGE OK"); sys.stdout.flush(); os._exit(0)
+print("LARGE OK"); sys.stdout.flush()
+shutil.rmtree(tmp, ignore_errors=True)
+os._exit(0)
