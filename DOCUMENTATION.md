@@ -146,8 +146,11 @@ The panel lives in the **Graph Editor** dock (`G`) and edits the selected clip's
 - OpenCL compositing measures slower than the CPU path on this machine, so *Auto* keeps
   the CPU; hardware **decode** is unavailable in this OpenCV build (the app reports what
   the driver says). NVENC encoding is used after a verified probe encode.
-- The recorder is Windows-only (WASAPI). Screen capture has no region select and no cursor
-  toggle because Qt's capture back end offers neither.
+- The recorder is Windows-only (WASAPI). Screen recording is written by the bundled
+  ffmpeg (gdigrab) rather than by Qt, because DXGI desktop duplication - what Qt uses -
+  delivers a pointer-free image and QScreenCapture has no cursor option. gdigrab draws the
+  pointer, so the "Show mouse cursor" switch controls it; the Qt capture keeps running for
+  the preview only. There is still no region select.
 - Projects (`*.mfxpf`) and their `Cache/` and `Recordings/` folders live outside this
   repository; nothing but source, assets and test fixtures is committed.
 

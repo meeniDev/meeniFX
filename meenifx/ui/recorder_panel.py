@@ -15,6 +15,7 @@ from ..recording import audiocap, devices
 from ..recording.capture import SourceCapture
 from ..recording.disk import CAMERA_BLOCKED, MIC_BLOCKED
 from ..recording.hotkey import parse_hotkey
+from ..recording.screen import ScreenRecorder
 from ..recording.settings import RecorderSettings
 from .filedialogs import choose_folder
 
@@ -234,7 +235,7 @@ class RecorderPanel(QDialog):
         self.setMinimumWidth(400)
         self.default_folder = default_folder
         self.settings = RecorderSettings.load()
-        self.captures_by_kind = {"webcam": SourceCapture("webcam", self), "screen": SourceCapture("screen", self),
+        self.captures_by_kind = {"webcam": SourceCapture("webcam", self), "screen": ScreenRecorder(self),
                                  "mic": audiocap.AudioCapture("mic", False, self),
                                  "system": audiocap.AudioCapture("system", True, self)}
         self.busy = False
@@ -270,6 +271,11 @@ class RecorderPanel(QDialog):
         row.addWidget(self.screen_target, 1)
         row.addWidget(self.screen_refresh)
         self.screen_card.body_layout.addLayout(row)
+        self.cursor_box = QCheckBox("Show mouse cursor")
+        self.cursor_box.setToolTip("Draw the pointer into the recording. Qt's own screen capture\n"
+                                   "cannot see the cursor, so a screen recording is written by\n"
+                                   "ffmpeg either way; this switches the pointer on or off.")
+        self.screen_card.body_layout.addWidget(self.cursor_box)
         self.screen_preview = _preview()
         self.screen_card.body_layout.addWidget(self.screen_preview)
         root.addWidget(self.screen_card)
@@ -356,6 +362,7 @@ class RecorderPanel(QDialog):
         self.screen_mode.currentIndexChanged.connect(lambda _i: self._fill_screen_targets())
         self.screen_target.currentIndexChanged.connect(lambda _i: self._apply_screen())
         self.screen_refresh.clicked.connect(self._fill_screen_targets)
+        self.cursor_box.toggled.connect(self._cursor_toggled)
         self.mic_combo.currentIndexChanged.connect(lambda _i: self._apply_mic())
         self.mic_refresh.clicked.connect(self.refresh_devices)
         self.system_combo.currentIndexChanged.connect(lambda _i: self._apply_system())
@@ -381,6 +388,7 @@ class RecorderPanel(QDialog):
         self.voice_over.setChecked(s.voice_over)
         self.volume.setValue(s.mic_volume)
         self.system_volume.setValue(s.system_volume)
+        self.cursor_box.setChecked(s.show_cursor)
         self.screen_mode.setCurrentIndex(max(0, self.screen_mode.findData(s.screen_mode)))
         self._fill_cameras()
         self._fill_mics()
@@ -509,6 +517,7 @@ class RecorderPanel(QDialog):
             self.screen_card.set_note("Nothing to capture here.")
             return
         self.screen_card.set_note("")
+        cap.show_cursor = bool(self.settings.show_cursor)
         if self.screen_mode.currentData() == "window":
             cap.use_window(target)
         else:
@@ -574,6 +583,11 @@ class RecorderPanel(QDialog):
         {"webcam": self._apply_webcam, "screen": self._apply_screen, "mic": self._apply_mic,
          "system": self._apply_system}[kind]()
 
+    def _cursor_toggled(self, on):
+        self.settings.show_cursor = bool(on)
+        self.captures_by_kind["screen"].show_cursor = bool(on)
+        self._save()
+
     def _volume_changed(self, value):
         self.captures_by_kind["mic"].set_gain(value / 100.0)
         self._save()
@@ -608,6 +622,8 @@ class RecorderPanel(QDialog):
         mode = self.mode_combo.currentData()
         s.camera_format = mode.key if mode is not None else s.camera_format
         s.screen_mode = self.screen_mode.currentData() or "screen"
+        s.show_cursor = self.cursor_box.isChecked()
+        self.captures_by_kind["screen"].show_cursor = s.show_cursor
         target = self.screen_target.currentData()
         if target is not None:
             if s.screen_mode == "window":
