@@ -106,6 +106,9 @@ class EffectBase:
         # The clip itself, so motion-aware effects can sample its animation.
         self.clip = None
         self.local_frame = 0
+        # Where the picture sits inside the layer, in layer pixels. A letterboxed picture
+        # leaves transparent margins; warps use this so they deform the picture only.
+        self.layer_rect = None
 
     def apply(self, frame):
         return frame

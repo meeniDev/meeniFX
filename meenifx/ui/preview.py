@@ -206,8 +206,12 @@ class PreviewWidget(QWidget):
         painter.setClipRect(visible)
         painter.drawImage(visible, self._image, source_rect)
         painter.setClipping(False)
+        # The frame edge is outlined just outside the picture: drawing it on the frame rect
+        # itself painted a light grey line over the picture's first row and column (and was
+        # clipped to nothing on the other two sides), which looked like a stray white border
+        # and made the preview differ from the exported frame at the edges.
         painter.setPen(QPen(QColor("#596273"), 1))
-        painter.drawRect(rect)
+        painter.drawRect(rect.adjusted(-1, -1, 1, 1))
         if self.guides:
             painter.setPen(QPen(QColor(220, 220, 220, 180), 1, Qt.PenStyle.DashLine))
             for margin in (0.05, 0.10):

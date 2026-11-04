@@ -108,11 +108,11 @@ def clamp_pins(pins, margin=0.0):
     return src, dst
 
 
-def _anchors(width, height):
-    """Fixed control points on the frame border.
+def _anchors(x, y, width, height):
+    """Fixed control points on the border of the surface that holds the picture.
 
     Moving-least-squares is underdetermined with one or two pins (a single point would
-    collapse the whole picture onto it). Pinning the frame border to itself makes the
+    collapse the whole picture onto it). Pinning that border to itself makes the
     deformation local to the pins, which is what a puppet-warp mesh has to do.
     """
     points = []
@@ -120,16 +120,26 @@ def _anchors(width, height):
         for fy in (0.0, 0.5, 1.0):
             if (fx, fy) == (0.5, 0.5):
                 continue
-            points.append((fx * width, fy * height))
+            points.append((x + fx * max(0.0, width - 1.0), y + fy * max(0.0, height - 1.0)))
     return np.array(points, dtype=np.float64)
 
 
-def puppet_maps(width, height, pins, stiffness=1.0, density=24, cache=None):
-    """(map_x, map_y) int8-safe float maps warping the frame by the pins."""
+def puppet_maps(width, height, pins, stiffness=1.0, density=24, cache=None, bounds=None):
+    """(map_x, map_y) int8-safe float maps warping the frame by the pins.
+
+    `bounds` is the picture rectangle ``(x, y, w, h)`` inside the layer. The layer is the
+    whole frame, so a letterboxed picture has transparent margins; deforming only the
+    picture and sampling only inside it keeps those margins out of the result. Without
+    that, a clamped sample on the picture edge repeats the transparent margin and smears
+    a wide black band into the picture - the export then shows the seam the preview's
+    lower resolution hides.
+    """
     src, dst = clamp_pins(pins)
     if src is None or len(src) == 0:
         return None, None
+    x, y, box_w, box_h = _bounds(bounds, width, height)
     key = (int(width), int(height), round(float(stiffness), 3), int(density),
+           (round(x, 3), round(y, 3), round(box_w, 3), round(box_h, 3)),
            tuple(np.round(src, 5).ravel()), tuple(np.round(dst, 5).ravel()))
     store = cache if cache is not None else _CACHE
     if not hasattr(store, "move_to_end"):
@@ -145,7 +155,7 @@ def puppet_maps(width, height, pins, stiffness=1.0, density=24, cache=None):
     grid = np.stack([gx.ravel(), gy.ravel()], axis=1)
     src_px = src * np.array([width, height], dtype=np.float64)
     dst_px = dst * np.array([width, height], dtype=np.float64)
-    anchors = _anchors(width, height)
+    anchors = _anchors(x, y, box_w, box_h)
     src_px = np.vstack([src_px, anchors])
     dst_px = np.vstack([dst_px, anchors])
     map_x, map_y = _mls_inverse_map(grid, src_px, dst_px, stiffness)
@@ -153,10 +163,18 @@ def puppet_maps(width, height, pins, stiffness=1.0, density=24, cache=None):
     map_y = map_y.reshape(gx.shape).astype(np.float32)
     map_x = cv2.resize(map_x, (width, height), interpolation=cv2.INTER_LINEAR)
     map_y = cv2.resize(map_y, (width, height), interpolation=cv2.INTER_LINEAR)
-    # A deformation must bend the picture, never tear a transparent seam into it:
-    # samples outside the frame clamp to the border pixel.
-    np.clip(map_x, 0.0, width - 1.0, out=map_x)
-    np.clip(map_y, 0.0, height - 1.0, out=map_y)
+    # A deformation must bend the picture, never tear a seam into it: every sample clamps
+    # to the picture border, so the edge pixel repeats instead of the transparent margin.
+    np.clip(map_x, x, x + box_w - 1.0, out=map_x)
+    np.clip(map_y, y, y + box_h - 1.0, out=map_y)
+    if (x, y, box_w, box_h) != (0.0, 0.0, float(width), float(height)):
+        # Outside the picture the layer is untouched (the letterbox margin stays as it is).
+        grid_x = np.arange(width, dtype=np.float32)[None, :]
+        grid_y = np.arange(height, dtype=np.float32)[:, None]
+        outside = ((grid_x < x) | (grid_x > x + box_w - 1.0)
+                   | (grid_y < y) | (grid_y > y + box_h - 1.0))
+        map_x = np.where(outside, grid_x, map_x).astype(np.float32)
+        map_y = np.where(outside, grid_y, map_y).astype(np.float32)
     result = (map_x, map_y)
     store[key] = result
     store.move_to_end(key)
@@ -165,16 +183,36 @@ def puppet_maps(width, height, pins, stiffness=1.0, density=24, cache=None):
     return result
 
 
-def apply_puppet(layer, pins, stiffness=1.0, density=24, cache=None):
-    """Deform a BGRA layer by puppet pins; returns a new layer."""
+def apply_puppet(layer, pins, stiffness=1.0, density=24, cache=None, bounds=None):
+    """Deform a BGRA layer by puppet pins; returns a new layer.
+
+    `bounds` is the picture rectangle inside the layer (see :func:`puppet_maps`).
+    """
     if layer is None or not pins:
         return layer
     height, width = layer.shape[:2]
-    map_x, map_y = puppet_maps(width, height, pins, stiffness, density, cache)
+    map_x, map_y = puppet_maps(width, height, pins, stiffness, density, cache, bounds)
     if map_x is None:
         return layer
     return gpu.remap(layer, map_x, map_y, interpolation=cv2.INTER_LINEAR,
                      borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+
+
+def _bounds(bounds, width, height):
+    """Clamp an optional picture rectangle to the layer; the whole layer by default."""
+    if not bounds:
+        return 0.0, 0.0, float(width), float(height)
+    try:
+        x, y, box_w, box_h = (float(value) for value in bounds)
+    except (TypeError, ValueError):
+        return 0.0, 0.0, float(width), float(height)
+    if box_w < 1 or box_h < 1:
+        return 0.0, 0.0, float(width), float(height)
+    x = max(0.0, min(float(width) - 1.0, x))
+    y = max(0.0, min(float(height) - 1.0, y))
+    box_w = max(1.0, min(float(width) - x, box_w))
+    box_h = max(1.0, min(float(height) - y, box_h))
+    return x, y, box_w, box_h
 
 
 def mesh_displacement(width, height, rows, cols, offsets):

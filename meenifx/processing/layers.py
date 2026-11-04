@@ -10,12 +10,12 @@ composite correctly over lower tracks instead of painting black rectangles.
 
 from __future__ import annotations
 
+import math
+
 import cv2
 import numpy as np
 
 from ..preview.backend import gpu
-
-from ..model.transform import fit_rect
 
 
 def to_bgra(frame):
@@ -35,11 +35,28 @@ def render_size(project_size, scale):
     return max(1, int(round(pw * scale))), max(1, int(round(ph * scale)))
 
 
+def ideal_rect(project_size, image_size):
+    """(x, y, w, h) of the letterboxed picture before rounding to whole pixels.
+
+    The same fit as :func:`meenifx.model.transform.fit_rect`, kept in float so the layer
+    can round it outward: a letterbox narrower than a pixel must not become a one-pixel
+    transparent line along an edge.
+    """
+    pw, ph = max(1, int(project_size[0])), max(1, int(project_size[1]))
+    iw, ih = max(1, int(image_size[0])), max(1, int(image_size[1]))
+    ratio = min(pw / float(iw), ph / float(ih))
+    nw, nh = iw * ratio, ih * ratio
+    return (pw - nw) / 2.0, (ph - nh) / 2.0, nw, nh
+
+
 def fit_layer(source, project_size, scale=1.0):
     """(BGRA canvas at render size, (x, y, w, h) of the picture inside it).
 
     Uses the same letterbox math as the engine's original fit, then scales it for the
-    preview, so lowering the preview quality never changes the framing.
+    preview, so lowering the preview quality never changes the framing. The picture's box
+    is rounded outward, so it covers its ideal area exactly: a sub-pixel letterbox is
+    absorbed (0.1 % stretch, invisible) instead of leaving a one-pixel transparent rim that
+    a warp would smear into a black band at export resolution.
     """
     width, height = render_size(project_size, scale)
     src = to_bgra(source)
@@ -47,18 +64,18 @@ def fit_layer(source, project_size, scale=1.0):
     if src is None or src.size == 0:
         return canvas, (0, 0, 0, 0)
     ih, iw = src.shape[:2]
-    x0, y0, nw, nh = fit_rect(project_size, (iw, ih))
-    rx, ry = x0 * scale, y0 * scale
-    rw, rh = nw * scale, nh * scale
-    tw = max(1, int(round(rw)))
-    th = max(1, int(round(rh)))
-    if (rw, rh) == (width, height) and (iw, ih) == (width, height):
+    fx, fy, fw, fh = ideal_rect(project_size, (iw, ih))
+    rx, ry, rw, rh = fx * scale, fy * scale, fw * scale, fh * scale
+    if (iw, ih) == (width, height) and (fx, fy, fw, fh) == (0.0, 0.0, float(width), float(height)):
         canvas[:, :, :] = src
         return canvas, (0, 0, width, height)
+    left = max(0, min(width - 1, int(math.floor(rx + 1e-6))))
+    top = max(0, min(height - 1, int(math.floor(ry + 1e-6))))
+    right = max(left + 1, min(width, int(math.ceil(rx + rw - 1e-6))))
+    bottom = max(top + 1, min(height, int(math.ceil(ry + rh - 1e-6))))
+    tw, th = right - left, bottom - top
     interpolation = cv2.INTER_AREA if (iw > tw or ih > th) else cv2.INTER_LINEAR
     resized = gpu.resize(src, (tw, th), interpolation=interpolation)
-    left = max(0, min(width - tw, int(round(rx))))
-    top = max(0, min(height - th, int(round(ry))))
     canvas[top:top + th, left:left + tw] = resized
     return canvas, (float(left), float(top), float(tw), float(th))
 

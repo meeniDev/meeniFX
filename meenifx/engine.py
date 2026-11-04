@@ -359,7 +359,7 @@ class EditorEngine:
                 continue
             local = frame_no - clip.timeline_start
             layer = self.apply_effects_layer(layer, clip.effects, local, scale,
-                                             self.track_type_of(clip), clip=clip)
+                                             self.track_type_of(clip), clip=clip, rect=rect)
             state = transforms.evaluate(clip, local)
             layer = layer_ops.apply_transform(layer, rect, state, self.project_size(), scale)
             opacity = transforms.opacity_at(clip, local) * clip.fade_gain_at(frame_no)
@@ -374,11 +374,14 @@ class EditorEngine:
             return None
         return layer_ops.flatten(canvas)
 
-    def apply_effects_layer(self, layer, entries, local_frame, scale, track_type="video", clip=None):
+    def apply_effects_layer(self, layer, entries, local_frame, scale, track_type="video", clip=None,
+                            rect=None):
         """Run a clip's effects over a BGRA layer, preserving its alpha.
 
         Effects whose declaration does not cover `track_type` are skipped here as well,
         so a stale or hand-edited project can never run a picture effect on something else.
+        `rect` is where the picture sits inside the layer; a warp uses it so it never
+        deforms the transparent letterbox margin around the picture.
         """
         output = layer
         for entry in entries or ():
@@ -394,6 +397,7 @@ class EditorEngine:
                            for name, value in entry.get("params", {}).items()})
             runtime.param_scale = float(scale)
             runtime.clip_entry = entry
+            runtime.layer_rect = rect
             # Motion blur and other motion-aware effects need the clip's own animation.
             runtime.clip = clip
             runtime.local_frame = int(local_frame)

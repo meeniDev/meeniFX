@@ -82,7 +82,7 @@ class PuppetWarpEffect(LayerEffect):
         if not moving:
             return layer
         return warp.apply_puppet(layer, pins, float(self.stiffness.get()),
-                                 int(self.mesh_density.get()), self._cache)
+                                 int(self.mesh_density.get()), self._cache, self.layer_rect)
 
 
 class CornerPinEffect(LayerEffect):
