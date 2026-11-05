@@ -62,6 +62,15 @@ def test_looks_are_styles_and_no_longer_a_category(panel_and_clip):
     assert not any(card.item["id"] == "look" for card in browser._cards)
 
 
+def test_browser_toggle_icons_share_one_grid(panel_and_clip):
+    panel, _engine, _clip = panel_and_clip
+    browser = panel.browser
+    for button in (browser.favorites_button, browser.recent_button,
+                   browser.grid_button, browser.list_button, browser.menu_button):
+        assert (button.iconSize().width(), button.iconSize().height()) == (16, 16)
+        assert button.size().width() == button.size().height() == 28
+
+
 def test_tracker_cards_are_labelled_instead_of_blank(panel_and_clip):
     panel, _engine, _clip = panel_and_clip
     card = cards(panel)["face_tracker"]
@@ -84,6 +93,42 @@ def test_animation_cards_carry_a_real_preview(panel_and_clip):
     assert float(image.std()) > 5.0, "a real picture, not a flat placeholder"
     assert browser._thumb_payload(item, browser._thumb_entries(item)), \
         "the media and variant must be part of the cache key"
+
+
+def test_hover_plays_real_animation_frames_and_restores_the_static_card(panel_and_clip, qapp):
+    panel, _engine, _clip = panel_and_clip
+    browser = panel.browser
+    browser.tabs.setCurrentIndex(1)
+    panel.resize(620, 700)
+    panel.show()
+    qapp.processEvents()
+    card = next(card for card in browser._cards if card.item["kind"] == "animation")
+    static = card.thumb.pixmap().copy()
+
+    browser._hover_begin(card.item, card)
+    assert browser._hover_timer.isActive(), "preview waits for a short hover delay"
+    browser._hover_start_playing()
+    assert len(browser._hover_frames) == 6
+    assert browser._hover_play_timer.isActive()
+    first = card.thumb.pixmap().toImage()
+    browser._hover_next_frame()
+    assert card.thumb.pixmap().toImage() != first, "the hover tile actually animates"
+
+    browser._hover_stop_playing()
+    assert not browser._hover_play_timer.isActive()
+    assert card.thumb.pixmap().toImage() == static.toImage(), "static fallback returns"
+    panel.close()
+
+
+def test_hover_preview_is_cancelled_when_the_pointer_leaves(panel_and_clip):
+    panel, _engine, _clip = panel_and_clip
+    browser = panel.browser
+    browser.tabs.setCurrentIndex(1)
+    card = next(card for card in browser._cards if card.item["kind"] == "animation")
+    browser._hover_begin(card.item, card)
+    browser._hover_end(card.item, card)
+    assert not browser._hover_timer.isActive()
+    assert browser._hover_card is None
 
 
 def test_visible_animation_cards_get_their_thumbnail(panel_and_clip, qapp):

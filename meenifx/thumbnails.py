@@ -289,8 +289,12 @@ def animation_entry(family, media="clip"):
     return {"animation": {"preset": preset, "media": "text" if media == "text" else "clip"}}
 
 
-def animation_layer(engine, animation, width, height, settings=None):
-    """The reference picture (or a text sample) at a characteristic animation frame."""
+def animation_layer(engine, animation, width, height, settings=None, fraction=None):
+    """The reference picture (or a text sample) at an animation frame.
+
+    With no `fraction` the liveliest representative frame is chosen for a static card.
+    Hover previews pass 0..1 to sample the same animation at a precise moment.
+    """
     from .model import presets as PM
     from .model import text as TXT
     from .model import transform as transforms
@@ -310,8 +314,8 @@ def animation_layer(engine, animation, width, height, settings=None):
     # samples the second half of its window; pictures look best closer to the start.
     fractions = ((0.45, 0.6, 0.75, 0.9) if clip.is_text
                  else (0.2, 0.32, 0.45, 0.58, 0.72))
-    for fraction in fractions:
-        frame = start + int(round((length - 1) * fraction))
+    for sample_fraction in fractions:
+        frame = start + int(round((length - 1) * sample_fraction))
         effect = PM.evaluate(clip, frame, units=units, project_size=(width, height))
         samples.append((frame, effect))
 
@@ -320,6 +324,29 @@ def animation_layer(engine, animation, width, height, settings=None):
             return text_render.render(TXT.resolve(clip, frame), width, height, 1.0,
                                       poses=effect.unit_poses)
         return reference_layer(width, height, settings)
+
+    def finish(layer, effect, opacity):
+        pose = effect.pose
+        if not pose.is_identity():
+            state = transforms.TransformState(position_x=pose.dx, position_y=pose.dy,
+                                              scale_x=pose.scale_x * 100.0,
+                                              scale_y=pose.scale_y * 100.0,
+                                              rotation=pose.rotation)
+            layer = layer_ops.apply_transform(layer, (0.0, 0.0, float(width), float(height)),
+                                              state, (width, height), 1.0)
+            layer = layer_ops.preset_look(layer, pose.blur, pose.hue, pose.light)
+        if opacity < 0.999:
+            layer = layer.copy()
+            layer[:, :, 3] = np.clip(layer[:, :, 3].astype(np.float32)
+                                     * max(0.0, opacity), 0, 255).astype(np.uint8)
+        return layer
+
+    if fraction is not None:
+        fraction = max(0.0, min(1.0, float(fraction)))
+        frame = start + int(round((length - 1) * fraction))
+        effect = PM.evaluate(clip, frame, units=units, project_size=(width, height))
+        layer = draw(frame, effect)
+        return None if layer is None else finish(layer, effect, effect.pose.opacity)
 
     # The liveliest frame wins, but a frame whose letters (or picture) have already left
     # the card is worse than a calmer one: walk the samples from most to least moved and
@@ -355,19 +382,7 @@ def animation_layer(engine, animation, width, height, settings=None):
             # like the bare reference. A half-faded card says what it does - a preview
             # illustration only, the instance's own values are never touched.
             preview_opacity = 0.45
-    if not pose.is_identity():
-        state = transforms.TransformState(position_x=pose.dx, position_y=pose.dy,
-                                          scale_x=pose.scale_x * 100.0,
-                                          scale_y=pose.scale_y * 100.0,
-                                          rotation=pose.rotation)
-        layer = layer_ops.apply_transform(layer, (0.0, 0.0, float(width), float(height)),
-                                          state, (width, height), 1.0)
-        layer = layer_ops.preset_look(layer, pose.blur, pose.hue, pose.light)
-    if preview_opacity < 0.999:
-        layer = layer.copy()
-        layer[:, :, 3] = np.clip(layer[:, :, 3].astype(np.float32)
-                                 * max(0.0, preview_opacity), 0, 255).astype(np.uint8)
-    return layer
+    return finish(layer, effect, preview_opacity)
 
 
 def apply_entries(engine, entries, layer, frame=0):
@@ -411,6 +426,15 @@ def apply_entries(engine, entries, layer, frame=0):
             continue
         output = blend_ops.mix_layers(output, result, mix)
     return output
+
+
+def render_animation_frame(engine, animation, width, height, settings=None, fraction=0.5):
+    """One hover-preview frame of an animation, composited over its configured background."""
+    settings = settings or PreviewSettings.load()
+    layer = animation_layer(engine, animation, width, height, settings, fraction=fraction)
+    if layer is None:
+        return None
+    return _alpha_over(background_layer(width, height, settings.background), layer)
 
 
 def render_entries(engine, entries, width, height, settings=None, frame=None):

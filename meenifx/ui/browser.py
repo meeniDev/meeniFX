@@ -17,8 +17,8 @@ from __future__ import annotations
 import json
 import math
 
-from PyQt6.QtCore import (QEvent, QMimeData, QPoint, QPointF, QRectF, QSettings, Qt, QTimer,
-                          pyqtSignal)
+from PyQt6.QtCore import (QEvent, QMimeData, QPoint, QPointF, QRectF, QSettings, QSize, Qt,
+                          QTimer, pyqtSignal)
 from PyQt6.QtGui import QColor, QDrag, QIcon, QPainter, QPen, QPixmap, QPolygonF
 from PyQt6.QtWidgets import (QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
                              QMenu, QScrollArea, QTabBar, QToolButton, QVBoxLayout, QWidget)
@@ -120,6 +120,8 @@ class BrowserCard(QFrame):
     activated = pyqtSignal(dict)
     menu_requested = pyqtSignal(dict, QPoint)
     selected = pyqtSignal(dict)
+    hover_started = pyqtSignal(dict)
+    hover_stopped = pyqtSignal(dict)
 
     def __init__(self, item, view_mode="grid", parent=None):
         super().__init__(parent)
@@ -226,11 +228,14 @@ class BrowserCard(QFrame):
     def enterEvent(self, event):
         self._hover = True
         self.update()
+        if self.isEnabled():
+            self.hover_started.emit(self.item)
         super().enterEvent(event)
 
     def leaveEvent(self, event):
         self._hover = False
         self.update()
+        self.hover_stopped.emit(self.item)
         super().leaveEvent(event)
 
     def mouseDoubleClickEvent(self, event):
@@ -310,6 +315,20 @@ class BrowserView(QWidget):
         self.view_mode = str(self._store.value("browser/view", "grid") or "grid")
         self._cache = THUMBS.ThumbnailCache(engine, self)
         self._cache.ready.connect(self._thumbnail_ready)
+        self._hover_card = None
+        self._hover_item = None
+        self._hover_static = None
+        self._hover_frames = []
+        self._hover_index = 0
+        self._hover_steps = 0
+        self._hover_cache = {}
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setSingleShot(True)
+        self._hover_timer.setInterval(380)
+        self._hover_timer.timeout.connect(self._hover_start_playing)
+        self._hover_play_timer = QTimer(self)
+        self._hover_play_timer.setInterval(95)
+        self._hover_play_timer.timeout.connect(self._hover_next_frame)
 
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search effects")
@@ -331,6 +350,8 @@ class BrowserView(QWidget):
         self.menu_button = QToolButton()
         self.menu_button.setProperty("role", "icon")
         self.menu_button.setIcon(icon("dots"))
+        self.menu_button.setIconSize(QSize(16, 16))
+        self.menu_button.setFixedSize(QSize(28, 28))
         self.menu_button.setToolTip("Browser options")
         self.menu_button.clicked.connect(lambda: self.menu_requested.emit(
             self.menu_button.mapToGlobal(QPoint(0, self.menu_button.height()))))
@@ -472,6 +493,11 @@ class BrowserView(QWidget):
         button = QToolButton()
         button.setProperty("role", "icon")
         button.setIcon(icon_value)
+        # One icon grid for every browser toggle (Favorites, Recent, Grid, List).
+        # Leaving this implicit let some buttons inherit a larger size and drift off
+        # their baseline at 125/150 % display scaling.
+        button.setIconSize(QSize(16, 16))
+        button.setFixedSize(QSize(28, 28))
         button.setToolTip(tip)
         button.setCheckable(True)
         return button
@@ -637,6 +663,7 @@ class BrowserView(QWidget):
 
     # ------------------------------------------------------------------ rendering
     def refresh(self):
+        self._hover_stop_playing()
         items = self.items()
         self.options_bar.setVisible(self.tab == "animations" and self._selected_item is not None)
         self._cards = []
@@ -658,6 +685,8 @@ class BrowserView(QWidget):
             card.activated.connect(self._card_activated)
             card.menu_requested.connect(self._card_menu)
             card.selected.connect(self._card_selected)
+            card.hover_started.connect(lambda item, c=card: self._hover_begin(item, c))
+            card.hover_stopped.connect(lambda item, c=card: self._hover_end(item, c))
             card.show()
             row, column = divmod(index, self._columns_now)
             self.grid.addWidget(card, row, column)
@@ -765,8 +794,87 @@ class BrowserView(QWidget):
             if card.thumb_key == key:
                 card.set_thumbnail(image, self._thumb_ratios.get(key, 1.0))
 
+    # ---------------------------------------------------------- hover previews
+    def _hover_begin(self, item, card):
+        """A short hover delay, then sample the real preset only for animation cards."""
+        if item.get("kind") != "animation" or self.tab != "animations" or not self.isVisible():
+            return
+        if getattr(self.window(), "_playing", False):
+            return
+        self._hover_stop_playing()
+        self._hover_card, self._hover_item = card, item
+        self._hover_static = card.thumb.pixmap().copy()
+        self._hover_timer.start()
+
+    def _hover_end(self, item, card):
+        if card is self._hover_card:
+            self._hover_stop_playing()
+
+    def _hover_stop_playing(self):
+        self._hover_timer.stop()
+        self._hover_play_timer.stop()
+        if self._hover_card is not None and self._hover_static is not None:
+            self._hover_card.thumb.setPixmap(self._hover_static)
+        self._hover_card = None
+        self._hover_item = None
+        self._hover_static = None
+        self._hover_frames = []
+
+    def _hover_start_playing(self):
+        card, item = self._hover_card, self._hover_item
+        if card is None or item is None or not self.isVisible():
+            return
+        if getattr(self.window(), "_playing", False):
+            self._hover_stop_playing()
+            return
+        ratio = ((self.devicePixelRatioF() or 1.0)
+                 * max(1, int(self._cache.settings.scale())))
+        width = max(16, int(round(THUMB_W * ratio)))
+        height = max(16, int(round(THUMB_H * ratio)))
+        entry = THUMBS.animation_entry(item.get("family"), item.get("media") or "clip")
+        preset = (entry or {}).get("animation") or item.get("animation")
+        if not preset:
+            return
+        key = (item["id"], str(preset.get("id")), width, height)
+        frames = self._hover_cache.get(key)
+        if frames is None:
+            frames = []
+            for fraction in (0.04, 0.22, 0.4, 0.58, 0.76, 0.94):
+                image = THUMBS.render_animation_frame(
+                    self.engine, preset, width, height, self._cache.settings, fraction)
+                if image is None:
+                    frames = []
+                    break
+                frames.append(THUMBS.to_qimage(image))
+            if frames:
+                self._hover_cache = {key: frames}      # one small sequence at a time
+        if not frames:
+            return
+        self._hover_frames = frames
+        self._hover_index = 0
+        self._hover_steps = 0
+        card.set_thumbnail(frames[0], ratio)
+        self._hover_play_timer.start()
+
+    def _hover_next_frame(self):
+        card = self._hover_card
+        if card is None or not self._hover_frames:
+            self._hover_stop_playing()
+            return
+        self._hover_index = (self._hover_index + 1) % len(self._hover_frames)
+        card.set_thumbnail(self._hover_frames[self._hover_index],
+                           (self.devicePixelRatioF() or 1.0)
+                           * max(1, int(self._cache.settings.scale())))
+        self._hover_steps += 1
+        if self._hover_steps >= len(self._hover_frames) * 2:
+            # Two short loops is enough to read the motion; go back to the static
+            # thumbnail instead of running an animation for as long as the pointer sits.
+            self._hover_stop_playing()
+
     def shutdown(self):
         """Stop thumbnail work: called when the window or the panel goes away."""
+        self._hover_timer.stop()
+        self._hover_play_timer.stop()
         self._visible_timer.stop()
         self._layout_timer.stop()
         self._cache.shutdown()
@@ -777,6 +885,7 @@ class BrowserView(QWidget):
 
     def hideEvent(self, event):
         # Rendering stops with the panel: it must never compete with playback.
+        self._hover_stop_playing()
         self._visible_timer.stop()
         super().hideEvent(event)
 

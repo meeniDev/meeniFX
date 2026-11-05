@@ -190,8 +190,12 @@ everything composited below it, for exactly its time range, with its own opacity
 keyframes and blend mode. Every effect card has an animatable **Mix** value (0-100 %, dragged or typed like
 every other number; the engine blends the untouched layer with the result, alpha included).
 
-**Effects browser** — one browser with three tabs (Effects, Animations, Styles). Each tile is
-a real render of the reference picture through the same compositor the export uses, cached
+**Effects browser** — one browser with three tabs (Effects, Animations, Styles). Animation
+cards carry a genuine hover preview from the same preset evaluator: after a short delay
+they play six evaluated frames over a short loop, then return to the static thumbnail;
+leaving the card stops them immediately, previews are skipped during timeline playback or
+while the panel is hidden, and a render failure keeps the static image. Each tile is a real
+render of the reference picture through the same compositor the export uses, cached
 by effect/parameters/picture/quality and produced on background workers, so scrolling never
 blocks the UI. Effects with no meaningful still result (audio, time effects, and trackers
 without a face/hand in the reference) show a readable effect-specific label rather than an
