@@ -180,10 +180,14 @@ def _connector_pairs(boxes, mode, limit, max_connections):
                 continue
             candidates.append((distance, right))
         if mode == "sequential":
-            # Track order is meaningful for blobs and hands; use it even when a gap is
-            # longer than the colour-neighbour radius.
+            # Track order is meaningful for blobs and hands, but the distance control is
+            # still the user's way to stop a long gap from becoming a line.
             if left + 1 < count:
-                pairs.append((left, left + 1))
+                right = left + 1
+                rx, ry = centres[right]
+                distance = float(np.hypot(rx - lx, ry - ly))
+                if limit <= 0 or distance <= limit:
+                    pairs.append((left, right))
         elif mode == "nearest":
             if candidates:
                 pairs.append((left, min(candidates)[1]))
