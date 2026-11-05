@@ -21,6 +21,7 @@ from .. import tokens
 from .filedialogs import open_file, save_file
 from ..constants import EFFECT_MIME
 from ..effects.base import ParamSpec
+from ..effects.tracking_viz import TRACKING_STYLES
 from ..icons import icon
 from ..model import animation as ANIM
 from ..model import animation_families as FAMILIES
@@ -2137,8 +2138,17 @@ class EffectsPanel(QWidget):
 
         def write(target):
             target_entry = self._entry(target, entry["effect_id"])
-            if target_entry is not None:
-                self._write_param(target, target_entry, name, value, frame)
+            if target_entry is None:
+                return
+            self._write_param(target, target_entry, name, value, frame)
+            if name == "viz_preset" and value != "custom":
+                # Store the preset's values as ordinary parameters too, so switching
+                # back to Custom starts from what the user saw instead of stale defaults.
+                runtime = self.engine.runtime_effects.get(entry["effect_id"])
+                valid = {spec.name for spec in runtime.param_specs()} if runtime else set()
+                for key, preset_value in TRACKING_STYLES.get(value, {}).items():
+                    if key in valid:
+                        self._write_param(target, target_entry, key, preset_value, frame)
 
         label = f"Set {spec.label if spec is not None else name}"
         self.engine.session.apply_to_clips([clip.id], label, write)

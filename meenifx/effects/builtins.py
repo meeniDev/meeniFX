@@ -7,6 +7,7 @@ by it, so a 35% preview is the same picture as the export, only softer.
 """
 
 import os
+from dataclasses import replace
 
 import cv2
 import numpy as np
@@ -17,6 +18,12 @@ from ..constants import DEFAULT_UNICODE_CHARSET
 from ..model.values import Value
 from ..processing.mosaic import frame_pixel, mosaic_frame
 from .base import EffectBase, ParamSpec, TrackerColorMixin
+from .tracking_viz import Detection
+
+HAND_VIS_PARAMS = tuple(
+    replace(spec, default=True) if spec.name == "show_contour" else spec
+    for spec in TrackerColorMixin.VIS_PARAMS
+)
 
 FACE_CASCADE_FILE = "haarcascade_frontalface_default.xml"
 FACE_MODEL_FILE = "face_detection_yunet_2023mar.onnx"
@@ -163,6 +170,7 @@ class FaceTrackerEffect(TrackerColorMixin, EffectBase):
     category = "Tracking"
     key = "face_tracker"
     name = "Face Tracker"
+    TRACKING_LABEL = "Face"
 
     PARAMS = (
         ParamSpec("confidence", "Confidence", "int", 1, 99, 50, unit="%",
@@ -170,9 +178,13 @@ class FaceTrackerEffect(TrackerColorMixin, EffectBase):
         ParamSpec("min_size", "Smallest face", "int", 12, 240, 30, unit=" px", pixels=True,
                   help="Smallest face to accept, in project pixels"),
         ParamSpec("thickness", "Line thickness", "int", 1, 8, 2, unit=" px", pixels=True),
-        ParamSpec("blur_faces", "Blur faces", "bool", default=False),
-        ParamSpec("label_faces", "Labels", "bool", default=True),
-    ) + TrackerColorMixin.COLOR_PARAMS
+        ParamSpec("blur_faces", "Blur faces", "bool", default=False,
+                  help="Blur the detected face region before drawing its overlay"),
+        ParamSpec("blur_amount", "Blur strength", "int", 5, 100, 35, unit=" %",
+                  help="Blur radius as a percentage of the smaller face edge"),
+        ParamSpec("blur_feather", "Blur feather", "int", 0, 80, 10, unit=" px", pixels=True,
+                  help="Soften the blur edge so it does not leave a hard rectangle"),
+    ) + TrackerColorMixin.COLOR_PARAMS + TrackerColorMixin.VIS_PARAMS
 
     def __init__(self, app):
         super().__init__(app)
@@ -180,7 +192,8 @@ class FaceTrackerEffect(TrackerColorMixin, EffectBase):
         self.min_size = Value(30)
         self.thickness = Value(2)
         self.blur_faces = Value(False)
-        self.label_faces = Value(True)
+        self.blur_amount = Value(35)
+        self.blur_feather = Value(10)
         self._init_color_controls()
         self._backend = "none"
         self._cascade = None
@@ -218,33 +231,61 @@ class FaceTrackerEffect(TrackerColorMixin, EffectBase):
         return self._backend != "none"
 
     def detect_faces(self, frame):
-        """[(x, y, w, h)] of detected faces in the frame's own pixels."""
+        """[(x, y, w, h)] of detected faces in the frame's own pixels.
+
+        Detection may run on a smaller working image according to the quality preset;
+        boxes are always scaled back before they leave this method.
+        """
         if self._backend == "none":
             self.on_registered()
+        work, factor = self._detection_scale(frame, 480, 720)
         if self._backend == "yunet":
-            height, width = frame.shape[:2]
+            height, width = work.shape[:2]
             key = (width, height, int(self.confidence.get()))
             if self._detector is None or key != self._detector_key:
                 score = max(0.05, min(0.99, int(self.confidence.get()) / 100.0))
                 self._detector = cv2.FaceDetectorYN.create(str(face_model_path()), "",
                                                            (width, height), score, 0.3, 50)
                 self._detector_key = key
-            _ok, faces = self._detector.detect(frame)
+            _ok, faces = self._detector.detect(work)
             result = []
             if faces is not None:
                 for face in faces:
-                    x, y, w, h = [int(round(float(value))) for value in face[:4]]
+                    x, y, w, h = [int(round(float(value) / factor)) for value in face[:4]]
                     result.append((x, y, w, h))
             return result
         if self._backend == "haar":
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            min_size = max(8, self.px(self.min_size.get()))
+            gray = cv2.cvtColor(work, cv2.COLOR_BGR2GRAY)
+            min_size = max(8, int(round(self.px(self.min_size.get()) * factor)))
             # The old min-neighbour knob is now a confidence percentage.
             neighbors = max(1, int(round(1 + int(self.confidence.get()) / 100.0 * 11)))
             boxes = self._cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=neighbors,
                                                    minSize=(min_size, min_size))
-            return [tuple(int(v) for v in box) for box in boxes]
+            return [tuple(int(round(v / factor)) for v in box) for box in boxes]
         return []
+
+    def _blur_face(self, output, box):
+        x, y, w, h = [int(value) for value in box]
+        x, y = max(0, x), max(0, y)
+        w, h = min(output.shape[1] - x, max(1, w)), min(output.shape[0] - y, max(1, h))
+        if w <= 0 or h <= 0:
+            return
+        roi = output[y:y + h, x:x + w]
+        if not roi.size:
+            return
+        strength = max(5, min(100, int(self.blur_amount.get()))) / 100.0
+        k = max(3, int(round(min(w, h) * strength)) | 1)
+        blurred = cv2.GaussianBlur(roi, (k, k), 0)
+        feather = max(0, self.px(self.blur_feather.get()))
+        if feather <= 1:
+            output[y:y + h, x:x + w] = blurred
+            return
+        mask = np.zeros((h, w), np.uint8)
+        cv2.ellipse(mask, (w // 2, h // 2), (max(1, w // 2 - 1), max(1, h // 2 - 1)),
+                    0, 0, 360, 255, -1)
+        mask = cv2.GaussianBlur(mask, (0, 0), max(0.5, feather / 2.0))
+        alpha = mask.astype(np.float32)[:, :, None] / 255.0
+        output[y:y + h, x:x + w] = np.clip(blurred * alpha + roi * (1.0 - alpha), 0, 255).astype(np.uint8)
 
     def apply(self, frame):
         if self._backend == "none":
@@ -253,53 +294,50 @@ class FaceTrackerEffect(TrackerColorMixin, EffectBase):
 
         output = frame.copy()
         min_size = max(4, self.px(self.min_size.get()))
-        thickness = max(1, self.px(self.thickness.get()))
-        faces = [box for box in self.detect_faces(output)
-                 if box[2] >= min_size and box[3] >= min_size]
+        signature = (self._backend, int(self.confidence.get()), min_size,
+                     str(self.tracking_quality.get()))
+        faces = self._cached_detections(
+            output, signature, lambda: self.detect_faces(output))
+        faces = [box for box in faces if box[2] >= min_size and box[3] >= min_size]
+        if not faces:
+            return output
 
-        for idx, (x, y, w, h) in enumerate(faces):
-            color = self._resolve_draw_color(idx)
-            if self.blur_faces.get():
-                roi = output[y: y + h, x: x + w]
-                if roi.size:
-                    k = max(3, (min(w, h) // 6) | 1)
-                    output[y: y + h, x: x + w] = cv2.GaussianBlur(roi, (k, k), 0)
-
-            cv2.rectangle(output, (x, y), (x + w, y + h), color, thickness)
-            if self.label_faces.get():
-                cv2.putText(output, f"Face {idx + 1}", (x, max(14, y - 6)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55 * max(0.4, self.param_scale), color,
-                            max(1, thickness // 2), cv2.LINE_AA)
-
-        return output
+        if self.blur_faces.get():
+            for box in faces:
+                self._blur_face(output, box)
+        detections = [Detection(box=box, track_id=index + 1)
+                      for index, box in enumerate(faces)]
+        return self.draw_tracking(output, detections, label="Face")
 
 
 class HandTrackerEffect(TrackerColorMixin, EffectBase):
     category = "Tracking"
     key = "hand_tracker"
     name = "Hand Tracker"
+    TRACKING_LABEL = "Hand"
 
     PARAMS = (
         ParamSpec("max_hands", "Max hands", "int", 1, 6, 2),
         ParamSpec("min_area", "Smallest hand", "int", 200, 40000, 2500, unit=" px²", area=True, advanced=True,
                   help="Ignore skin-coloured regions smaller than this (area in project pixels)"),
+        ParamSpec("max_area", "Largest hand", "int", 5000, 400000, 180000, unit=" px²", area=True,
+                  advanced=True,
+                  help="Ignore skin-coloured regions larger than this (area in project pixels)"),
         ParamSpec("thickness", "Line thickness", "int", 1, 12, 2, unit=" px", pixels=True),
-        ParamSpec("draw_hull", "Draw hull", "bool", default=True),
-        ParamSpec("draw_box", "Draw box", "bool", default=True),
-    ) + TrackerColorMixin.COLOR_PARAMS
+    ) + TrackerColorMixin.COLOR_PARAMS + HAND_VIS_PARAMS
 
     def __init__(self, app):
         super().__init__(app)
         self.max_hands = Value(2)
         self.min_area = Value(2500)
+        self.max_area = Value(180000)
         self.thickness = Value(2)
-        self.draw_hull = Value(True)
-        self.draw_box = Value(True)
         self._init_color_controls()
+        self.show_contour = Value(True)
 
-    def apply(self, frame):
-        output = frame.copy()
-        ycrcb = cv2.cvtColor(output, cv2.COLOR_BGR2YCrCb)
+    def _detect(self, output):
+        work, factor = self._detection_scale(output, 480, 720)
+        ycrcb = cv2.cvtColor(work, cv2.COLOR_BGR2YCrCb)
         mask = cv2.inRange(ycrcb, (0, 133, 77), (255, 173, 127))
         kernel = np.ones((5, 5), np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
@@ -307,35 +345,39 @@ class HandTrackerEffect(TrackerColorMixin, EffectBase):
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         contours = sorted(contours, key=cv2.contourArea, reverse=True)
 
-        kept = 0
-        min_area = max(1, self.area(self.min_area.get()))
-        thickness = max(1, self.px(self.thickness.get()))
+        min_area = max(1, self.area(self.min_area.get())) * factor * factor
+        max_area = max(min_area, self.area(self.max_area.get()) * factor * factor)
+        limit = max(1, int(self.max_hands.get()))
+        detections = []
         for contour in contours:
             area = cv2.contourArea(contour)
-            if area < min_area:
+            if area < min_area or area > max_area:
                 continue
-            color = self._resolve_draw_color(kept)
-
-            if self.draw_hull.get():
-                hull = cv2.convexHull(contour)
-                cv2.drawContours(output, [hull], -1, color, thickness)
-            if self.draw_box.get():
-                x, y, w, h = cv2.boundingRect(contour)
-                cv2.rectangle(output, (x, y), (x + w, y + h), color, thickness)
-                cv2.putText(output, f"Hand {kept + 1}", (x, max(14, y - 6)), cv2.FONT_HERSHEY_SIMPLEX,
-                            0.55 * max(0.4, self.param_scale), color, max(1, thickness // 2), cv2.LINE_AA)
-
-            kept += 1
-            if kept >= max(1, int(self.max_hands.get())):
+            hull = cv2.convexHull(contour)
+            if hull is None or len(hull) < 3:
+                continue
+            scaled = (hull.astype(np.float32) / factor).round().astype(np.int32)
+            detections.append(Detection(box=cv2.boundingRect(scaled), contour=scaled,
+                                        track_id=len(detections) + 1))
+            if len(detections) >= limit:
                 break
+        return detections
 
-        return output
+    def apply(self, frame):
+        output = frame.copy()
+        signature = (str(self.tracking_quality.get()), int(self.min_area.get()),
+                     int(self.max_area.get()), int(self.max_hands.get()))
+        detections = self._cached_detections(output, signature, lambda: self._detect(output))
+        if not detections:
+            return output
+        return self.draw_tracking(output, detections, label="Hand")
 
 
 class BlobTrackerEffect(TrackerColorMixin, EffectBase):
     category = "Tracking"
     key = "blob_tracker"
     name = "Blob Tracker"
+    TRACKING_LABEL = "Blob"
 
     PARAMS = (
         ParamSpec("max_blobs", "Max blobs", "int", 1, 80, 12),
@@ -346,10 +388,8 @@ class BlobTrackerEffect(TrackerColorMixin, EffectBase):
         ParamSpec("threshold", "Brightness cutoff", "int", 0, 255, 165, advanced=True,
                   help="Brightness cut-off for a pixel to belong to a blob"),
         ParamSpec("invert", "Invert mask", "bool", default=False),
-        ParamSpec("draw_mode", "Shape", "choice", choices=("circle", "box", "contour"),
-                  default="circle"),
         ParamSpec("thickness", "Line thickness", "int", 1, 12, 2, unit=" px", pixels=True),
-    ) + TrackerColorMixin.COLOR_PARAMS
+    ) + TrackerColorMixin.COLOR_PARAMS + TrackerColorMixin.VIS_PARAMS
 
     def __init__(self, app):
         super().__init__(app)
@@ -358,44 +398,41 @@ class BlobTrackerEffect(TrackerColorMixin, EffectBase):
         self.max_area = Value(18000)
         self.threshold = Value(165)
         self.invert = Value(False)
-        self.draw_mode = Value("circle")
         self.thickness = Value(2)
         self._init_color_controls()
+        # Old projects that stored draw_mode still open as circles; new projects start
+        # with the shared box, which is the least surprising default for a tracker.
+        self.show_circle = Value(False)
 
-    def apply(self, frame):
-        output = frame.copy()
-        gray = cv2.cvtColor(output, cv2.COLOR_BGR2GRAY)
+    def _detect(self, output):
+        work, factor = self._detection_scale(output, 480, 720)
+        gray = cv2.cvtColor(work, cv2.COLOR_BGR2GRAY)
         thresh_mode = cv2.THRESH_BINARY_INV if self.invert.get() else cv2.THRESH_BINARY
         _, mask = cv2.threshold(gray, int(self.threshold.get()), 255, thresh_mode)
-
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         contours = sorted(contours, key=cv2.contourArea, reverse=True)
 
         max_blobs = max(1, int(self.max_blobs.get()))
-        min_area = max(1, self.area(self.min_area.get()))
-        max_area = max(min_area, self.area(self.max_area.get()))
-        thickness = max(1, self.px(self.thickness.get()))
-        kept = 0
-
+        min_area = max(1, self.area(self.min_area.get())) * factor * factor
+        max_area = max(min_area, self.area(self.max_area.get()) * factor * factor)
+        detections = []
         for contour in contours:
             area = cv2.contourArea(contour)
             if area < min_area or area > max_area:
                 continue
-
-            color = self._resolve_draw_color(kept)
-            draw_mode = str(self.draw_mode.get()).strip().lower()
-
-            if draw_mode == "box":
-                x, y, w, h = cv2.boundingRect(contour)
-                cv2.rectangle(output, (x, y), (x + w, y + h), color, thickness)
-            elif draw_mode == "contour":
-                cv2.drawContours(output, [contour], -1, color, thickness)
-            else:
-                (cx, cy), radius = cv2.minEnclosingCircle(contour)
-                cv2.circle(output, (int(cx), int(cy)), max(1, int(radius)), color, thickness)
-
-            kept += 1
-            if kept >= max_blobs:
+            scaled = (contour.astype(np.float32) / factor).round().astype(np.int32)
+            detections.append(Detection(box=cv2.boundingRect(scaled), contour=scaled,
+                                        track_id=len(detections) + 1))
+            if len(detections) >= max_blobs:
                 break
+        return detections
 
-        return output
+    def apply(self, frame):
+        output = frame.copy()
+        signature = (str(self.tracking_quality.get()), int(self.threshold.get()),
+                     bool(self.invert.get()), int(self.min_area.get()),
+                     int(self.max_area.get()), int(self.max_blobs.get()))
+        detections = self._cached_detections(output, signature, lambda: self._detect(output))
+        if not detections:
+            return output
+        return self.draw_tracking(output, detections, label="Blob")

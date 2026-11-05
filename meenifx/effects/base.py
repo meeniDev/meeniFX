@@ -5,7 +5,9 @@ its controls from that table and the parameter audit test drives it, so the slid
 user drags and the value the effect reads can never drift apart again.
 """
 
+import hashlib
 import math
+from collections import OrderedDict
 from dataclasses import dataclass
 
 import cv2
@@ -13,6 +15,7 @@ import numpy as np
 
 from ..constants import parse_palette_colors as _parse_palette_colors
 from ..model.values import Value
+from .tracking_viz import STYLE_KEYS, draw_tracking, resolve_style
 
 
 @dataclass(frozen=True)
@@ -240,24 +243,196 @@ class TrackerColorMixin:
                   help="Comma-separated colours used when the mode is palette"),
     )
 
+    # One set of visibility controls shared by every tracker.  The visual language must
+    # not change just because the detector is looking for faces instead of blobs.
+    VIS_PARAMS = (
+        ParamSpec("viz_preset", "Look", "choice",
+                  choices=("custom", "clean", "minimal", "numbered", "neon", "hud", "points"),
+                  choice_labels=("Custom", "Clean detection", "Minimal boxes",
+                                 "Numbered tracking", "Neon connectors", "Technical HUD",
+                                 "Motion points"),
+                  default="custom",
+                  help="A coherent starting style; Custom uses the controls below"),
+        ParamSpec("show_box", "Box", "bool", default=True,
+                  help="Draw a box, corner brackets or an ellipse around each detection"),
+        ParamSpec("box_style", "Box style", "choice",
+                  choices=("rectangle", "corners", "ellipse"),
+                  choice_labels=("Rectangle", "Corner brackets", "Ellipse"),
+                  default="rectangle"),
+        ParamSpec("show_contour", "Outline", "bool", default=False,
+                  help="Draw the detected contour or hull when the detector provides one"),
+        ParamSpec("show_circle", "Circle", "bool", default=False,
+                  help="Draw a circle enclosing each detection"),
+        ParamSpec("show_points", "Points", "bool", default=False,
+                  help="Draw sampled contour points (box corners when there is no contour)"),
+        ParamSpec("show_labels", "Labels", "bool", default=True,
+                  help="Name each detection"),
+        ParamSpec("show_numbers", "Numbers", "bool", default=False,
+                  help="Draw a separate tracking number"),
+        ParamSpec("label_text", "Label text", "text", default="",
+                  help="Leave empty to use the tracker's own name"),
+        ParamSpec("connector_mode", "Connectors", "choice",
+                  choices=("none", "nearest", "distance", "sequential"),
+                  choice_labels=("None", "Nearest neighbour", "All within range",
+                                 "Join in track order"),
+                  default="none", help="Lines between detections in the same frame"),
+        ParamSpec("connector_distance", "Connector range", "int", 5, 100, 25, unit=" %",
+                  help="Longest connector, as a percentage of the longer frame edge"),
+        ParamSpec("max_connections", "Max links", "int", 1, 6, 2,
+                  help="How many neighbours each detection may link to"),
+        ParamSpec("glow", "Glow", "bool", default=False,
+                  help="Add a soft glow under the tracking lines"),
+        ParamSpec("opacity", "Opacity", "int", 20, 100, 100, unit=" %",
+                  help="Opacity of the tracking overlay"),
+        ParamSpec("tracking_quality", "Detection quality", "choice",
+                  choices=("fast", "balanced", "precise"),
+                  choice_labels=("Fast", "Balanced", "Precise"),
+                  default="balanced",
+                  help="Detect on a smaller working image for speed; boxes are scaled back"),
+    )
+
+    TRACKING_LABEL = "Object"
+
     def _init_color_controls(self):
         self.color_mode = Value("solid")
         self.color_r = Value(52)
         self.color_g = Value(188)
         self.color_b = Value(255)
         self.palette_text = Value("#ffae00,#28c9ff,#65f4a3,#f26d6d")
-        self._color_rng = np.random.default_rng(20261028)
+        self.viz_preset = Value("custom")
+        self.show_box = Value(True)
+        self.box_style = Value("rectangle")
+        self.show_contour = Value(False)
+        self.show_circle = Value(False)
+        self.show_points = Value(False)
+        self.show_labels = Value(True)
+        self.show_numbers = Value(False)
+        self.label_text = Value("")
+        self.connector_mode = Value("none")
+        self.connector_distance = Value(25)
+        self.max_connections = Value(2)
+        self.glow = Value(False)
+        self.opacity = Value(100)
+        self.tracking_quality = Value("balanced")
+        self._tracking_cache = OrderedDict()
+        self._tracking_cache_limit = 8
+
+    def load_params(self, params):
+        """Apply parameters, including the tracker controls used before this version.
+
+        Projects saved before the shared tracking panel stored ``draw_box``/``draw_hull``,
+        ``draw_mode`` and ``label_faces``.  Mapping them here keeps those projects looking
+        the same without keeping duplicate controls in the properties panel.
+        """
+        mapped = dict(params or {})
+        if "label_faces" in mapped:
+            mapped["show_labels"] = bool(mapped["label_faces"])
+        if "draw_hull" in mapped:
+            mapped["show_contour"] = bool(mapped["draw_hull"])
+        if "draw_box" in mapped:
+            mapped["show_box"] = bool(mapped["draw_box"])
+        mode = str(mapped.pop("draw_mode", "") or "").strip().lower()
+        if mode:
+            mapped["show_box"] = mode == "box"
+            mapped["show_contour"] = mode == "contour"
+            mapped["show_circle"] = mode == "circle"
+        super().load_params(mapped)
 
     def _resolve_draw_color(self, object_index=0):
         mode = str(self.color_mode.get()).strip().lower()
         if mode == "solid":
             return (int(self.color_b.get()), int(self.color_g.get()), int(self.color_r.get()))
         if mode == "random":
-            rgb = self._color_rng.integers(0, 256, size=3)
-            return (int(rgb[2]), int(rgb[1]), int(rgb[0]))
+            # Derive the colour from the object's index instead of advancing an RNG: a
+            # random colour that changes every frame looks like a broken overlay.
+            digest = hashlib.blake2b(str(int(object_index)).encode(), digest_size=3).digest()
+            return (int(digest[2]), int(digest[1]), int(digest[0]))
         if mode == "palette":
             palette = _parse_palette_colors(self.palette_text.get())
             if palette:
                 return palette[object_index % len(palette)]
             return (0, 255, 255)
         return (0, 255, 255)
+
+    # --------------------------------------------------------------- shared visuals
+    def _tracking_style(self):
+        manual = {key: getattr(self, key).get() for key in STYLE_KEYS}
+        manual["opacity"] = int(manual.get("opacity", 100) or 100)
+        return resolve_style(self.viz_preset.get(), manual)
+
+    def draw_tracking(self, frame, detections, label=None, thickness=None):
+        """Draw detections with this tracker's shared style and colour scheme."""
+        style = self._tracking_style()
+        colors = [self._resolve_draw_color(index) for index in range(len(detections))]
+        return draw_tracking(
+            frame, detections,
+            color=self._resolve_draw_color(0),
+            colors=colors,
+            thickness=max(1, self.px(thickness if thickness is not None else self.thickness.get())),
+            opacity=style.get("opacity", 100),
+            show_box=bool(style.get("show_box", True)),
+            show_contour=bool(style.get("show_contour", False)),
+            show_points=bool(style.get("show_points", False)),
+            show_circle=bool(style.get("show_circle", False)),
+            show_labels=bool(style.get("show_labels", True)),
+            show_numbers=bool(style.get("show_numbers", False)),
+            label_text=str(self.label_text.get() or "").strip() or (label or self.TRACKING_LABEL),
+            box_style=str(style.get("box_style", "rectangle")),
+            connector_mode=str(style.get("connector_mode", "none")),
+            connector_distance=int(self.connector_distance.get()),
+            max_connections=int(self.max_connections.get()),
+            glow=bool(style.get("glow", False)),
+            label_scale=0.55 * max(0.4, self.param_scale),
+        )
+
+    # ------------------------------------------------------------ detection support
+    def _detection_scale(self, frame, fast_edge=480, balanced_edge=720, precise_edge=None):
+        """(working frame, factor) for the chosen detection quality.
+
+        ``None`` for ``precise_edge`` means full resolution; the default Balanced cap is
+        720 px and Fast is 480 px.  Boxes and contours are always scaled back to the
+        caller's frame, so the chosen working size never changes the overlay's geometry.
+        """
+        quality = str(self.tracking_quality.get()).strip().lower()
+        height, width = frame.shape[:2]
+        if quality == "precise":
+            max_edge = precise_edge
+        elif quality == "fast":
+            max_edge = fast_edge
+        else:
+            max_edge = balanced_edge
+        longest = max(width, height)
+        if not max_edge or longest <= max_edge:
+            return frame, 1.0
+        factor = max_edge / float(longest)
+        size = (max(1, int(round(width * factor))), max(1, int(round(height * factor))))
+        return cv2.resize(frame, size, interpolation=cv2.INTER_AREA), factor
+
+    @staticmethod
+    def _frame_signature(frame):
+        """A cheap perceptual key for the cache; exact pixel equality is not required."""
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+        small = cv2.resize(gray, (64, 36), interpolation=cv2.INTER_AREA)
+        return hashlib.blake2b(small.tobytes(), digest_size=12).digest()
+
+    def _cached_detections(self, frame, signature, compute):
+        """Memoise one detector result for repeated preview/export passes.
+
+        The key includes a small frame hash and the detector parameters.  Eight entries
+        cover alternating preview/export scales without letting a long project grow a
+        second media cache in memory.
+        """
+        key = (frame.shape[:2], self._frame_signature(frame), tuple(signature))
+        cached = self._tracking_cache.get(key)
+        if cached is not None:
+            self._tracking_cache.move_to_end(key)
+            return cached
+        value = compute()
+        self._tracking_cache[key] = value
+        self._tracking_cache.move_to_end(key)
+        while len(self._tracking_cache) > self._tracking_cache_limit:
+            self._tracking_cache.popitem(last=False)
+        return value
+
+    def clear_tracking_cache(self):
+        self._tracking_cache.clear()

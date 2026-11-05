@@ -24,6 +24,25 @@
   Browser toggles share one 16 px icon grid and 28 px button size, fixing the mismatched
   Favorites/Recently Used icons at scaled display sizes.
 
+### Tracking
+
+- Face, Hand and Blob Tracker now share one visualization system: box/corner/ellipse
+  shapes, contours, sampled points, circles, labels, separate tracking numbers, opacity,
+  glow, and capped connectors (nearest, all within range, or track order). Named looks
+  (Clean, Minimal, Numbered, Neon, HUD, Motion points) are one choice; switching back to
+  Custom keeps the values the look used. Old `draw_box`, `draw_hull`, `draw_mode` and
+  `label_faces` values still load.
+- Face Tracker faces can be blurred with a feathered ellipse edge (`Blur faces`,
+  `Blur strength`, `Blur feather`) instead of a hard rectangle, and all three trackers
+  expose Fast/Balanced/Precise detection quality. Detection runs on a smaller working
+  image at the faster settings and boxes/contours are scaled back.
+- Detector results are cached for eight frame/parameter combinations, so replaying the
+  same preview frame or exporting after previewing it does not repeat face detection.
+  Random overlay colours are now stable per object instead of changing every frame.
+- Hand Tracker still uses the existing skin-colour/morphology detector. It is **not** a
+  hand-pose model and can still pick up a face or forearm; the new max-area filter, shared
+  overlay and cache reduce false boxes but do not turn it into validated hand tracking.
+
 ### Recording
 
 - Added Performance / Balanced / High Quality recorder presets. They change bitrate

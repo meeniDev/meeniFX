@@ -123,7 +123,16 @@ corner pin, colour, blur, glow, plus audio effects (filter, compressor, limiter,
 reverb, pan). Every effect declares which media types it can process, so a video-only
 effect cannot be added to audio and an old project that has one is switched off with an
 explanation instead of rendering wrongly. Each effect publishes its parameter table, which
-the properties panel builds itself from.
+the properties panel builds itself from. Face, Hand and Blob Tracker share one overlay
+language: box, corner brackets or ellipse, contour/hull, sampled points, labels, tracking
+numbers, opacity, glow and connectors (nearest, all within range, or in track order, with
+a range and link cap). Named looks cover common setups; Custom exposes every switch, and
+old projects' draw-box/hull/mode/label values are mapped onto the new controls. Face
+Tracker can blur a face with a feathered elliptical mask, and each tracker has
+Fast/Balanced/Precise detection quality. That setting runs detection on a smaller working
+image and scales the result back, and detector results are cached for repeated preview or
+export frames. Hand Tracker remains a skin-colour/morphology detector, not a hand-pose
+model.
 
 **Keyframes and the Graph Editor** — every numeric parameter animates: stopwatch, diamond,
 previous/next keys, Auto-Keyframe (on = key at playhead, off = shift the whole curve).

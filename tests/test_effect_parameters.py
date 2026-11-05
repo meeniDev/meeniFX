@@ -67,7 +67,18 @@ CONTEXT_SWITCHES = {("gaussian_blur", "keep_edges"), ("motion_blur", "follow_mot
                     # Puppet Warp only deforms when the clip carries pins, and its mesh
                     # overlay is a preview drawing that is never exported.
                     ("puppet_warp", "mesh_density"), ("puppet_warp", "stiffness"),
-                    ("puppet_warp", "show_mesh")}
+                    ("puppet_warp", "show_mesh"),
+                    # Connector count needs three detections to be visible; the synthetic
+                    # tracking frames have only two.  Dedicated tests drive the shared
+                    # drawing directly with a larger set.
+                    ("face_tracker", "max_connections"),
+                    ("hand_tracker", "max_connections"),
+                    ("blob_tracker", "max_connections"),
+                    # Quality presets only change the working resolution on a large frame;
+                    # a 320x180 audit frame is already below every preset's limit.
+                    ("face_tracker", "tracking_quality"),
+                    ("hand_tracker", "tracking_quality"),
+                    ("blob_tracker", "tracking_quality")}
 
 
 def blob_frame(width=640, height=480):
@@ -103,6 +114,15 @@ def _prepared_base(effect_id, name, params):
     if effect_id == "blob_tracker":
         # Keep every blob reachable so min/max of one parameter is what changes.
         base.update(min_area=1, max_area=400000, max_blobs=80, threshold=150)
+    if effect_id == "face_tracker" and name in ("blur_amount", "blur_feather"):
+        # The blur controls are intentional no-ops until "Blur faces" is enabled.
+        base["blur_faces"] = True
+    if name in ("connector_mode", "connector_distance", "max_connections"):
+        # Bring the synthetic detections inside the connector radius.  Their default
+        # layout is deliberately spread out to exercise per-object drawing.
+        base["connector_distance"] = 100
+    if name == "connector_distance":
+        base["connector_mode"] = "nearest"
     if effect_id == "motion_blur":
         # A still clip has no measured movement, so the shutter has nothing to smear:
         # give the effect an explicit manual smear to work with.
@@ -153,6 +173,8 @@ def test_toggle_parameter_changes_the_output(effect_id, spec, monkeypatch):
 
 @pytest.mark.parametrize("effect_id,spec", CHOICE_CASES, ids=[f"{k}.{s.name}" for k, s in CHOICE_CASES])
 def test_choice_parameter_changes_the_output(effect_id, spec, monkeypatch):
+    if (effect_id, spec.name) in CONTEXT_SWITCHES:
+        pytest.skip("needs a larger frame or more detections; covered by dedicated tests")
     if (effect_id, spec.name) in TEMPORAL_CASES:
         pytest.skip("frame-rate parameter; covered by tests/test_effects_new.py")
     engine, clip = _engine_for(effect_id, monkeypatch)
