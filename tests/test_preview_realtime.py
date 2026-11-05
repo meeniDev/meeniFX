@@ -330,10 +330,10 @@ def test_the_inspector_offers_the_same_gestures_as_switches(editor):
     window.effects_panel.refresh_properties()
     pump(0.05)
     labels = {box.text(): box for box in window.findChildren(QCheckBox)}
-    assert "Lock aspect ratio" in labels
+    assert "Lock Scale X/Y" in labels
     assert "Scale from center" in labels
     assert "Snap rotation" in labels
-    lock = labels["Lock aspect ratio"]
+    lock = labels["Lock Scale X/Y"]
     centre = labels["Scale from center"]
     assert lock.isChecked(), "aspect locking is the default"
     assert not centre.isChecked()

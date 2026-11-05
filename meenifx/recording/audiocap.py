@@ -25,6 +25,31 @@ RATES = (48000, 44100, 32000, 22050)
 CHANNELS = (2, 1)
 MAX_DRIFT = 0.030          # seconds of audio-vs-clock drift tolerated before correcting
 LEVEL_FLOOR_DB = 55.0
+# A packet whose device position is this far ahead of what we have written means the
+# endpoint skipped captured time (loopback devices often produce nothing while the
+# speakers are silent). The hole is written as silence so later speech stays where it
+# was recorded instead of sliding towards the beginning of the file.
+GAP_THRESHOLD = 0.010
+# Anything longer than this is a suspend, a clock jump or a broken timestamp, not a gap in
+# the capture; padding it would allocate a huge block and shift everything after it.
+MAX_GAP = 30.0
+
+
+def silence_gap(position_seconds, start_seconds, produced_frames, rate,
+                threshold=GAP_THRESHOLD, limit=MAX_GAP):
+    """Output frames of silence to insert before a packet.
+
+    `position_seconds` is the endpoint's QPC timestamp for the packet and `start_seconds`
+    the QPC time the stream was started, both on the same clock as perf_counter. Comparing
+    the audio written so far with the device clock keeps leading silence, skipped packets
+    and intermittent quiet passages in their real places. Ordinary buffering (a negative
+    or tiny difference) produces no padding, and neither does a jump beyond `limit`.
+    """
+    rate = max(1, int(rate))
+    gap = float(position_seconds) - float(start_seconds) - float(produced_frames) / rate
+    if gap <= threshold or gap > limit:
+        return 0
+    return int(round(gap * rate))
 
 
 def endpoints(loopback=False, refresh=False):
@@ -188,6 +213,7 @@ class _CaptureThread(threading.Thread):
         self.error = ""
         self.frames = 0
         self.dropped = 0
+        self.padded = 0
         self.device_format = None
         self._stop = threading.Event()
         self._ready = threading.Event()
@@ -208,6 +234,7 @@ class _CaptureThread(threading.Thread):
             converter = RateConverter(info.rate, self.rate, self.channels)
             if self.record:
                 sink = WaveSink(self.path, self.rate, self.channels)
+            capture_started = time.perf_counter_ns() / 1e9
             capture.start()
             self._ready.set()
             started = time.monotonic()
@@ -218,9 +245,20 @@ class _CaptureThread(threading.Thread):
                 if pending <= 0:
                     time.sleep(0.004)
                     continue
-                block, flags, _position = capture.read_packet()
+                block, flags, position = capture.read_packet()
                 if flags & wasapi.AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY:
                     self.dropped += 1
+                # Keep the endpoint's timeline: any captured time the driver did not hand
+                # over is written as silence, so the first audible words are not pulled
+                # towards the start of the recording.
+                gap = silence_gap(position / 10_000_000.0, capture_started,
+                                  self.frames, self.rate)
+                if gap > 0:
+                    pad = converter.push(np.zeros((gap, info.channels), dtype=np.float32))
+                    if sink is not None:
+                        sink.write(pad)
+                    self.frames += len(pad)
+                    self.padded += gap
                 if len(block) == 0:
                     block = silence
                 block = fit_channels(block, self.channels)

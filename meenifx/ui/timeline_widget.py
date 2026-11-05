@@ -25,7 +25,7 @@ from ..model.keyframes import AnimatedValue, Keyframe, clip_animations, clip_key
 from ..model.timeline import FADE_CURVES, MARKER_COLORS, fade_curve_name, fade_gain
 from ..theme import COLORS
 from .track_header import header_hit, header_layout, paint_header, TOOLTIPS
-from .widgets import SliderField
+from .widgets import ScrubField
 
 
 class ZoomSlider(QSlider):
@@ -813,7 +813,23 @@ class TimelineCanvas(QWidget):
             else:
                 p.drawRect(QRectF(bar.left(), bar.top(), 1.5, bar.height()))
                 p.drawRect(QRectF(bar.right() - 1.5, bar.top(), 1.5, bar.height()))
+                self._paint_loop_ticks(p, instance, clip, bar)
             p.restore()
+
+    def _paint_loop_ticks(self, p, instance, clip, bar):
+        """Faint marks where each cycle of a loop starts, so its rhythm stays visible."""
+        _start, span = PM.window(instance, clip.duration)
+        period = max(1, PM.loop_period(instance))
+        if span <= 0:
+            return
+        step = bar.width() * period / float(span)
+        if step < 4.0:
+            return
+        p.setBrush(QColor(255, 255, 255, 90))
+        offset = step
+        while offset < bar.width() - 2.0:
+            p.drawRect(QRectF(bar.left() + offset, bar.top(), 1.0, bar.height()))
+            offset += step
 
     def _preset_hit(self, x, y):
         """(clip, index, edge) under the pointer; edge is 'start'/'end' or None."""
@@ -863,11 +879,14 @@ class TimelineCanvas(QWidget):
         elif category == "in":
             PM.set_range(instance, 0, max(1, local), clip)
         else:
+            # A loop's bar is its coverage; `duration` is the length of one cycle, so
+            # dragging an edge never changes the cycle.
             if drag["edge"] == "start":
                 new_start = max(0, min(local, start + length - 1))
-                PM.set_range(instance, new_start, start + length - new_start, clip)
+                PM.set_range(instance, new_start, clip=clip)
+                PM.set_loop_coverage(instance, start + length - new_start)
             else:
-                PM.set_range(instance, start, max(1, local - start), clip)
+                PM.set_loop_coverage(instance, max(1, local - start))
         drag["moved"] = True
         self.session.changed.emit()
         self.update()
@@ -2645,7 +2664,10 @@ class TimelineCanvas(QWidget):
                 return
             track, clip = self._clip_at(x, y)
             if clip:
-                self.session.set_selection({clip.id})
+                # Right-clicking a clip that is already part of a multi-selection must
+                # keep that selection: Link Selected Clips acts on the whole selection.
+                if clip.id not in self.session.selected:
+                    self.session.set_selection({clip.id})
                 self._clip_menu(clip, event.globalPosition().toPoint())
             else:
                 self._timeline_menu(event.globalPosition().toPoint())
@@ -3528,13 +3550,14 @@ class TimelineCanvas(QWidget):
             super().keyPressEvent(event)
 
     # -------------------------------------------------------------------- menus
-    def _timeline_menu(self, point):
+    def _timeline_menu(self, point, clip=None):
+        """Empty-timeline/track-lane menu; `clip` is only set when the press hit one."""
         menu = QMenu(self)
         menu.addAction("Add Video Track", lambda: self.session.add_track("video"))
         menu.addAction("Add Audio Track", lambda: self.session.add_track("audio"))
         menu.addSeparator()
         menu.addAction("Split at Playhead", self.session.split_at_playhead)
-        if clip.is_text:
+        if clip is not None and clip.is_text:
             split_menu = menu.addMenu("Split Text")
             for mode, label in (("letter", "Into Letters"), ("word", "Into Words"),
                                 ("line", "Into Lines")):
@@ -3571,18 +3594,36 @@ class TimelineCanvas(QWidget):
         menu.addAction("Freeze frame", lambda: self.session.freeze_selected_clip(clip.id))
         menu.addAction("Duplicate", self.session.duplicate_selected)
         menu.addSeparator()
-        if self.session.can_unlink([clip.id]):
-            menu.addAction("Unlink Video and Audio", self.session.unlink_selected)
         selection = sorted(self.session.selected) or [clip.id]
-        if self.session.can_link(selection):
-            menu.addAction("Link Video and Audio", self.session.link_selected)
-        if self.session.can_unlink([clip.id]) or self.session.can_link(selection):
+        link = menu.addAction("Link Selected Clips",
+                              lambda _checked=False: self.session.link_selected())
+        link.setEnabled(self.session.can_link(selection))
+        unlink = menu.addAction("Unlink Selected Clips",
+                                lambda _checked=False: self.session.unlink_selected())
+        unlink.setEnabled(self.session.can_unlink(selection))
+        menu.addSeparator()
+        if self._clip_has_audio(clip):
+            menu.addAction("Remove Dead Silence...",
+                           lambda _checked=False, c=clip: self._remove_dead_silence(c))
             menu.addSeparator()
         menu.addAction("Copy", self.session.copy_selected)
         menu.addAction("Cut", self.session.cut_selected)
         menu.addAction("Delete", self.session.delete_selected)
         menu.addAction("Ripple Delete", lambda: self.session.delete_selected(True))
         menu.exec(point)
+
+    def _clip_has_audio(self, clip):
+        """True when this clip, or a clip linked to it, can supply the analysed audio."""
+        if clip.carries_audio:
+            return True
+        if not clip.link_id:
+            return False
+        return any(member.carries_audio for member in self.timeline.link_group(clip.link_id))
+
+    def _remove_dead_silence(self, clip):
+        opener = getattr(self.window(), "open_silence_dialog", None)
+        if opener is not None:
+            opener(clip.id)
 
     def split_text(self, clip, mode="letter"):
         """Split a text clip into one clip per unit, keeping every piece where it was.
@@ -3835,8 +3876,9 @@ class TimelinePanel(QWidget):
         # Selecting a video clip also selects its linked audio (and the other way round).
         # Turning this off never removes a link; it only stops the selection from following it.
         self.linked = self._tool_button("Linked Selection",
-                                        "Select, move, trim and split a video clip together with "
-                                        "its linked audio", checkable=True, icon_name="link")
+                                        "Select, move, trim and split already-linked clips together "
+                                        "(selection only; use Link Selected Clips, Ctrl+L, to link)",
+                                        checkable=True, icon_name="link")
         self.linked.setChecked(self.canvas.session.linked_selection_enabled)
         self.linked.toggled.connect(self._set_linked_selection)
         self.canvas.session.linked_selection_changed.connect(self._sync_linked_button)
@@ -3863,9 +3905,9 @@ class TimelinePanel(QWidget):
                                      "does the same)", icon_name="fit")
         self.fit.clicked.connect(self.canvas.fit_to_window)
         # Track height lives in the settings popover; Alt + wheel drives the same single value.
-        self.height = SliderField("Track height", self.canvas.track_height_value, self.canvas.MIN_TRACK_H,
+        self.height = ScrubField("Track height", self.canvas.track_height_value, self.canvas.MIN_TRACK_H,
                                   self.canvas.MAX_TRACK_H, default=self.canvas.DEFAULT_TRACK_H,
-                                  step=1, unit=" px", label_width=84, box_width=64,
+                                  step=1, unit=" px", label_width=84,
                                   tooltip="Height of every track (Alt + wheel over the timeline)")
         self.height.edited.connect(lambda value: self.canvas.set_track_height(int(value)))
         self.settings_button = QToolButton()
@@ -4024,7 +4066,8 @@ class TimelinePanel(QWidget):
         if self.linked.isChecked() != on:
             self.linked.setChecked(on)
         self._restyle(self.linked)
-        self._tip(self.linked, f"Linked Selection: {'on' if on else 'off'}")
+        self._tip(self.linked, f"Linked Selection: {'on' if on else 'off'} — selection behaviour only; "
+                               "use Link Selected Clips (Ctrl+L) to create links")
 
     def _sync_loop_button(self):
         on = bool(self.canvas.timeline.loop_enabled)
@@ -4097,7 +4140,7 @@ class TimelinePanel(QWidget):
         self.height.set_value(value)
 
     def _set_zoom(self, value):
-        """Zoom from the SliderField: the frame under the middle of the panel stays put."""
+        """Zoom from the timeline slider: the frame under the middle of the panel stays put."""
         old_center = self.canvas.frame_at(self.canvas.width() / 2)
         self.canvas.ppf = max(self.canvas.MIN_PPF, min(self.canvas.MAX_PPF, float(value)))
         self.canvas.scroll_x = max(0, old_center * self.canvas.ppf - (self.canvas.width() - self.canvas.HEADER_W) / 2)

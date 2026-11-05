@@ -86,3 +86,19 @@ def test_hotkey_parse_and_settings_and_disk():
     assert "Settings" in disk.friendly_error("mic", "Permission denied")
     assert "in use" in disk.friendly_error("webcam", "device busy")
     assert "Disk full" in disk.friendly_error("screen", "no space left")
+
+
+def test_the_record_button_is_the_in_app_status_indicator(qapp):
+    from PyQt6.QtWidgets import QPushButton
+    from meenifx.ui.main_window import MainWindow
+
+    class Stub:
+        pass
+
+    stub = Stub()
+    stub.record_button = QPushButton()
+    MainWindow.set_recording_status(stub, 75)
+    assert stub.record_button.text() == "\u25cf 01:15"
+    assert "stop" in stub.record_button.toolTip().lower()
+    MainWindow.set_recording_status(stub, None)
+    assert stub.record_button.text() == "Record"

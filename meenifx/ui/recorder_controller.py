@@ -121,13 +121,21 @@ class RecorderController:
         self.session.failed.connect(self._failed)
         self.session.warning.connect(self._warning)
         self.session.elapsed_changed.connect(self.bar.set_elapsed)
+        self.session.elapsed_changed.connect(self.w.set_recording_status)
         self.session.state_changed.connect(self._state_changed)
         self.state = "recording"
         self.bar.set_elapsed(0)
         self.bar.set_paused(False)
         self.bar.set_sources(settings.sources())
-        self.bar.present()
-        if settings.minimize_while_recording and not voice:
+        if settings.floating_bar:
+            self.bar.present()
+        else:
+            # The main window shows the time and the stop control; no always-on-top bar.
+            self.bar.dismiss()
+        self.w.set_recording_status(0)
+        # Minimizing only makes sense when the floating bar is there to control the take;
+        # without it the window itself is the only place with the timer and Stop.
+        if settings.minimize_while_recording and not voice and settings.floating_bar:
             self.w.showMinimized()
             self._minimized = True
         self.session.start(settings.video_bitrate_mbps)
@@ -160,6 +168,7 @@ class RecorderController:
     def _finish_ui(self):
         self.hotkeys.clear()
         self.bar.dismiss()
+        self.w.set_recording_status(None)
         if self._voice_started_playback and self.w._playing:
             self.w.stop_playback()
         self._voice_started_playback = False

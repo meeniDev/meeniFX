@@ -42,6 +42,9 @@ class RecorderSettings:
     hotkey_stop: str = "Ctrl+Shift+R"
     hotkey_pause: str = "Ctrl+Shift+P"
     minimize_while_recording: bool = True
+    # Off by default: the window itself shows the recording time and the stop control, so
+    # no always-on-top window sits over other applications unless the user asks for one.
+    floating_bar: bool = False
 
     @classmethod
     def load(cls, store=None):

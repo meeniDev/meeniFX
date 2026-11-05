@@ -17,7 +17,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QPoint, QPointF, Qt  # noqa: E402
+from PyQt6.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
 from PyQt6.QtGui import QImage, QMouseEvent, QPainter  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
@@ -423,3 +423,96 @@ def test_export_contains_the_transform(editor, tmp_path):
     assert exported.shape[:2] == (360, 640)
     diff = float(np.abs(exported.astype(np.int16) - frame.astype(np.int16)).mean())
     assert diff < 2.0, "the exported frame must be the frame the preview showed"
+
+
+# ---------------------------------------------------- scrubbable numeric controls
+def scrub_field(field, dx, modifiers=Qt.KeyboardModifier.NoModifier):
+    """Drag an inspector value sideways, the way a user does."""
+    widget = field.value_widget
+    start = widget.width() // 2
+
+    def send(kind, x, buttons=Qt.MouseButton.LeftButton):
+        QApplication.sendEvent(widget, QMouseEvent(
+            kind, QPointF(x, widget.height() // 2),
+            QPointF(widget.mapToGlobal(QPoint(int(x), widget.height() // 2))),
+            Qt.MouseButton.LeftButton, buttons, modifiers))
+
+    send(QEvent.Type.MouseButtonPress, start)
+    for step in range(1, 5):
+        send(QEvent.Type.MouseMove, start + round(dx * step / 4))
+    send(QEvent.Type.MouseButtonRelease, start + dx, Qt.MouseButton.NoButton)
+
+
+def channel_field(window, channel):
+    """The live inspector row for a channel (rows are rebuilt on every refresh)."""
+    window.effects_panel.refresh_properties()
+    pump(0.2)
+    return next(row["field"] for row in window.effects_panel._rows
+                if row.get("channel") == channel)
+
+
+def test_a_scrubbed_value_survives_save_and_reload(editor):
+    """.mfxpf keeps what the scrub wrote, not just what a typed value wrote."""
+    window = editor
+    clip = window.engine.timeline.all_clips()[0]
+    window.engine.session.set_selection({clip.id})
+    scrub_field(channel_field(window, "transform.position_x"), 12)
+    pump(0.25)
+    assert window.engine.timeline.find_clip(clip.id).transform["position_x"] == pytest.approx(12)
+    path = window.projects.project.path
+    assert window.projects.save()
+    pump(0.1)
+    assert window.projects.close_project()
+    pump(0.1)
+    assert window.projects.open_path(path)
+    pump(0.25)
+    assert window.engine.timeline.all_clips()[0].transform["position_x"] == pytest.approx(12)
+
+
+def test_scrubbing_an_animated_channel_follows_auto_keyframe(editor):
+    """Auto-Keyframe off shifts the curve; on, the scrub keys at the playhead."""
+    window = editor
+    clip = window.engine.timeline.all_clips()[0]
+    curve = T.animate_channel(clip, "position_x", 0)
+    curve.set_keyframe(0, 0.0)
+    curve.set_keyframe(20, 40.0)
+    window.engine.session.set_selection({clip.id})
+    window.engine.session.auto_keyframe.set(False)
+    window.engine.session.set_playhead(10)
+    field = channel_field(window, "transform.position_x")
+    assert field.value() == pytest.approx(20), "the row shows the value at the playhead"
+    scrub_field(field, 5)
+    pump(0.25)
+    stored = window.engine.timeline.find_clip(clip.id).transform["position_x"]
+    assert [key.time for key in stored.keyframes] == [0, 20], "no accidental keyframe"
+    assert stored.value_at(10) == pytest.approx(25), "the whole curve moved by the delta"
+
+    window.engine.session.auto_keyframe.set(True)
+    try:
+        window.engine.session.set_playhead(30)
+        scrub_field(channel_field(window, "transform.position_x"), 5)
+        pump(0.25)
+        keyed = window.engine.timeline.find_clip(clip.id).transform["position_x"]
+        assert keyed.key_at(30) is not None, "Auto-Keyframe must key at the playhead"
+    finally:
+        window.engine.session.auto_keyframe.set(False)
+
+def test_the_scale_lock_keeps_the_aspect_ratio_while_scrubbing(editor):
+    """The chain beside Scale X/Y is a real link, not a decoration."""
+    window = editor
+    clip = window.engine.timeline.all_clips()[0]
+    T.set_channel(clip, "scale_x", 100.0)
+    T.set_channel(clip, "scale_y", 50.0)
+    window.engine.session.set_selection({clip.id})
+    scrub_field(channel_field(window, "transform.scale_x"), 20)
+    pump(0.25)
+    locked = window.engine.timeline.find_clip(clip.id).transform
+    assert locked["scale_x"] == pytest.approx(120)
+    assert locked["scale_y"] == pytest.approx(60), "the other axis follows the same factor"
+
+    T.ensure_transform(window.engine.timeline.find_clip(clip.id))["uniform"] = False
+    scrub_field(channel_field(window, "transform.scale_x"), -20)
+    pump(0.25)
+    free = window.engine.timeline.find_clip(clip.id).transform
+    assert free["scale_x"] == pytest.approx(100)
+    assert free["scale_y"] == pytest.approx(60), "with the lock off the axes are independent"

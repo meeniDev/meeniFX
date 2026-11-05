@@ -17,10 +17,18 @@ def pump(qapp, seconds=0.35):
 @pytest.fixture()
 def editor(qapp, tmp_path, monkeypatch):
     """A MainWindow with one synthetic clip selected and a Mosaic effect on it."""
+    from PyQt6.QtCore import QSettings
+
     from meenifx.media.cache import MediaEntry
+    from meenifx.ui import layout as dock_layout
     from meenifx.ui.main_window import MainWindow
 
     monkeypatch.setattr(MainWindow, "_load_demo_project", lambda self: None)
+    # A private settings file: the window must not restore (or overwrite) the user's own
+    # dock layout, and every test starts from the default arrangement.
+    monkeypatch.setattr(dock_layout, "app_settings",
+                        lambda: QSettings(str(tmp_path / "layout.ini"),
+                                          QSettings.Format.IniFormat))
     window = MainWindow(qapp)
     window.resize(1500, 950)
     window.show()
@@ -79,7 +87,7 @@ def test_stopwatch_animates_and_keyframe_cluster_appears(editor, qapp):
     assert _param_row(editor)["cluster"]._diamond.property("on") is True, "filled exactly on a keyframe"
 
 
-def test_slider_follows_playhead_and_writes_keyframes(editor, qapp):
+def test_field_follows_playhead_and_writes_keyframes(editor, qapp):
     panel = editor.effects_panel
     _param_row(editor)["stopwatch"].setChecked(True)
     pump(qapp, 0.2)
@@ -182,18 +190,38 @@ def test_dragging_a_keyframe_snaps_to_the_playhead(editor, qapp):
     assert _clip(editor).effects[0]["params"]["scale"].key_at(40) is not None
 
 
-def test_a_slider_drag_is_one_undo_step(editor, qapp):
+def scrub_value(field, dx):
+    """Drag the inspector value sideways with real mouse events."""
+    from PyQt6.QtCore import QEvent, QPoint, QPointF, Qt
+    from PyQt6.QtGui import QMouseEvent
+    from PyQt6.QtWidgets import QApplication
+
+    widget = field.value_widget
+    start = widget.width() // 2
+
+    def send(kind, x, buttons=Qt.MouseButton.LeftButton):
+        QApplication.sendEvent(widget, QMouseEvent(
+            kind, QPointF(x, widget.height() // 2),
+            QPointF(widget.mapToGlobal(QPoint(int(x), widget.height() // 2))),
+            Qt.MouseButton.LeftButton, buttons, Qt.KeyboardModifier.NoModifier))
+
+    send(QEvent.Type.MouseButtonPress, start)
+    for step in range(1, 5):
+        send(QEvent.Type.MouseMove, start + round(dx * step / 4))
+    send(QEvent.Type.MouseButtonRelease, start + dx, Qt.MouseButton.NoButton)
+
+
+def test_a_scrub_drag_is_one_undo_step(editor, qapp):
     row = _param_row(editor)
     before = editor.qt_undo_stack.undo_stack.count()
     field = row["field"]
-    field.slider.sliderPressed.emit()
-    for ticks in (120, 250, 400, 520):
-        field.slider.setValue(ticks)
-        pump(qapp, 0.05)
-    field.slider.sliderReleased.emit()
+    scrub_value(field, 25)
     pump(qapp, 0.3)
-    assert editor.qt_undo_stack.undo_stack.count() == before + 1
+    assert editor.qt_undo_stack.undo_stack.count() == before + 1, "a whole drag is one undo step"
     assert _clip(editor).effects[0]["params"]["scale"] == row["field"].value()
+    editor.engine.session.undo()
+    pump(qapp, 0.2)
+    assert _clip(editor).effects[0]["params"]["scale"] != row["field"].value(), "and undo takes it back"
 
 
 def test_paused_parameter_edit_rerenders_the_preview(editor, qapp):

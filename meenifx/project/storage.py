@@ -263,7 +263,7 @@ def crashed_session_info(file=None):
 
 # ---- trashing temp projects ----------------------------------------------
 PROJECT_SIDECARS = (".bak", ".autosave", ".tmp")
-OWN_SUBFOLDERS = ("cache", "recordings")
+OWN_SUBFOLDERS = ("cache", "recordings", "media")
 
 
 def project_own_folder(path, root=None):

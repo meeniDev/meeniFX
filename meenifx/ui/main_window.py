@@ -12,7 +12,6 @@ from PyQt6.QtGui import QAction, QActionGroup, QKeySequence
 from PyQt6.QtWidgets import (QAbstractSpinBox, QDockWidget, QLineEdit, QMainWindow,
                              QMessageBox, QProgressDialog, QPlainTextEdit, QStyle, QTextEdit,
                              QToolBar)
-from PyQt6.QtWidgets import QTabWidget
 
 from ..audio.demo import ensure_demo_audio
 from ..audio.engine import AudioEngine
@@ -123,6 +122,10 @@ class MainWindow(QMainWindow):
         self.engine.session.stack=self.qt_undo_stack
         self.engine.session.stack.changed.connect(self.engine.session._on_stack_changed)
         self.bridge=ModelBridge(self); self.pool=QThreadPool.globalInstance()
+        # Ctrl+V: clipboard pictures and files become media; in-app clip copies keep working.
+        from .smart_paste import SmartPaste
+        self.smart_paste=SmartPaste(self)
+        self.engine.session.clip_copied.connect(self.smart_paste.note_internal_copy)
         self.projects=ProjectController(self)
         self.projects.project_changed.connect(self._on_project_changed)
         self.preview_busy=False; self.preview_generation=0; self._requested_frame=None; self._preview_dirty=False
@@ -206,15 +209,8 @@ class MainWindow(QMainWindow):
         self._build_actions(); self._build_toolbar()
         self.preview_panel=PreviewPanel(lambda:self.preview_scale()*100.0)
         self.effects_panel=EffectsPanel(self.engine)
-        # Presets sit beside Effects in the same dock: one inspector, two browsers.
-        from .presets_panel import PresetsPanel
-        self.presets_panel=PresetsPanel(self.engine)
-        self.presets_panel.applied.connect(self._refresh_panels)
-        self.presets_panel.properties_requested.connect(self._raise_properties)
-        self.inspector_tabs=QTabWidget()
-        self.inspector_tabs.setDocumentMode(True)
-        self.inspector_tabs.addTab(self.effects_panel,"Effects")
-        self.inspector_tabs.addTab(self.presets_panel,"Presets")
+        # One browser: its Effects / Animations / Styles tabs cover what used to be a
+        # separate Presets panel, so there is a single animation UI.
         self.timeline_panel=TimelinePanel(self.engine,self.waveforms); self.docks={}
         from .graph_editor import GraphEditorPanel
         # The Graph Editor is a real dock: it can float, be hidden or be tabbed.
@@ -229,7 +225,7 @@ class MainWindow(QMainWindow):
         # The inspector is its own dock, so "Effects" and "Properties" can be moved,
         # hidden and tabbed separately and each gets a labelled View entry.
         for key,widget in (("project",self.project_panel),("preview",self.preview_panel),
-                           ("effects",self.inspector_tabs),
+                           ("effects",self.effects_panel),
                            ("properties",self.effects_panel.props_scroll),
                            ("timeline",self.timeline_panel),("graph",self.graph_editor)):
             self._add_dock(key,widget)
@@ -284,6 +280,7 @@ class MainWindow(QMainWindow):
         self._menu_view.addAction("Load Layout As...",self.load_layout_preset)
         help_menu=self.menuBar().addMenu("Help")
         self._add_action(help_menu,"Open sample project",None,lambda:self.projects.open_sample())
+        self._add_action(help_menu,"Keyboard Shortcuts...",None,self.show_shortcuts)
         self._add_action(help_menu,"About meeniFX Studios",None,self.show_about)
         self.toast=Toast(self)
         self.engine.session.tool.trace_add("write",lambda *_:self._update_hints())
@@ -329,11 +326,25 @@ class MainWindow(QMainWindow):
         edit=bar.addMenu("Edit")
         self._add_action(edit,"Undo","Ctrl+Z",self.engine.session.undo); self._add_action(edit,"Redo","Ctrl+Y",self.engine.session.redo); edit.addSeparator()
         commands=(("Cut","Ctrl+X",self.engine.session.cut_selected),("Copy","Ctrl+C",self.engine.session.copy_selected),
-            ("Paste","Ctrl+V",self.engine.session.paste),("Duplicate","Ctrl+D",self.engine.session.duplicate_selected),
+            ("Paste","Ctrl+V",self.smart_paste.paste),("Duplicate","Ctrl+D",self.engine.session.duplicate_selected),
             ("Select All","Ctrl+A",self.engine.session.select_all),("Split at Playhead","C",self.engine.session.split_at_playhead),
             ("Delete","Delete",self.engine.session.delete_selected),("Ripple Delete","Shift+Delete",lambda:self.engine.session.delete_selected(True)),
             ("Add Marker","M",self.engine.session.add_marker_at_playhead))
         for row in commands:self._add_action(edit,*row)
+        edit.addSeparator()
+        self.link_action = self._add_action(edit,"Link Selected Clips","Ctrl+L",
+                                           lambda:self.engine.session.link_selected())
+        self.unlink_action = self._add_action(edit,"Unlink Selected Clips","Ctrl+Shift+L",
+                                             lambda:self.engine.session.unlink_selected())
+        self.engine.session.clip_selected.connect(lambda _ids:self._refresh_link_actions())
+        self.engine.session.changed.connect(self._refresh_link_actions)
+        self._refresh_link_actions()
+        edit.addSeparator()
+        self._add_action(edit,"Delete Gap",None,self.delete_gap)
+        self._add_action(edit,"Copy Effects",None,self.copy_effects)
+        self._add_action(edit,"Paste Effects",None,self.paste_effects)
+        self._add_action(edit,"Paste Attributes...",None,self.paste_attributes)
+        self._add_action(edit,"Remove All Effects",None,self.remove_all_effects)
         edit.addSeparator()
         self._add_action(edit,"Rename Selected Marker...","F2",self._rename_marker)
         self._add_action(edit,"Delete Selected Marker(s)",None,self.engine.session.delete_markers)
@@ -342,6 +353,16 @@ class MainWindow(QMainWindow):
         # Tools and snapping are also here so the toolbar buttons always have a twin.
         self._add_action(edit,"Select Tool","V",lambda:self.engine.session.tool.set("select"))
         self._add_action(edit,"Razor Tool","S",lambda:self.engine.session.tool.set("razor"))
+        tools=bar.addMenu("Tools")
+        captions_menu=tools.addMenu("Captions")
+        self._add_action(captions_menu,"Generate Auto Captions...",None,self.open_captions_dialog)
+        self._add_action(captions_menu,"Transcript Editor...",None,self.open_transcript_editor)
+        captions_menu.addSeparator()
+        self._add_action(captions_menu,"Import SRT...",None,self.import_captions)
+        self._add_action(captions_menu,"Export SRT...",None,lambda:self.export_captions("srt"))
+        self._add_action(captions_menu,"Export ASS...",None,lambda:self.export_captions("ass"))
+        self._add_action(tools,"Remove Dead Silence...",None,self.open_silence_dialog)
+        self._add_action(tools,"Normalize Audio...",None,self.normalize_audio)
         transformation_menu=bar.addMenu("Transform")
         self._add_action(transformation_menu,"Selection Tool","V",lambda:self._set_overlay_mode("select"))
         self._add_action(transformation_menu,"Transform Tool","T",lambda:self._set_overlay_mode("transform"))
@@ -471,7 +492,8 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self.import_button)
         self.record_button=QPushButton("Record"); self.record_button.setIcon(icon("record",tokens.COLORS["red"]))
         self.record_button.setToolTip("Record webcam, screen or microphone"); self.record_button.setFixedHeight(tokens.CONTROL_H)
-        self.record_button.clicked.connect(lambda _=False:self.open_recorder()); toolbar.addWidget(self.record_button); toolbar.addSeparator()
+        self.record_button.clicked.connect(lambda _=False:self._record_button_clicked())
+        toolbar.addWidget(self.record_button); toolbar.addSeparator()
         def icon_button(name,tip,callback):
             button=QToolButton(); button.setProperty("role","icon"); button.setIcon(icon(name)); button.setToolTip(tip)
             button.setFixedSize(tokens.CONTROL_H,tokens.CONTROL_H); button.clicked.connect(lambda _=False:callback()); toolbar.addWidget(button); return button
@@ -492,6 +514,11 @@ class MainWindow(QMainWindow):
         self.text_button.setToolTip("Add a text clip at the playhead (Ctrl+T)")
         self.text_button.clicked.connect(lambda _=False:self.add_text_clip())
         toolbar.addWidget(self.text_button)
+        self.captions_button=QToolButton(); self.captions_button.setProperty("role","icon")
+        self.captions_button.setIcon(icon("captions")); self.captions_button.setFixedSize(tokens.CONTROL_H,tokens.CONTROL_H)
+        self.captions_button.setToolTip("Generate Auto Captions from the audio")
+        self.captions_button.clicked.connect(lambda _=False:self.open_captions_dialog())
+        toolbar.addWidget(self.captions_button)
         toolbar.addSeparator()
         self.graph_button=QToolButton(); self.graph_button.setProperty("role","icon"); self.graph_button.setCheckable(True)
         self.graph_button.setIcon(icon("graph")); self.graph_button.setToolTip("Graph Editor (G)")
@@ -1241,9 +1268,16 @@ class MainWindow(QMainWindow):
         dialog=NewProjectDialog(self)
         if dialog.exec():self.projects.create_project(dialog.settings(),dialog.location())
 
-    def show_preferences(self):
+    def show_preferences(self, section=None):
         from .start_window import PreferencesDialog
-        PreferencesDialog(self).exec()
+        PreferencesDialog(self, section=section).exec()
+
+    def _reload_effect_previews(self):
+        """A new reference image or quality: rebuild the browser's thumbnails."""
+        panel = getattr(self, "effects_panel", None)
+        browser = getattr(panel, "browser", None)
+        if browser is not None:
+            browser.reload_previews()
 
     def show_project_settings(self):
         from .project_dialogs import ProjectSettingsDialog
@@ -1421,6 +1455,27 @@ class MainWindow(QMainWindow):
             self.bridge.status.emit(f"Imported: {os.path.basename(path)}")
             self._refresh_panels(); self._request_preview()
         except Exception as exc:self._show_error(f"Could not add {path}: {exc}")
+
+    def _record_button_clicked(self):
+        """Record opens the panel; while recording, the same button stops the take."""
+        recorder = getattr(self, "recorder", None)
+        if recorder is not None and recorder.state != "idle":
+            recorder.stop()
+            return
+        self.open_recorder()
+
+    def set_recording_status(self, seconds=None):
+        """In-app recording indicator: the button shows the elapsed time and stops the take."""
+        button = getattr(self, "record_button", None)
+        if button is None:
+            return
+        if seconds is None:
+            button.setText("Record")
+            button.setToolTip("Record webcam, screen or microphone")
+            return
+        minutes, secs = divmod(max(0, int(seconds)), 60)
+        button.setText(f"\u25cf {minutes:02d}:{secs:02d}")
+        button.setToolTip("Recording - click to stop")
 
     def open_recorder(self):
         """Open the compact recorder panel (created on first use)."""
@@ -1848,6 +1903,171 @@ class MainWindow(QMainWindow):
         self._refresh_panels(); self._request_preview()
         return clip_id
 
+    # ------------------------------------------------------------ effects & gaps
+    def delete_gap(self):
+        if not self.engine.session.delete_gap():
+            self.toast_message("Select a clip with empty space before it")
+
+    def copy_effects(self):
+        if not self.engine.session.copy_effects():
+            self.toast_message("Select a clip to copy effects from")
+            return
+        self.toast_message("Effects copied — Paste Effects or Paste Attributes onto other clips")
+
+    def paste_effects(self):
+        if not self.engine.session.selected:
+            self.toast_message("Select the clips to paste effects onto")
+            return
+        count = self.engine.session.paste_effects(resolver=self.engine.runtime_effects)
+        if count:
+            self._refresh_panels(); self._request_preview()
+            self.timeline_panel.canvas.update()
+            self.toast_message(f"Effects pasted onto {count} clip(s)")
+
+    def paste_attributes(self):
+        from ..model.session import TimelineSession
+        from .dialogs import PasteAttributesDialog
+
+        source = TimelineSession._attributes
+        if not source:
+            self.toast_message("Select a clip and use Copy Effects or Copy Attributes first")
+            return
+        if not self.engine.session.selected:
+            self.toast_message("Select the clips to paste attributes onto")
+            return
+        available = set(source)
+        dialog = PasteAttributesDialog(self, available=available)
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+        parts = dialog.parts()
+        if not parts:
+            return
+        count = self.engine.session.paste_attributes(parts, resolver=self.engine.runtime_effects)
+        if count:
+            self._refresh_panels(); self._request_preview()
+            self.timeline_panel.canvas.update()
+            self.toast_message(f"Attributes pasted onto {count} clip(s)")
+
+    def remove_all_effects(self):
+        count = self.engine.session.remove_all_effects()
+        if not count:
+            self.toast_message("Select clips with effects to clear")
+            return
+        self._refresh_panels(); self._request_preview()
+        self.timeline_panel.canvas.update()
+
+    def show_shortcuts(self):
+        from .shortcuts_dialog import ShortcutsDialog
+        ShortcutsDialog(self).exec()
+
+    # ------------------------------------------------------------------ audio tools
+    def open_silence_dialog(self, clip_id=None):
+        """Open Remove Dead Silence for the selection, or for a clip a menu pointed at."""
+        from .audio_tools import SilenceDialog
+        SilenceDialog(self, clip_id=clip_id).exec()
+
+    def _refresh_link_actions(self, *_args):
+        """Enable the Edit > Link/Unlink commands only when they can do something."""
+        session = self.engine.session
+        ids = sorted(session.selected)
+        if getattr(self, "link_action", None) is not None:
+            self.link_action.setEnabled(session.can_link(ids))
+        if getattr(self, "unlink_action", None) is not None:
+            self.unlink_action.setEnabled(session.can_unlink(ids))
+
+    def normalize_audio(self):
+        from .audio_tools import NormalizeDialog
+        NormalizeDialog(self).exec()
+
+    # ------------------------------------------------------------------ captions
+    def open_captions_dialog(self):
+        from .caption_dialog import CaptionDialog
+        dialog = getattr(self, "_caption_dialog", None)
+        if dialog is None:
+            dialog = CaptionDialog(self)
+            dialog.setModal(False)
+            self._caption_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def open_transcript_editor(self):
+        from .caption_dialog import TranscriptDialog
+        TranscriptDialog(self).exec()
+
+    def _caption_size(self):
+        width, height = self.engine.project_size() or (0, 0)
+        return (int(width) or 1920), (int(height) or 1080)
+
+    def import_captions(self):
+        """Import an SRT file as editable caption clips at the playhead."""
+        from ..captions import model as caption_model
+        from ..captions import styles as caption_styles
+        from ..captions import subtitles
+
+        path = open_file(self, "Import subtitles", "", "Subtitles (*.srt);;All files (*)")
+        if not path:
+            return
+        try:
+            payload = open(path, "r", encoding="utf-8-sig", errors="replace").read()
+        except OSError as exc:
+            self.toast_message(f"Could not read {os.path.basename(path)}: {exc}", kind="error")
+            return
+        rows = subtitles.parse_srt(payload)
+        if not rows:
+            self.toast_message("That file has no readable subtitle entries", kind="error")
+            return
+        width, height = self._caption_size()
+        style = caption_styles.style("classic")
+        ids = self.engine.session.generate_captions(
+            caption_model.cues_from_srt(rows), style_id="classic",
+            animation=style["animation"], start_frame=self.engine.session.playhead,
+            width=width, height=height, label="Import subtitles")
+        if ids:
+            self.toast_message(f"Imported {len(ids)} captions from {os.path.basename(path)}")
+        self._refresh_panels(); self._request_preview(); self.timeline_panel.canvas.update()
+
+    def export_captions(self, fmt="srt"):
+        """Write the caption track as SRT or ASS (timings come from the clips themselves)."""
+        from ..captions import model as caption_model
+        from ..captions import styles as caption_styles
+        from ..captions import subtitles
+
+        timeline = self.engine.timeline
+        clips = caption_model.caption_clips(timeline)
+        if not clips:
+            self.toast_message("There are no captions to export")
+            return
+        cues = caption_model.export_cues(clips, timeline.fps)
+        project = self.projects.project
+        name = (project.name if project is not None else "Captions") + "." + fmt
+        path = save_file(self, "Export subtitles", name,
+                         "SRT subtitles (*.srt);;ASS subtitles (*.ass)")
+        if not path:
+            return
+        if not path.lower().endswith((".srt", ".ass")):
+            path += "." + fmt
+        width, height = self._caption_size()
+        try:
+            if fmt == "ass":
+                style_id = caption_styles.style_of(clips[0])
+                settings = caption_styles.style_settings(style_id, width, height)
+                payload = subtitles.format_ass(
+                    cues, width, height, font=settings.get("font", "Segoe UI"),
+                    size=settings.get("size", 54.0), color=settings.get("color", "#FFFFFF"),
+                    outline_color=settings.get("stroke_color", "#000000"),
+                    outline=settings.get("stroke_width", 0.0),
+                    shadow=settings.get("shadow_opacity", 0.0) / 40.0)
+            else:
+                payload = subtitles.format_srt(cues)
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(payload)
+        except OSError as exc:
+            self.toast_message(f"Could not write {os.path.basename(path)}: {exc}", kind="error")
+            return
+        self.toast_message(f"Exported {len(cues)} caption{'s' if len(cues) != 1 else ''} to "
+                           f"{os.path.basename(path)}")
+
     def toggle_text_key(self, clip_ids=None):
         """Key the words (and size) of the selected text clips at the playhead."""
         from ..model import text as TXT
@@ -1957,6 +2177,8 @@ class MainWindow(QMainWindow):
         if not self.projects.maybe_save():
             event.ignore(); return
         self.stop_playback(); self.audio.stop()
+        # Finish or drop the browser's thumbnail jobs before the widgets go away.
+        self.effects_panel.browser.shutdown()
         # No debounced save may fire after this point and overwrite the final state.
         self._layout_save_timer.stop()
         self._save_layout_now()

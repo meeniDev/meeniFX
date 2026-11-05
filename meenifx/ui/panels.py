@@ -11,7 +11,7 @@ different key than the effect reads. Only numeric parameters get keyframe contro
 import copy
 
 from PyQt6.QtCore import QMimeData, QPoint, QTimer, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QDrag, QFont
+from PyQt6.QtGui import QColor, QCursor, QDrag, QFont
 from PyQt6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, QFrame,
                              QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMenu,
                              QPlainTextEdit, QScrollArea, QToolButton, QTreeWidget,
@@ -23,6 +23,7 @@ from ..constants import EFFECT_MIME
 from ..effects.base import ParamSpec
 from ..icons import icon
 from ..model import animation as ANIM
+from ..model import animation_families as FAMILIES
 from ..model import looks as LOOKS
 from ..model import channels as CH
 from ..model import preset_library as LIB
@@ -31,7 +32,8 @@ from ..model import text as TXT
 from ..model import transform as T
 from ..model.keyframes import AnimatedValue, parameter_value_at
 from ..processing.blend import BLEND_LABELS, normalise_mode
-from .widgets import SliderField
+from .browser import BrowserView
+from .widgets import ScrubField
 
 CARD_MIME = "application/x-meenifx-card"
 # Effects panel order: everyday picture work first, technical/motion tools after.
@@ -39,27 +41,13 @@ CATEGORY_ORDER = ("Video Effects", "Looks", "Glitch & Distortion", "Stylize", "C
                   "Blur & Sharpen", "Glow & Light", "Light", "Time", "Transform",
                   "Distortion & Warp", "Warp", "Text Effects", "Audio Effects",
                   "Blur and Sharpen", "Color", "Distort", "Tracking")
-LABEL_W = 70
+LABEL_W = 88
 ROTATE_STEP = 15.0      # degrees per step when rotation snapping is on
 COLOR_NAMES = ("color_r", "color_g", "color_b")
 # Every effect card carries this control; it is not part of an effect's own PARAMS table
 # because it never reaches the effect - the engine blends the result with the original.
 MIX_SPEC = ParamSpec("mix", "Mix", "float", 0.0, 100.0, 100.0, step=1.0, unit="%",
                      help="Blend the original picture with this effect's result")
-
-
-def qty(clip, meta):
-    """A usable slider span for a channel whose true range is unbounded."""
-    if meta.get("normalized"):
-        return 1.0
-    unit = meta.get("unit")
-    if unit == "px":
-        return 400.0
-    if unit == "%":
-        return 200.0
-    if unit == "\u00b0":
-        return 180.0
-    return max(1.0, abs(float(meta.get("maximum", 100.0))))
 
 
 def _tool(icon_name, tip, checkable=False):
@@ -145,29 +133,6 @@ class _CardHost(QWidget):
         event.acceptProposedAction()
 
 
-class _EffectTree(QTreeWidget):
-    def __init__(self, panel):
-        super().__init__()
-        self.panel = panel
-        self.setHeaderHidden(True)
-        self.setIndentation(12)
-        self.setDragEnabled(True)
-        self.setRootIsDecorated(True)
-        self.setExpandsOnDoubleClick(False)
-        self.setIconSize(self.iconSize().expandedTo(self.iconSize()))
-
-    def startDrag(self, supported_actions):
-        item = self.currentItem()
-        key = item.data(0, Qt.ItemDataRole.UserRole) if item else None
-        if not key:
-            return
-        mime = QMimeData()
-        mime.setData(EFFECT_MIME, key.encode("utf-8"))
-        drag = QDrag(self)
-        drag.setMimeData(mime)
-        drag.exec(Qt.DropAction.CopyAction)
-
-
 class EffectsPanel(QWidget):
     """Effect browser. The property cards live in ``props_scroll``, a dock of their own.
 
@@ -185,41 +150,13 @@ class EffectsPanel(QWidget):
     def __init__(self, engine, parent=None):
         super().__init__(parent)
         self.engine = engine
-        self.search = QLineEdit()
-        self.search.setPlaceholderText("Search effects")
-        self.search.setClearButtonEnabled(True)
-        self.search.addAction(icon("search"), QLineEdit.ActionPosition.LeadingPosition)
-        self.search.textChanged.connect(self.refresh_effect_list)
-        self.effect_tree = _EffectTree(self)
-        self.effect_tree.itemDoubleClicked.connect(self._on_double_click)
-        self.effect_tree.setToolTip("Double-click or drag an effect onto a clip to add it")
-        # Looks are saved, imported and exported from one compact menu beside the search
-        # box, so the browser keeps its width for the effect names.
-        self.looks_button = QToolButton()
-        self.looks_button.setText("\u22ef")
-        self.looks_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self.looks_button.setToolTip("Save the selected clip's effects as a look, or "
-                                     "import / export a .mfxlook file")
-        looks_menu = QMenu(self.looks_button)
-        looks_menu.addAction("Save effects as look\u2026",
-                             lambda: self._save_look(self._clip()) if self._clip() else None)
-        looks_menu.addAction("Import look\u2026", self._import_look)
-        export_menu = looks_menu.addMenu("Export look\u2026")
-        for look in LOOKS.all_looks():
-            export_menu.addAction(look["name"],
-                                  lambda _checked=False, look_id=look["id"]: self._export_look(look_id))
-        self.looks_button.setMenu(looks_menu)
-        search_row = QHBoxLayout()
-        search_row.setContentsMargins(0, 0, 0, 0)
-        search_row.setSpacing(tokens.SP1)
-        search_row.addWidget(self.search, 1)
-        search_row.addWidget(self.looks_button)
-        page = QWidget()
-        page_layout = QVBoxLayout(page)
-        page_layout.setContentsMargins(tokens.SP2, tokens.SP2, tokens.SP2, tokens.SP2)
-        page_layout.setSpacing(tokens.SP2)
-        page_layout.addLayout(search_row)
-        page_layout.addWidget(self.effect_tree, 1)
+        self.browser = BrowserView(engine, self)
+        self.browser.apply_requested.connect(self._browser_apply)
+        self.browser.remove_requested.connect(self._browser_remove)
+        self.browser.menu_requested.connect(self._browser_menu)
+        # The browser owns the search box; the panel keeps the old name so scripts and
+        # tests can still drive it.
+        self.search = self.browser.search
         self.properties = _CardHost()
         self.properties.card_dropped.connect(self._card_dropped)
         self.properties_layout = QVBoxLayout(self.properties)
@@ -233,91 +170,214 @@ class EffectsPanel(QWidget):
         # Parentless on purpose: MainWindow puts it straight into the Properties dock.
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(page)
+        layout.addWidget(self.browser)
         self._rows = []
         self._built_key = None
         self._edit_before = None
         self._suspend_sync = False
         self._collapsed = set()
+        # Style groups and their members start collapsed; these remember what was opened.
+        self._opened_groups = set()
+        self._opened_members = set()
         self._clipboard = None
         self.refresh_effect_list()
 
     # ------------------------------------------------------------ effect list
-    def _categories(self):
-        groups = {}
-        for effect in self.engine.effects:
-            groups.setdefault(getattr(effect, "category", "Stylize"), []).append(effect)
-        ordered = [name for name in CATEGORY_ORDER if name in groups]
-        return [(name, groups[name]) for name in ordered + sorted(set(groups) - set(ordered))]
-
     def refresh_effect_list(self, *_):
-        term = self.search.text().strip().lower()
-        collapsed = {self.effect_tree.topLevelItem(i).text(0)
-                     for i in range(self.effect_tree.topLevelItemCount())
-                     if not self.effect_tree.topLevelItem(i).isExpanded()}
-        self.effect_tree.clear()
+        """Tell the browser what the selected clips already carry (checkmarks, media)."""
         clips = self._selected_clips()
-        kinds = {self.engine.track_type_of(clip) for clip in clips}
-        added = set.intersection(*[{e["effect_id"] for e in c.effects} for c in clips]) if clips else set()
-        bold = QFont(self.font())
-        bold.setBold(True)
-        looks = [look for look in LOOKS.all_looks()
-                 if not term or term in look["name"].lower()
-                 or term in look["description"].lower() or term in look["id"]]
-        if looks:
-            top = QTreeWidgetItem(["Looks"])
-            top.setFlags(Qt.ItemFlag.ItemIsEnabled)
-            top.setFont(0, bold)
-            self.effect_tree.addTopLevelItem(top)
-            for look in looks:
-                item = QTreeWidgetItem([look["name"]])
-                item.setData(0, Qt.ItemDataRole.UserRole, f"look:{look['id']}")
-                item.setToolTip(0, look.get("description") or "Apply this look's effect stack")
-                top.addChild(item)
-            top.setExpanded(bool(term) or "Looks" not in collapsed)
-        for category, effects in self._categories():
-            matches = [e for e in effects if not term or term in e.name.lower() or term in e.key.lower()]
-            if not matches:
-                continue
-            top = QTreeWidgetItem([category])
-            top.setFlags(Qt.ItemFlag.ItemIsEnabled)
-            top.setFont(0, bold)
-            self.effect_tree.addTopLevelItem(top)
-            for effect in matches:
-                is_added = effect.key in added
-                # Enabled when it can run on at least one selected clip: a linked
-                # video+audio pair applies the picture effect to the video member only.
-                allowed = not kinds or any(effect.supports_track_type(kind) for kind in kinds)
-                item = QTreeWidgetItem([effect.name if allowed
-                                        else f"{effect.name}  ({effect.media_label()} only)"])
-                item.setData(0, Qt.ItemDataRole.UserRole, effect.key)
-                if not allowed:
-                    # Clearly unavailable, not hidden: the name stays searchable and the
-                    # tooltip explains why it cannot be added to this clip.
-                    item.setFlags(Qt.ItemFlag.NoItemFlags)
-                    item.setForeground(0, QColor(tokens.COLORS["muted"]))
-                    item.setToolTip(0, f"{effect.media_label().capitalize()}-only effect: "
-                                       f"the selected clip is {'audio' if 'audio' in kinds else 'video'}")
-                    top.addChild(item)
+        keys, presets, looks = set(), set(), set()
+        for clip in clips:
+            for entry in clip.effects:
+                if entry.get("effect_id") == "look":
+                    looks.add((entry.get("params") or {}).get("look") or entry.get("look_id"))
+                elif entry.get("effect_id"):
+                    keys.add(entry.get("effect_id"))
+            for row in PM.instances(clip):
+                if row.get("preset"):
+                    presets.add(row["preset"])
+        media = "video"
+        if clips:
+            first = clips[0]
+            media = "text" if first.is_text else self.engine.track_type_of(first)
+        self.browser.set_context(keys, presets, looks, media, multiple=len(clips) > 1)
+
+    def _browser_apply(self, item):
+        """One click path for every card: an effect, a Style or an animation family."""
+        kind = item.get("kind")
+        if kind == "effect":
+            self._add_effect_item(item)
+        elif kind == "style":
+            if self.apply_look(item["id"]):
+                self.browser.note_recent(item)
+        elif kind == "animation":
+            self._apply_animation_item(item)
+
+    def _add_effect_item(self, item):
+        effect = item.get("effect")
+        key = item.get("id")
+        clips = self._selected_clips()
+        if not clips or effect is None:
+            self.engine.session.status.emit("Select a clip, then double-click an effect")
+            return
+        # The engine decides compatibility, so a card, a drag and a double-click agree.
+        targets = [clip for clip in clips if self.engine.clip_accepts_effect(clip, key)]
+        if not targets:
+            track = self.engine.track_type_of(clips[0])
+            self.engine.session.status.emit(
+                f"{effect.name} is a {effect.media_label()}-only effect - it cannot be added "
+                f"to {'an' if track == 'audio' else 'a'} {track} clip")
+            return
+        params = copy.deepcopy(effect.capture_params())
+        another = bool(item.get("another"))
+
+        def add(clip):
+            clip.effects.append({"effect_id": key, "enabled": True,
+                                 "params": copy.deepcopy(params)})
+        label = f"Add another {effect.name}" if another else f"Add {effect.name}"
+        self.engine.session.apply_to_clips([clip.id for clip in targets], label, add)
+        self.browser.note_recent(item)
+        self.properties_requested.emit()
+        self.refresh_properties()
+
+    def _browser_remove(self, item):
+        """Double-clicking an applied item removes it again (one undo step)."""
+        if item.get("kind") == "style":
+            self._remove_style(item.get("id"))
+            return
+        if item.get("kind") != "effect":
+            return
+        key = item.get("id")
+        name = item.get("name") or key
+        clips = [clip for clip in self._selected_clips()
+                 if any(entry.get("effect_id") == key for entry in clip.effects)]
+        if not clips:
+            return
+        counts = [sum(1 for entry in clip.effects if entry.get("effect_id") == key)
+                  for clip in clips]
+        if max(counts) > 1:
+            # Never guess which copy the user meant: offer the instances by name.
+            self._choose_effect_instance(clips, key, name)
+            return
+
+        def strip(clip):
+            clip.effects = [entry for entry in clip.effects
+                            if entry.get("effect_id") != key]
+        self.engine.session.apply_to_clips([clip.id for clip in clips], f"Remove {name}", strip)
+        self.refresh_properties()
+
+    def _choose_effect_instance(self, clips, key, name):
+        """Several copies of one effect exist: let the user pick, never delete silently."""
+        menu = QMenu(self)
+        for index in range(max(sum(1 for entry in clip.effects if entry.get("effect_id") == key)
+                               for clip in clips)):
+            menu.addAction(f"Remove {name} #{index + 1}",
+                           lambda i=index: self._remove_instance_at(clips, key, name, i))
+        menu.addSeparator()
+        menu.addAction(f"Remove every {name}",
+                       lambda: self._remove_instance_at(clips, key, name, None))
+        menu.exec(QCursor.pos())
+
+    def _remove_instance_at(self, clips, key, name, index):
+        """Remove the nth copy (or all of them) on every selected clip, in one undo step."""
+        def strip(clip):
+            seen = 0
+            kept = []
+            for entry in clip.effects:
+                if entry.get("effect_id") != key:
+                    kept.append(entry)
                     continue
-                item.setToolTip(0, "Added to the selected clip" if is_added
-                                else "Double-click or drag onto a clip to add")
-                if is_added:
-                    item.setIcon(0, icon("check", tokens.COLORS["accent"]))
-                    item.setForeground(0, QColor(tokens.COLORS["accent"]))
-                top.addChild(item)
-            top.setExpanded(bool(term) or category not in collapsed)
+                if index is not None and seen == index:
+                    seen += 1
+                    continue
+                if index is None:
+                    continue
+                seen += 1
+                kept.append(entry)
+            clip.effects = kept
+        label = f"Remove every {name}" if index is None else f"Remove {name} #{index + 1}"
+        self.engine.session.apply_to_clips([clip.id for clip in clips], label, strip)
+        self.refresh_properties()
+
+    def _remove_style(self, look_id):
+        """Drop one Style group and the effects it brought in; unrelated effects stay."""
+        if not look_id:
+            return
+        clips = self._selected_clips()
+        if not clips:
+            return
+
+        def strip(clip):
+            # A style instance is a group id ("dreamy_bloom#2"); its members share it, so
+            # removing the group removes exactly the effects that style brought in.
+            groups = {entry.get("look_id") for entry in clip.effects
+                      if entry.get("effect_id") == "look"
+                      and (entry.get("params") or {}).get("look") == look_id}
+            groups.discard(None)
+            clip.effects = [entry for entry in clip.effects
+                            if entry.get("look_id") not in groups]
+        self.engine.session.apply_to_clips([clip.id for clip in clips], "Remove style", strip)
+        self.refresh_properties()
+
+    def _apply_animation_item(self, item):
+        """Apply one family variant (or an In+Out pair) and keep the family single."""
+        family = item.get("family")
+        if family is None:
+            return
+        mode = item.get("mode") or FAMILIES.default_mode(family)
+        direction = item.get("direction") or ""
+        media = "text" if item.get("media") == "text" else "clip"
+        presets = []
+        for one_mode in (("in", "out") if mode == "both" else (mode,)):
+            preset = FAMILIES.variant(family, media, one_mode, direction)
+            if preset is not None and preset not in presets:
+                presets.append(preset)
+        if not presets:
+            self.engine.session.status.emit(
+                f"{family['name']} has no {mode} variant for this clip")
+            return
+        clips = [clip for clip in self._selected_clips()
+                 if clip.track is not None and clip.track.type == "video"]
+        if not clips:
+            self.engine.session.status.emit("Select a clip to apply an animation")
+            return
+        self.engine.session.apply_animation(presets, ids=[clip.id for clip in clips],
+                                            family_program=family["program"])
+        self.browser.note_recent(item)
+        self.properties_requested.emit()
+        self.refresh_properties()
+
+    def _browser_menu(self, position):
+        """The browser's ... menu: looks on disk, preview image, thumbnail refresh."""
+        menu = QMenu(self)
+        clip = self._clip()
+        save = menu.addAction("Save effects as style\u2026",
+                              lambda: self._save_look(clip) if clip else None)
+        save.setEnabled(clip is not None)
+        menu.addAction("Import style\u2026", self._import_look)
+        export_menu = menu.addMenu("Export style\u2026")
+        for look in LOOKS.all_looks():
+            export_menu.addAction(look["name"],
+                                  lambda _checked=False, look_id=look["id"]:
+                                  self._export_look(look_id))
+        menu.addSeparator()
+        menu.addAction("Change preview image\u2026", self._preview_preferences)
+        menu.addAction("Refresh thumbnails", self.browser.reload_previews)
+        menu.exec(position)
+
+    def _preview_preferences(self):
+        """Open Preferences straight on Appearance > Effect Previews."""
+        window = self.window()
+        opener = getattr(window, "show_preferences", None)
+        if callable(opener):
+            opener("previews")
+        else:
+            from .start_window import PreferencesDialog
+            PreferencesDialog(window, section="previews").exec()
 
     def _selected_clips(self):
         found = (self.engine.timeline.find_clip(i) for i in self.engine.session.selected)
         return [clip for clip in found if clip is not None]
-
-    def _on_double_click(self, item, _column=0):
-        key = item.data(0, Qt.ItemDataRole.UserRole)
-        if key:
-            self.add_effect(key)
-        else:
-            item.setExpanded(not item.isExpanded())
 
     def add_effect(self, effect_id):
         # Look items carry "look:<id>" from the tree and the drag payload.
@@ -379,6 +439,7 @@ class EffectsPanel(QWidget):
         _path, look = LOOKS.write_user_look(name, stack)
         if look is not None:
             self.refresh_effect_list()
+            self.browser.refresh()
             self.engine.session.status.emit(f"Look saved: {look['name']}")
         return look
 
@@ -391,6 +452,7 @@ class EffectsPanel(QWidget):
         _saved, look = LOOKS.import_file(path)
         if look is not None:
             self.refresh_effect_list()
+            self.browser.refresh()
             self.engine.session.status.emit(f"Look imported: {look['name']}")
         else:
             self.engine.session.status.emit("That file is not a meeniFX look")
@@ -482,10 +544,7 @@ class EffectsPanel(QWidget):
             self._animation_card(clip)
         elif clip.track is not None and clip.track.type == "audio":
             self._audio_card(clip)
-        for index, entry in enumerate(clip.effects):
-            effect = next((e for e in self.engine.effects if e.key == entry["effect_id"]), None)
-            if effect is not None:
-                self._effect_card(clip, index, effect, entry)
+        self._effect_cards(clip)
         self.properties_layout.addStretch(1)
         self.sync_playhead()
 
@@ -550,8 +609,9 @@ class EffectsPanel(QWidget):
         switch_column.setContentsMargins(0, 0, 0, 0)
         switch_column.setSpacing(2)
         for label, flag, tip in (
-                ("Lock aspect ratio", "uniform",
-                 "Corner handles keep the picture's proportions - hold Shift while dragging"),
+                ("Lock Scale X/Y", "uniform",
+                 "Scrubbing or typing one scale axis moves the other by the same factor; "
+                 "corner handles keep the picture's proportions too - hold Shift while dragging"),
                 ("Scale from center", "scale_from_center",
                  "Scale around the middle of the picture - hold Alt while dragging"),
                 ("Snap rotation", "snap_rotation",
@@ -789,15 +849,13 @@ class EffectsPanel(QWidget):
         row_layout.addWidget(out_combo, 1)
         form.addWidget(self._labelled("Animate", row, "In and Out animation for this text clip"))
 
-        duration = SliderField("Duration", int(meta.get("duration", default)), 1,
+        duration = ScrubField("Duration", int(meta.get("duration", default)), 1,
                                max(1, clip.duration), default=default, step=1, unit=" f",
-                               soft_min=1, soft_max=max(1, clip.duration // 2),
-                               label_width=LABEL_W, box_width=56,
+                               label_width=LABEL_W,
                                tooltip="Length of the in/out animation, in frames")
-        delay = SliderField("Delay", int(meta.get("delay", 0)), 0,
+        delay = ScrubField("Delay", int(meta.get("delay", 0)), 0,
                             max(0, clip.duration - 1), default=0, step=1, unit=" f",
-                            soft_min=0, soft_max=max(1, clip.duration // 2),
-                            label_width=LABEL_W, box_width=56,
+                            label_width=LABEL_W,
                             tooltip="Frames to wait before the animation starts")
         easing = QComboBox()
         from ..model import easing as EASING
@@ -983,12 +1041,11 @@ class EffectsPanel(QWidget):
         frame = max(0, int(self.engine.session.playhead) - int(clip.timeline_start))
         animated = CH.is_animated(clip, channel)
         current = CH.value_at(clip, channel, frame)
-        field = SliderField(meta["label"], 0.0 if current is None else float(current),
+        field = ScrubField(meta["label"], 0.0 if current is None else float(current),
                             meta["minimum"], meta["maximum"], default=0.0,
                             step=max(1e-6, float(meta["step"])), unit=meta["unit"],
                             decimals=int(meta["decimals"]),
-                            soft_min=-qty(clip, meta), soft_max=qty(clip, meta),
-                            label_width=LABEL_W, box_width=64, tooltip=meta["label"])
+                            label_width=LABEL_W, tooltip=meta["label"])
         field.interaction_started.connect(self._begin_edit)
         field.edited.connect(lambda value, c=clip, ch=channel: self._set_channel(c, ch, value, True))
         field.committed.connect(lambda value, c=clip, ch=channel: self._commit_channel(c, ch, value))
@@ -1034,9 +1091,27 @@ class EffectsPanel(QWidget):
         if target is None or target.track.locked:
             return
         frame = max(0, int(self.engine.session.playhead) - int(target.timeline_start))
-        CH.set_value(target, channel, value, frame, bool(self.engine.session.auto_keyframe.get()))
+        auto = bool(self.engine.session.auto_keyframe.get())
+        before = CH.value_at(target, channel, frame)
+        CH.set_value(target, channel, value, frame, auto)
+        # The Scale lock (the chain that sits beside Scale X/Y) keeps the picture's own
+        # aspect ratio: the other axis moves by the same factor. With the lock off the two
+        # axes are independent, which is what a squash or a stretch needs.
+        kind, _effect_id, name = CH.parse(channel)
+        if kind == "transform" and name in ("scale_x", "scale_y") and self._scale_locked(target):
+            other = CH.transform_channel("scale_y" if name == "scale_x" else "scale_x")
+            current, base = CH.value_at(target, other, frame), before
+            try:
+                ratio = float(value) / float(base) if base else 0.0
+            except (TypeError, ValueError):
+                ratio = 0.0
+            if ratio and current is not None:
+                CH.set_value(target, other, float(current) * ratio, frame, auto)
         if live:
             self._notify()
+
+    def _scale_locked(self, clip):
+        return bool(T.ensure_transform(clip).get("uniform", True))
 
     def _commit_channel(self, clip, channel, value):
         self._set_channel(clip, channel, value)
@@ -1102,13 +1177,22 @@ class EffectsPanel(QWidget):
         title.setToolTip(clip.name or "Clip")
         outer.addWidget(title)
         body, form = self._form()
-        speed = SliderField("Speed", clip.speed * 100, 10, 1000, default=100, step=1, unit="%",
-                            soft_min=25, soft_max=400, label_width=LABEL_W, box_width=56,
+        speed = ScrubField("Speed", clip.speed * 100, 10, 1000, default=100, step=1, unit="%",
+                            label_width=LABEL_W,
                             tooltip="Clip speed: also changes how long the clip plays")
         speed.committed.connect(lambda value, c=clip.id: self.engine.session.apply_clip_settings(
             c, speed=value / 100.0))
         form.addWidget(speed)
         self._rows.append({"kind": "speed", "clip_id": clip.id, "field": speed})
+        duration_field = ScrubField("Duration", clip.duration, 1, 200000, default=clip.duration,
+                                    step=1, unit=" f", label_width=LABEL_W,
+                                    tooltip="Exact clip length in frames; a linked audio clip "
+                                            "changes with it. Media is limited by the frames "
+                                            "its source still has")
+        duration_field.committed.connect(
+            lambda value, c=clip.id: self.engine.session.set_clip_duration(c, int(round(value))))
+        form.addWidget(duration_field)
+        self._rows.append({"kind": "duration", "clip_id": clip.id, "field": duration_field})
         toggles = QHBoxLayout()
         toggles.setContentsMargins(0, 0, 0, 0)
         reverse = QCheckBox("Reverse")
@@ -1133,9 +1217,8 @@ class EffectsPanel(QWidget):
             form.addWidget(self._labelled("Blend", blend, "How this clip is mixed with the layers below it"))
         for edge, label in (("in", "Fade in"), ("out", "Fade out")):
             frames = clip.fade_in if edge == "in" else clip.fade_out
-            field = SliderField(label, frames, 0, max(1, clip.duration), default=0, step=1,
-                                unit=" f", soft_min=0, soft_max=max(1, clip.duration // 2),
-                                label_width=LABEL_W, box_width=56, tooltip="Fade length in frames")
+            field = ScrubField(label, frames, 0, max(1, clip.duration), default=0, step=1,
+                                unit=" f", label_width=LABEL_W, tooltip="Fade length in frames")
             field.interaction_started.connect(self._begin_edit)
             field.edited.connect(lambda value, c=clip.id, e=edge: self._live_fade(c, e, value))
             field.committed.connect(lambda value, c=clip.id, e=edge: self._commit_fade(c, e, value))
@@ -1201,25 +1284,92 @@ class EffectsPanel(QWidget):
         top.addWidget(remove)
         layout.addLayout(top)
 
-        duration = SliderField("Duration", int(instance.get("duration", 15)), 1,
-                               max(1, int(clip.duration)), default=15, step=1, unit=" f",
-                               soft_max=max(1, int(clip.duration) // 2), label_width=LABEL_W,
-                               box_width=56,
-                               tooltip="Length of this preset's window, in frames")
+        family = self._animation_family(instance)
+        media = "text" if clip.is_text else "clip"
+        if family is not None:
+            modes = list(family.get("modes") or [])
+            if len(modes) > 1:
+                mode = QComboBox()
+                for key in modes:
+                    mode.addItem(FAMILIES.MODE_LABELS.get(key, key.title()), key)
+                mode.setCurrentIndex(max(0, mode.findData(instance.get("category"))))
+                mode.setToolTip("When this animation plays: the same instance switches")
+                mode.currentIndexChanged.connect(
+                    lambda _row, c=clip.id, i=index, f=str(family["key"]), box=mode:
+                    self._switch_animation(c, i, f, mode=box.currentData()))
+                layout.addWidget(self._labelled("Mode", mode))
+            options = FAMILIES.directions(family, media, instance.get("category", "in"))
+            current = str((instance.get("args") or {}).get("dir") or "")
+            if len(options) > 1 or (current and current in options):
+                direction = QComboBox()
+                direction.addItem("Default", "")
+                for key in options:
+                    direction.addItem(PM.DIRECTION_LABELS.get(key, key.title()), key)
+                direction.setCurrentIndex(max(0, direction.findData(current)))
+                direction.setToolTip("Direction of the motion for this animation")
+                direction.currentIndexChanged.connect(
+                    lambda _row, c=clip.id, i=index, f=str(family["key"]), box=direction:
+                    self._switch_animation(c, i, f, direction=box.currentData()))
+                layout.addWidget(self._labelled("Direction", direction))
+
+        is_loop = instance.get("category") == "loop"
+        duration = ScrubField("Cycle" if is_loop else "Duration",
+                              int(instance.get("duration", 15)), 1,
+                              max(1, int(clip.duration)), default=15, step=1, unit=" f",
+                              label_width=LABEL_W,
+                              tooltip=("Length of one pass of the loop, in frames: the "
+                                       "cycle repeats across the clip")
+                              if is_loop else
+                              "Length of this preset's window, in frames")
         duration.committed.connect(
             lambda value, c=clip.id, i=index: self._commit_preset(
                 c, i, "Preset duration", duration=int(value)))
         layout.addWidget(duration)
 
+        if is_loop:
+            mode = QComboBox()
+            for key in PM.LOOP_MODES:
+                mode.addItem(PM.LOOP_MODE_LABELS[key], key)
+            mode.setCurrentIndex(max(0, mode.findData(PM.loop_mode(instance))))
+            mode.setToolTip("Repeat: each cycle starts over · Ping-Pong: it runs back")
+            mode.currentIndexChanged.connect(
+                lambda _row, c=clip.id, i=index, box=mode: self._commit_preset(
+                    c, i, "Loop mode", knobs={"loop_mode": box.currentData()}))
+            layout.addWidget(self._labelled("Loop", mode))
+            cycle = PM.loop_cycle(instance)
+            period = PM.loop_period(instance)
+            repeat_count = PM.loop_repeat(instance)
+            span = PM.window(instance, clip.duration)[1]
+            values = (
+                ("coverage", "Span", span, 0, max(span, int(clip.duration)),
+                 " f", "Frames this loop covers from its start (0 and the full clip "
+                 "length both mean: to the end of the clip)"),
+                ("repeat", "Cycles", min(repeat_count, 999), 0, 999, "",
+                 "How many cycles to play; 0 repeats until the clip ends"),
+                ("gap", "Gap", PM.loop_gap(instance), 0, max(period, cycle, 60), " f",
+                 "Frames held at rest between cycles"),
+                ("phase", "Phase", int(round(PM.loop_phase(instance))), -999, 999, " f",
+                 "Shift the cycle pattern, in frames"),
+            )
+            for key, label, value, low, high, unit, tip in values:
+                field = ScrubField(label, int(value), low, max(int(high), int(value), 1),
+                                   default=0, step=1, unit=unit, label_width=LABEL_W,
+                                   tooltip=tip)
+                field.committed.connect(
+                    lambda number, c=clip.id, i=index, k=key: self._commit_preset(
+                        c, i, "Loop settings", knobs={k: int(number)}))
+                layout.addWidget(field)
+
+
         for key, label, span in (("intensity", "Intensity", 200.0), ("stagger", "Stagger", 100.0),
                                  ("seed", "Seed", 9999.0)):
             if key == "stagger" and not (clip.is_text and knobs["unit"] != "whole"):
                 continue
-            field = SliderField(label, float(knobs[key]) * (100.0 if key != "seed" else 1.0),
+            field = ScrubField(label, float(knobs[key]) * (100.0 if key != "seed" else 1.0),
                                 0.0, span, default=35.0 if key == "stagger" else 100.0,
                                 step=1.0, decimals=0,
                                 unit=" %" if key != "seed" else "",
-                                label_width=LABEL_W, box_width=56,
+                                label_width=LABEL_W,
                                 tooltip={"intensity": "How far the preset pushes",
                                          "stagger": "Share of the window used to spread the units",
                                          "seed": "Random seed: the same seed gives the same frames"}[key])
@@ -1245,7 +1395,7 @@ class EffectsPanel(QWidget):
             direction.currentIndexChanged.connect(
                 lambda _row, c=clip.id, i=index, box=direction: self._commit_preset(
                     c, i, "Preset direction", knobs={"direction": box.currentData()}))
-            layout.addWidget(self._labelled("Direction", direction))
+            layout.addWidget(self._labelled("Order", direction))
         if clip.is_text:
             unit = QComboBox()
             for key in PM.UNITS:
@@ -1256,6 +1406,40 @@ class EffectsPanel(QWidget):
                     c, i, "Preset unit", knobs={"unit": box.currentData()}, rebuild=True))
             layout.addWidget(self._labelled("Unit", unit))
         return box
+
+    def _animation_family(self, instance):
+        """The browser family an instance came from (families fold presets by program)."""
+        program = str(instance.get("program") or "")
+        if not program:
+            return None
+        return next((family for family in FAMILIES.families()
+                     if family.get("key") == program), None)
+
+    def _switch_animation(self, clip_id, index, family_key, mode=None, direction=None):
+        """Switch Mode/Direction of an applied animation without stacking another one."""
+        clip = self.engine.timeline.find_clip(clip_id)
+        if clip is None or not 0 <= int(index) < len(PM.instances(clip)):
+            return
+        instance = PM.instances(clip)[index]
+        family = next((row for row in FAMILIES.families()
+                       if row.get("key") == family_key), None)
+        if family is None:
+            return
+        media = "text" if clip.is_text else "clip"
+        mode = mode or instance.get("category", "in")
+        if direction is None:
+            direction = str((instance.get("args") or {}).get("dir") or "")
+        preset = FAMILIES.variant(family, media, mode, direction)
+        if not preset:
+            return
+        category, program, args, _knobs = LIB.preset_spec(preset, None)
+        name = family.get("name") or "Animation"
+        label = f"Change {name} to {FAMILIES.MODE_LABELS.get(category, category)}"
+        if self.engine.session.switch_preset_variant(
+                clip_id, index, label, preset.get("id", ""), category, program, args, name):
+            self._built_key = None
+            self.refresh_properties()
+            self._notify()
 
     def _commit_preset(self, clip_id, index, label, knobs=None, duration=None, rebuild=False):
         if self.engine.session.update_preset(clip_id, index, label, knobs=knobs, duration=duration):
@@ -1358,6 +1542,186 @@ class EffectsPanel(QWidget):
             body.setEnabled(False)
         self.properties_layout.addWidget(frame)
 
+    def _effect_cards(self, clip):
+        """Effect cards in their real order, with every Style's members nested inside it."""
+        groups = {}
+        for position, entry in enumerate(clip.effects):
+            if entry.get("effect_id") == "look" and entry.get("look_id"):
+                groups[entry["look_id"]] = {"index": position, "members": []}
+        for position, entry in enumerate(clip.effects):
+            group = groups.get(entry.get("look_id"))
+            if group is not None and group["index"] != position:
+                group["members"].append(position)
+        rendered = set()
+        for index, entry in enumerate(clip.effects):
+            if index in rendered:
+                continue
+            group = groups.get(entry.get("look_id"))
+            if group is not None and group["index"] == index:
+                members = list(group["members"])
+                self._style_card(clip, index, entry, members)
+                rendered.update(members)
+                continue
+            effect = next((e for e in self.engine.effects if e.key == entry.get("effect_id")), None)
+            if effect is not None:
+                self._effect_card(clip, index, effect, entry)
+
+    def _style_card(self, clip, index, entry, members):
+        """One collapsible group per applied Style: Strength first, its real effects below.
+
+        The members are the ordinary effect entries the Style inserted, so they render,
+        key and bake exactly like hand-added effects; the group only nests them.
+        """
+        group_id = entry.get("look_id") or f"style{index}"
+        state_key = ("style", group_id)
+        collapsed = state_key not in self._opened_groups
+        frame, outer = self._card("look")
+        header = _CardHeader("look")
+        header.setToolTip("Drag to reorder the style group")
+        head = QHBoxLayout(header)
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(tokens.SP1)
+        arrow = _tool("chevron_right" if collapsed else "chevron_down", "Collapse / expand")
+        enabled = _tool("check", "Enable or disable the whole style", checkable=True)
+        enabled.setChecked(entry.get("enabled", True))
+        enabled.toggled.connect(lambda on, c=clip, e=entry: self._set_enabled(c, e, on))
+        name = QLabel(entry.get("name") or "Style")
+        name.setStyleSheet(f"font-size: {tokens.FONT_TITLE}px; font-weight: 600;")
+        count = QLabel(f"{len(members)} effect{'s' if len(members) != 1 else ''}")
+        count.setProperty("quiet", True)
+        more = _tool("dots", "More")
+        more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QMenu(more)
+        menu.addAction("Remove style").triggered.connect(
+            lambda _=False, c=clip, e=entry: self._remove_look(c, e))
+        menu.addAction("Save stack as style\u2026").triggered.connect(
+            lambda _=False, c=clip: self._save_look(c))
+        look_id = (entry.get("params") or {}).get("look")
+        if LOOKS.get(look_id) is not None:
+            menu.addAction("Export style\u2026").triggered.connect(
+                lambda _=False, look=look_id: self._export_look(look))
+        more.setMenu(menu)
+        more.setStyleSheet("QToolButton::menu-indicator { image: none; width: 0; }")
+        head.addWidget(arrow)
+        head.addWidget(enabled)
+        head.addWidget(name)
+        head.addWidget(count)
+        head.addStretch(1)
+        head.addWidget(more)
+        outer.addWidget(header)
+
+        body, form = self._form()
+        look_effect = next((effect for effect in self.engine.effects if effect.key == "look"),
+                           None)
+        if look_effect is not None:
+            self._effect_fields(form, clip, look_effect, entry)
+        for position, member_index in enumerate(members):
+            member = clip.effects[member_index]
+            effect = next((item for item in self.engine.effects
+                           if item.key == member.get("effect_id")), None)
+            if effect is not None:
+                self._style_member(form, clip, member_index, effect, member, group_id, position,
+                                   last=(position == len(members) - 1))
+        outer.addWidget(body)
+        body.setVisible(not collapsed)
+
+        def toggle(_=False, b=body, a=arrow, k=state_key):
+            expanded = not b.isVisible()
+            b.setVisible(expanded)
+            a.setIcon(icon("chevron_down" if expanded else "chevron_right"))
+            (self._opened_groups.add if expanded else self._opened_groups.discard)(k)
+        arrow.clicked.connect(toggle)
+        if not entry.get("enabled", True):
+            body.setEnabled(False)
+        self.properties_layout.addWidget(frame)
+
+    def _style_member(self, form, clip, index, effect, entry, group_id, position, last=False):
+        """A member effect of a Style: its own header, collapsed until asked for."""
+        opened_key = ("member", group_id, position)
+        expanded = opened_key in self._opened_members
+        row = QFrame()
+        row.setProperty("subCard", True)
+        column = QVBoxLayout(row)
+        column.setContentsMargins(tokens.SP1 + 2, 2, tokens.SP1 + 2, 2)
+        column.setSpacing(2)
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(tokens.SP1)
+        arrow = _tool("chevron_down" if expanded else "chevron_right", "Expand this effect")
+        enabled = _tool("check", "Enable or disable this effect", checkable=True)
+        enabled.setChecked(entry.get("enabled", True))
+        enabled.toggled.connect(lambda on, c=clip, e=entry: self._set_enabled(c, e, on))
+        name = QLabel(entry.get("name") or effect.name)
+        more = _tool("dots", "More")
+        more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QMenu(more)
+        reset = menu.addAction("Reset")
+        reset.triggered.connect(lambda _=False, c=clip, e=entry, f=effect: self._reset_effect(c, e, f))
+        up = menu.addAction("Move up in style")
+        up.setEnabled(position > 0)
+        up.triggered.connect(lambda _=False, c=clip, i=index: self._move_member(c, i, -1))
+        down = menu.addAction("Move down in style")
+        down.setEnabled(not last)
+        down.triggered.connect(lambda _=False, c=clip, i=index: self._move_member(c, i, 1))
+        menu.addSeparator()
+        menu.addAction("Move out of style").triggered.connect(
+            lambda _=False, c=clip, i=index: self._leave_style(c, i))
+        menu.addAction("Remove").triggered.connect(
+            lambda _=False, c=clip, i=index: self._remove_entry(c, i))
+        more.setMenu(menu)
+        more.setStyleSheet("QToolButton::menu-indicator { image: none; width: 0; }")
+        header.addWidget(arrow)
+        header.addWidget(enabled)
+        header.addWidget(name)
+        header.addStretch(1)
+        header.addWidget(more)
+        column.addLayout(header)
+        body, inner = self._form()
+        self._effect_fields(inner, clip, effect, entry)
+        column.addWidget(body)
+        body.setVisible(expanded)
+
+        def toggle(_=False, b=body, a=arrow, k=opened_key):
+            shown = not b.isVisible()
+            b.setVisible(shown)
+            a.setIcon(icon("chevron_down" if shown else "chevron_right"))
+            (self._opened_members.add if shown else self._opened_members.discard)(k)
+        arrow.clicked.connect(toggle)
+        if not entry.get("enabled", True):
+            body.setEnabled(False)
+        form.addWidget(row)
+
+    # ------------------------------------------------------- style member edits
+    def _change_effects(self, clip, label, change):
+        """Apply one edit to the clip's effect list as a single undo step."""
+        def action(target):
+            change(target.effects)
+        self.engine.session.apply_to_clips([clip.id], label, action)
+        self.refresh_properties()
+
+    def _move_member(self, clip, index, delta):
+        """Swap a Style member with its neighbour, staying inside the group."""
+        def change(effects):
+            group = effects[index].get("look_id")
+            target = index + delta
+            if not 0 <= target < len(effects) or effects[target].get("look_id") != group:
+                return
+            effects[index], effects[target] = effects[target], effects[index]
+        self._change_effects(clip, "Reorder style effect", change)
+
+    def _leave_style(self, clip, index):
+        """Pull an effect out of its Style: it keeps its settings, the group keeps the rest."""
+        def change(effects):
+            if 0 <= index < len(effects):
+                effects[index].pop("look_id", None)
+        self._change_effects(clip, "Move effect out of style", change)
+
+    def _remove_entry(self, clip, index):
+        def change(effects):
+            if 0 <= index < len(effects):
+                effects.pop(index)
+        self._change_effects(clip, "Remove effect", change)
+
     # ------------------------------------------------------------- timing rows
     def _live_fade(self, clip_id, edge, frames):
         self._begin_edit()
@@ -1397,11 +1761,10 @@ class EffectsPanel(QWidget):
             current = spec.clamp(parameter_value_at(stored, self._clip_frame(clip)))
             tip = spec.help or spec.label
             if spec.kind in ("int", "float"):
-                field = SliderField(spec.label, current, spec.minimum, spec.maximum,
+                field = ScrubField(spec.label, current, spec.minimum, spec.maximum,
                                     default=spec.default, step=spec.step, unit=spec.unit,
                                     decimals=0 if spec.kind == "int" else 2,
-                                    soft_min=spec.soft_min, soft_max=spec.soft_max,
-                                    label_width=LABEL_W, box_width=56, tooltip=tip)
+                                    label_width=LABEL_W, tooltip=tip)
                 field.interaction_started.connect(self._begin_edit)
                 field.edited.connect(lambda value, c=clip, e=entry, n=spec.name:
                                      self._set_param(c, e, n, value, live=True))
@@ -1438,10 +1801,9 @@ class EffectsPanel(QWidget):
         stored = entry.get("params", {}).get("mix", 100)
         animated = isinstance(stored, AnimatedValue)
         current = MIX_SPEC.clamp(parameter_value_at(stored, self._clip_frame(clip)))
-        field = SliderField(MIX_SPEC.label, current, MIX_SPEC.minimum, MIX_SPEC.maximum,
+        field = ScrubField(MIX_SPEC.label, current, MIX_SPEC.minimum, MIX_SPEC.maximum,
                             default=MIX_SPEC.default, step=MIX_SPEC.step, unit=MIX_SPEC.unit,
-                            decimals=0, label_width=LABEL_W, box_width=56,
-                            soft_min=0, soft_max=100, tooltip=MIX_SPEC.help)
+                            decimals=0, label_width=LABEL_W, tooltip=MIX_SPEC.help)
         field.interaction_started.connect(self._begin_edit)
         field.edited.connect(lambda value, c=clip, e=entry:
                              self._set_param(c, e, MIX_SPEC.name, value, live=True))
@@ -1672,6 +2034,8 @@ class EffectsPanel(QWidget):
                 row["field"].set_value(clip.fade_in if row["edge"] == "in" else clip.fade_out)
             elif kind == "speed":
                 row["field"].set_value(clip.speed * 100)
+            elif kind == "duration":
+                row["field"].set_value(clip.duration)
             elif kind == "badge":
                 entry = row["entry"]
                 if not any(entry is e for e in clip.effects):

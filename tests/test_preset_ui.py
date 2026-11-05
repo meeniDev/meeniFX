@@ -44,13 +44,23 @@ def rows(clip_id, engine):
 
 # --------------------------------------------------------------------- browser
 def test_applying_from_the_browser_adds_one_instance(engine_and_clip):
-    from meenifx.ui.presets_panel import PresetsPanel
+    from meenifx.ui.panels import EffectsPanel
+    from meenifx.model import animation_families as FAMILIES
 
     engine, clip = engine_and_clip
     engine.session.set_selection({clip.id})
-    panel = PresetsPanel(engine)
-    assert panel.apply(LIB.load()["text_in_fade"]) == 1
+    panel = EffectsPanel(engine)
+    panel.browser.tabs.setCurrentIndex(1)
+    family = next(item for item in FAMILIES.families() if item["key"] == "fade")
+    panel._apply_animation_item({"kind": "animation", "id": family["key"],
+                                 "family": family, "media": "clip", "mode": "in",
+                                 "direction": ""})
     assert [row["category"] for row in rows(clip.id, engine)] == ["in"]
+    # A second apply of the same family edits that instance instead of stacking another.
+    panel._apply_animation_item({"kind": "animation", "id": family["key"],
+                                 "family": family, "media": "clip", "mode": "out",
+                                 "direction": ""})
+    assert [row["category"] for row in rows(clip.id, engine)] == ["out"]
 
 
 def test_a_second_in_preset_replaces_the_first_but_loops_stack(engine_and_clip):
@@ -73,79 +83,56 @@ def test_applying_a_preset_is_one_undo_step(engine_and_clip):
     assert rows(clip.id, engine) == []
 
 
-def test_the_unit_dropdown_reaches_the_text_instance(engine_and_clip):
-    from meenifx.ui.presets_panel import PresetsPanel
+def test_the_unit_menu_reaches_the_text_instance(engine_and_clip):
+    from meenifx.ui.panels import EffectsPanel
 
     engine, _clip = engine_and_clip
     clip = add_text(engine)
     engine.session.set_selection({clip.id})
-    panel = PresetsPanel(engine)
-    panel.unit_box.setCurrentIndex(panel.unit_box.findData("word"))
-    panel.apply(LIB.load()["text_in_fade"])
+    engine.session.apply_preset(LIB.load()["text_in_fade"], "word")
     assert rows(clip.id, engine)[0]["knobs"]["unit"] == "word"
+
+    panel = EffectsPanel(engine)
+    panel.refresh_properties()
+    card = next(frame for frame in panel.properties_layout.parentWidget().findChildren(QFrame)
+                if frame.property("effect_key") == "animation")
+    unit = next(combo for combo in card.findChildren(QComboBox)
+                if combo.findData("letter") >= 0)
+    unit.setCurrentIndex(unit.findData("letter"))
+    assert rows(clip.id, engine)[0]["knobs"]["unit"] == "letter"
 
 
 def test_media_clips_ignore_the_text_unit(engine_and_clip):
-    from meenifx.ui.presets_panel import PresetsPanel
-
     engine, clip = engine_and_clip
     engine.session.set_selection({clip.id})
-    panel = PresetsPanel(engine)
-    panel.unit_box.setCurrentIndex(panel.unit_box.findData("line"))
-    panel.apply(LIB.load()["clip_in_fade"])
+    engine.session.apply_preset(LIB.load()["clip_in_fade"], "line")
     assert rows(clip.id, engine)[0]["knobs"]["unit"] == "whole"
 
 
-def test_the_search_box_and_favourites_filter_the_tree(engine_and_clip):
-    from meenifx.ui.presets_panel import PresetsPanel
+def test_the_search_box_filters_the_animation_families(engine_and_clip):
+    from meenifx.ui.panels import EffectsPanel
 
-    engine, _clip = engine_and_clip
-    panel = PresetsPanel(engine)
-    total = LIB.load()
-    assert len(panel.preset_items()) == len(total)
+    engine, clip = engine_and_clip
+    engine.session.set_selection({clip.id})
+    panel = EffectsPanel(engine)
+    browser = panel.browser
+    browser.tabs.setCurrentIndex(1)
+    total = len(browser._cards)
+    assert total >= 15
 
-    panel.search.setText("glitch")
-    hits = panel.preset_items()
-    assert hits and len(hits) < len(total)
-    assert all("glitch" in (preset["name"] + " " + " ".join(preset["keywords"])).lower()
-               for preset in hits)
+    browser.search.setText("glitch")
+    hits = browser._cards
+    assert 0 < len(hits) < total
+    assert any("glitch" in card.item["name"].lower() for card in hits)
 
-    panel.search.setText("")
-    panel._set_favorites(set())
-    original = panel.favorites()
-    first = panel.preset_items()[0]
-    panel._toggle_favorite(first["id"])
-    panel.favorite_only.setChecked(True)
-    try:
-        assert panel.favorites() == {first["id"]}
-        assert [preset["id"] for preset in panel.preset_items()] == [first["id"]]
-    finally:
-        panel.favorite_only.setChecked(False)
-        panel._set_favorites(original)
-        panel._toggle_favorite(first["id"]) if original else None
-    assert panel.preset_items()[0]["id"] != "" if False else True
-
-
-def test_the_hover_preview_runs_the_real_program(engine_and_clip):
-    from meenifx.ui.presets_panel import PresetsPanel
-
-    engine, _clip = engine_and_clip
-    panel = PresetsPanel(engine)
-    item = panel.tree.topLevelItem(0).child(0)
-    panel._on_hover(item)
-    assert panel.preview._preset is not None
-    # The preview's own fake clip is evaluated by the model, so a loop must move it.
-    keys = [P.evaluate(panel.preview._clip, frame,
-                       units={"letter": [], "word": [], "line": []},
-                       project_size=(160, 90)).pose.key()
-            for frame in range(panel.preview._clip.duration + 1)]
-    assert any(key != P.Pose().key() for key in keys)
+    browser.search.setText("")
+    assert len(browser._cards) == total
 
 
 # --------------------------------------------------------------- inspector card
 def test_the_animation_card_lists_every_instance(engine_and_clip):
     from meenifx.ui.panels import EffectsPanel
-    from meenifx.ui.widgets import SliderField
+    from meenifx.ui.widgets import ScrubField
 
     engine, clip = engine_and_clip
     engine.session.set_selection({clip.id})
@@ -156,9 +143,13 @@ def test_the_animation_card_lists_every_instance(engine_and_clip):
     cards = [frame for frame in panel.properties_layout.parentWidget().findChildren(QFrame)
              if frame.property("effect_key") == "animation"]
     assert len(cards) == 1
-    # Duration + Intensity + Seed for each of two whole-clip presets, plus one Easing combo.
-    assert len(cards[0].findChildren(SliderField)) == 6
-    assert len(cards[0].findChildren(QComboBox)) == 2
+    # In: Duration + Intensity + Seed. Loop: Cycle + Span + Cycles + Gap + Phase +
+    # Intensity + Seed. Combos: one Easing and one Mode per instance.
+    assert len(cards[0].findChildren(ScrubField)) == 10
+    assert len(cards[0].findChildren(QComboBox)) == 4
+    texts = [combo.currentText() for combo in cards[0].findChildren(QComboBox)]
+    assert "In" in texts, "the entrance offers its mode"
+    assert "Repeat" in texts, "the loop offers Repeat / Ping-Pong"
     texts = [label.text() for label in cards[0].findChildren(QLabel)]
     assert any("Fade" in text and "In" in text for text in texts)
     assert any("Shake" in text and "Loop" in text for text in texts)
@@ -166,7 +157,7 @@ def test_the_animation_card_lists_every_instance(engine_and_clip):
 
 def test_the_card_shows_stagger_direction_and_unit_for_per_unit_text(engine_and_clip):
     from meenifx.ui.panels import EffectsPanel
-    from meenifx.ui.widgets import SliderField
+    from meenifx.ui.widgets import ScrubField
 
     engine, _clip = engine_and_clip
     clip = add_text(engine)
@@ -177,11 +168,54 @@ def test_the_card_shows_stagger_direction_and_unit_for_per_unit_text(engine_and_
     panel.refresh_properties()
     card = next(frame for frame in panel.properties_layout.parentWidget().findChildren(QFrame)
                 if frame.property("effect_key") == "animation")
-    labels = [field.label.text().rstrip("\u2026") for field in card.findChildren(SliderField)]
+    labels = [field.label.text().rstrip("\u2026") for field in card.findChildren(ScrubField)]
     assert any("Stag".startswith(text) or text.startswith("Stag") for text in labels)
     assert len(labels) == 4           # Duration, Intensity, Stagger, Seed
     combos = [combo.currentText() for combo in card.findChildren(QComboBox)]
     assert "Letter" in combos and "Left to right" in combos
+
+
+def test_the_animation_card_switches_the_mode_in_place(engine_and_clip):
+    from meenifx.ui.panels import EffectsPanel
+
+    engine, clip = engine_and_clip
+    engine.session.set_selection({clip.id})
+    engine.session.apply_preset(LIB.load()["clip_in_slide"], "whole")
+    panel = EffectsPanel(engine)
+    panel.refresh_properties()
+    card = next(frame for frame in panel.properties_layout.parentWidget().findChildren(QFrame)
+                if frame.property("effect_key") == "animation")
+    mode = next(combo for combo in card.findChildren(QComboBox)
+                if combo.findData("out") >= 0)
+    mode.setCurrentIndex(mode.findData("out"))
+    applied = rows(clip.id, engine)
+    assert len(applied) == 1, "switching the mode must not stack a second animation"
+    assert applied[0]["category"] == "out"
+    assert applied[0]["preset"] == "clip_out_slide"
+    assert applied[0]["program"] == "slide"
+    engine.session.stack.undo()
+    assert rows(clip.id, engine)[0]["category"] == "in"
+
+
+def test_the_animation_card_switches_the_direction_in_place(engine_and_clip):
+    from meenifx.ui.panels import EffectsPanel
+
+    engine, clip = engine_and_clip
+    engine.session.set_selection({clip.id})
+    engine.session.apply_preset(LIB.load()["clip_in_slide"], "whole")
+    panel = EffectsPanel(engine)
+    panel.refresh_properties()
+    card = next(frame for frame in panel.properties_layout.parentWidget().findChildren(QFrame)
+                if frame.property("effect_key") == "animation")
+    direction = next(combo for combo in card.findChildren(QComboBox)
+                     if combo.findData("up") >= 0)
+    direction.setCurrentIndex(direction.findData("up"))
+    applied = rows(clip.id, engine)
+    assert len(applied) == 1
+    assert applied[0]["args"]["dir"] == "up"
+    assert applied[0]["preset"] == "clip_in_slide_up"
+    engine.session.stack.undo()
+    assert rows(clip.id, engine)[0]["args"]["dir"] == "left"
 
 
 def test_committing_a_knob_changes_the_instance_once(engine_and_clip):
@@ -243,7 +277,9 @@ def test_timeline_bars_sit_where_the_instances_do(engine_and_clip):
     bars = {row[1]["category"]: row[2] for row in canvas.preset_bar_rects(clip)}
     assert set(bars) == {"in", "loop", "out"}
     assert abs(bars["in"].left() - (content.left() + 4)) < 1
-    assert abs(bars["loop"].width() - bars["in"].width() * 1.5) < 2
+    # A loop repeats to the end of the clip, so its bar spans the whole lane.
+    assert abs(bars["loop"].width() - (content.width() - 8)) < 2
+    assert abs(bars["loop"].left() - (content.left() + 4)) < 1
     assert abs(bars["out"].right() - (content.right() - 4)) < 1
 
 
@@ -305,7 +341,9 @@ def test_a_loop_bar_can_be_shortened_from_either_edge(engine_and_clip):
 
     engine, clip = engine_and_clip
     P.add(clip, "shake", "loop", program="shake", duration=60, name="Shake")
-    P.set_range(P.instances(clip)[0], 10, 50, clip)
+    instance = P.instances(clip)[0]
+    instance["start"] = 10
+    P.set_loop_coverage(instance, 50)
     canvas = TimelinePanel(engine, None).canvas
     bar = canvas.preset_bar_rects(clip)[0][2]
     canvas._begin_preset_drag(clip, 0, "start", int(bar.left()), int(bar.center().y()))
@@ -313,8 +351,10 @@ def test_a_loop_bar_can_be_shortened_from_either_edge(engine_and_clip):
                         Qt.KeyboardModifier.ShiftModifier)
     canvas._preset_release()
     instance = rows(clip.id, engine)[0]
-    assert instance["start"] > 10
-    assert instance["start"] + instance["duration"] == 60
+    start, span = P.window(instance, clip.duration)
+    assert start > 10, "the start edge moved"
+    assert start + span == 60, "the far edge stayed where it was"
+    assert instance["duration"] == 60, "dragging the bar never changes the cycle"
 
 
 # ---------------------------------------------------------------- split text

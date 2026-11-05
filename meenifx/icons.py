@@ -194,6 +194,13 @@ def _draw(name, p, color):
     elif name == "text":
         p.drawLine(QPointF(3.5, 4.0), QPointF(12.5, 4.0))
         p.drawLine(QPointF(8.0, 4.0), QPointF(8.0, 13.0))
+    elif name == "captions":
+        # A subtitle plate: two short lines inside a rounded frame ("CC").
+        p.drawRoundedRect(QRectF(1.4, 3.4, 13.2, 9.2), 2.0, 2.0)
+        p.drawLine(QPointF(3.8, 7.1), QPointF(6.9, 7.1))
+        p.drawLine(QPointF(3.8, 9.5), QPointF(6.2, 9.5))
+        p.drawLine(QPointF(9.1, 7.1), QPointF(12.2, 7.1))
+        p.drawLine(QPointF(9.1, 9.5), QPointF(11.5, 9.5))
     elif name == "auto_key":
         p.drawPolygon(_pts(7, 3, 12, 8, 7, 13, 2, 8))
         p.drawLine(QPointF(12.6, 2.6), QPointF(12.6, 6.0))

@@ -57,6 +57,56 @@ move, Alt-drag time stretch, freeze frames, loop region, markers, per-clip fades
 draggable grips and curve bending, deterministic snapping with named feedback ("Screen 1 ·
 end", "3 clip edges aligned"), overlap modes, clipboard, full undo/redo.
 
+**Manual linking** — select two or more clips (Ctrl+click adds to the selection) and use
+**Link Selected Clips** (Ctrl+L, Edit menu, or the clip right-click menu) to give them one
+persistent group id; **Unlink Selected Clips** (Ctrl+Shift+L) removes only the selected
+members. Clips do not need to come from the same file, so separately recorded video and
+audio can be linked. Linking never moves, trims or retimes anything; a split gives the left
+pair the original id and every new pair its own. The **Linked Selection** toolbar toggle is
+only about selection: with it on, selecting/moving/trimming/splitting one member also acts on
+its partners; with it off they are edited independently while the link metadata stays, so
+turning it back on restores group behaviour. Linked clips carry a small badge on the clip.
+
+**Smart Paste** — Ctrl+V imports clipboard pictures and files: pixels are written as real
+PNGs in the project's `Media` folder (alpha preserved), Explorer files are linked, text and
+numeric fields keep their text paste, the Media panel imports without touching the timeline
+and everywhere else the picture lands at the playhead. Preferences set duration, placement,
+selection and fit; a clipboard picture wins over an older in-app clip copy; the whole paste
+is one undo step.
+
+**Auto Captions** — optional local speech recognition (`faster-whisper`, CPU/int8, no
+account or key; a model is downloaded only after consent, kept under
+`~/.meenifx/models/whisper`, deletable in Preferences). The result is ordinary **text clips
+on a `Captions` track** carrying their style, word timings and animation in
+`clip.text["caption"]`, which means selection, trimming, undo, `.mfxpf` save/load and the
+burned-in render all use the existing paths. Eight styles are plain text-model values scaled
+by project height; entrance animations are the shipped text presets. A transcript editor
+edits times and words (one undo step), a range can be regenerated without touching captions
+outside it, and SRT import plus SRT/ASS export are supported. Karaoke colouring *inside* a
+phrase is not implemented; word-by-word grouping gives per-word timing instead.
+
+**Remove Dead Silence and Normalize** — `meenifx/audio/silence.py` finds quiet regions from
+short-window RMS levels (threshold in dBFS, minimum silence/speech, padding before/after,
+keep-pause and a minimum retained segment), the dialog previews the cuts on the waveform and
+lists every clip it will affect before Apply. Three scopes are offered: **Audio and linked
+video** (the analysed clip's link group), **Matching source video and audio** (same file,
+speed, direction and sync key even when not linked) and **Audio only**. Cuts are converted
+to absolute timeline frames once and every included clip is split on those same frames;
+only the span all included clips cover is edited, so no member is cut where a partner is
+missing. Survivors are re-linked per retained segment with fresh ids, a locked member blocks
+the whole pass instead of cutting its partners, and the whole edit is one undo step. With
+ripple on, gaps close on the included tracks only; other tracks never move. Source media is
+never modified. Normalize applies peak gain (not LUFS). The WASAPI capture thread pads
+skipped endpoint time with silence using the device position, so leading silence no longer
+slides later speech towards frame 0.
+
+**Timeline and effect polish** — Delete Gap, exact Duration field, Copy/Paste Effects,
+Paste Attributes (transform/effects/animations/audio/text, incompatible effects skipped),
+Remove All Effects, independent link ids for the pieces of a split pair, media-type filter
+and sorting in the Project panel, a searchable Keyboard Shortcuts page built from the live
+menu bar, and an in-app recording status (`● mm:ss`, click to stop) with the always-on-top
+recording bar now opt-in under Preferences.
+
 **Preview and transform** — fit/percentage zoom, cursor-centred wheel zoom, pan, guides.
 A bounding box with eight scale handles, rotation knob, visible anchor, motion path and
 warp pins; Shift constrains, arrows nudge by a project pixel, every drag is one undo step.
@@ -74,10 +124,15 @@ previous/next keys, Auto-Keyframe (on = key at playhead, off = shift the whole c
 Clip opacity, effect envelopes and audio gain animate too. Text has its own animation
 presets.
 
-**Animation presets** — a Presets tab beside Effects with 81 shipped presets in six
-categories (Text/Clip x In/Out/Loop), search, favourites and an animated hover preview.
-A preset is an instance on the clip (In anchored to the start, Out to the end, Loop over a
-range) with Duration, Intensity, Easing, Direction, Stagger, Unit and Seed knobs; several
+**Animation presets** — an Animations tab with the 81 shipped presets folded into 22
+families (one card per behaviour, with a Mode In/Out/Loop/Both and a Direction selector
+above the grid), plus search, favourites, recently used and grid/list views. A preset is an
+instance on the clip (In anchored to the start, Out to the end, Loop repeating its cycle
+across the clip) with Cycle, Intensity, Easing, Direction, Stagger, Unit and Seed knobs, and
+a Loop also has Span, Cycles, Repeat/Ping-Pong, Gap and Phase. The Properties *Animation*
+card switches Mode and Direction in place - the same instance changes, it is never
+duplicated - and loop instances keep repeating when the clip is trimmed or extended;
+splitting carries the cycle phase onto both halves. Several
 stack and compose on top of the clip's transform and keyframes instead of replacing them
 (position/rotation/blur/hue/light add, scale/opacity multiply). Text presets animate per
 letter, word or line with a staggered, directional delay around each unit's own centre,
@@ -109,14 +164,23 @@ Light, Hard Light, Difference, Darken, Lighten, Color Dodge, Color Burn), one sh
 compositor for preview, export and thumbnails, alpha-correct by construction. *Add >
 Adjustment Layer* makes a picture-less clip on a video track whose effects run over
 everything composited below it, for exactly its time range, with its own opacity, fades,
-keyframes and blend mode. Every effect card has an animatable **Mix** slider (0-100 %, the
-engine blends the untouched layer with the result, alpha included).
+keyframes and blend mode. Every effect card has an animatable **Mix** value (0-100 %, dragged or typed like
+every other number; the engine blends the untouched layer with the result, alpha included).
+
+**Effects browser** — one browser with three tabs (Effects, Animations, Styles). Each tile is
+a real render of the reference picture through the same compositor the export uses, cached
+by effect/parameters/picture/quality and produced on background workers, so scrolling never
+blocks the UI. The reference is `figure_cafe.png` beside `main.py`; Preferences > Appearance
+> Effect Previews replaces it with a custom image and sets the background and preview
+quality (global, never stored in a project). Double-click applies, double-clicking an
+applied effect removes it, and a Style opens in Properties as one collapsible group whose
+member effects keep their own cards.
 
 **Effects and looks** — the Glitch & Distortion pack (RGB Split, Glitch, Wave Warp,
 Bulge/Pinch, Twirl, Mirror/Kaleidoscope), Stylize (VHS/CRT, Film Grain, Halftone, Posterize,
 Edge Outline, Duotone, Invert, Vignette), Light (Flash/Strobe, Exposure Flicker, Light Leak,
 Bloom Streaks), Time (Posterize Time, Stutter, Echo/Trail) and a LUT effect that reads
-`.cube` tables (plus three built-in ones) with an intensity slider. Parameters follow the
+`.cube` tables (plus three built-in ones) with an intensity value. Parameters follow the
 existing table (two or three visible, the rest under *Advanced*), pixel sizes scale with the
 preview quality, and randomness is seeded from the seed and the frame. Ten shipped
 **Looks** in `looks/` apply a tuned stack plus one Strength card; saving, importing and
@@ -201,6 +265,21 @@ The panel lives in the **Graph Editor** dock (`G`) and edits the selected clip's
   cannot represent a cube's tiniest sub-step.
 - A user look stores effect values only: keyframes on the saved stack become their current
   base value, because a look is a readable recipe rather than an animation.
+- Auto Captions needs the optional `faster-whisper` package and a downloaded model; without
+  them the dialog explains the install and only SRT import/export works. Each run is capped
+  at 30 minutes of audio. Karaoke-style colour per word within one phrase is not
+  implemented; per-word captions (word timing) are. ASS export writes one style block from
+  the first caption rather than a full styling system.
+- Silence removal works on decoded audio, so a clip whose source cannot be decoded is
+  rejected with a message. This build normalizes by **peak**, not perceived loudness.
+- Matching source video/audio uses the project's own metadata (same media file, speed,
+  direction and sync key), not audio fingerprinting, so separately recorded files must be
+  linked manually first. Ripple delete closes gaps on the tracks of the included clips and
+  therefore also moves later, unrelated clips on those same tracks; other tracks are left
+  alone. **Audio only** deliberately cuts just the audio and can move it out of sync with a
+  linked picture; that is the explicit request, not a fallback.
+- Smart Paste of a picture URL downloads only when explicitly chosen and only accepts an
+  image response that decodes; other links are ignored.
 - The recorder is Windows-only (WASAPI). Screen recording is written by the bundled
   ffmpeg (gdigrab) rather than by Qt, because DXGI desktop duplication - what Qt uses -
   delivers a pointer-free image and QScreenCapture has no cursor option. gdigrab draws the

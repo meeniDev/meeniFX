@@ -143,16 +143,20 @@ def test_track_header_hit_areas(editor):
 
 def test_effect_categories_cards_and_color(editor, qapp):
     panel = editor.effects_panel
-    tree = panel.effect_tree
-    assert tree.topLevelItemCount() >= 2
-    assert {tree.topLevelItem(i).text(0) for i in range(tree.topLevelItemCount())} >= {"Stylize", "Tracking"}
-    stylize = next(tree.topLevelItem(i) for i in range(tree.topLevelItemCount())
-                   if tree.topLevelItem(i).text(0) == "Stylize")
-    mosaic = next(stylize.child(i) for i in range(stylize.childCount()) if stylize.child(i).text(0) == "Mosaic")
-    assert not mosaic.icon(0).isNull(), "added effects show a check"
+    browser = panel.browser
+    editor.engine.session.set_selection({editor._test_clip_id})
+    panel.refresh_effect_list()
+    browser.refresh()
+    categories = {card.item["subtitle"] for card in browser._cards}
+    assert {"Stylize", "Tracking"} <= categories, categories
+    assert "Looks" not in categories, "Looks are in the Styles tab now"
+    mosaic_card = next(card for card in browser._cards if card.item["id"] == "mosaic")
+    assert mosaic_card.item["applied"], "an applied effect carries its check mark"
     panel.search.setText("zzz")
-    assert tree.topLevelItemCount() == 0
+    assert browser._cards == [] and not browser.empty.isHidden()
     panel.search.setText("")
+    browser.refresh()
+    assert browser._cards
 
     panel.add_effect("face_tracker")
     pump(qapp, 0.2)

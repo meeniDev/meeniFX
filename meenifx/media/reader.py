@@ -6,6 +6,7 @@ from collections import OrderedDict
 
 import cv2
 import imageio.v2 as imageio
+import numpy as np
 
 from ..config import DEFAULT_TILE_PATHS
 
@@ -248,14 +249,36 @@ def probe_media(path):
         cap.release()
 
 
+def read_image(path):
+    """Decode a still with its alpha channel intact, as BGR or BGRA uint8.
+
+    A plain ``cv2.imread`` drops the alpha channel, which used to flatten every transparent
+    PNG the moment it entered the timeline. The compositor carries the picture's own alpha
+    (see :mod:`meenifx.processing.layers`), so the decoder has to hand it over.
+    16-bit and greyscale files are normalised here rather than in the renderer.
+    """
+    frame = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+    if frame is None:
+        raise RuntimeError("Unable to read image.")
+    if frame.dtype != np.uint8:
+        scale = 255.0 / 65535.0 if frame.dtype == np.uint16 else 1.0
+        frame = np.clip(frame.astype(np.float32) * scale, 0, 255).astype(np.uint8)
+    if frame.ndim == 2:
+        frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    elif frame.ndim == 3 and frame.shape[2] == 4:
+        pass                      # BGRA: the alpha travels with the picture
+    elif frame.ndim == 3 and frame.shape[2] == 3:
+        pass
+    else:
+        raise RuntimeError("Unsupported image layout.")
+    return np.ascontiguousarray(frame)
+
+
 def read_media(path):
     """Fully decode a media file. Returns (kind, frames, fps)."""
     ext = os.path.splitext(path.lower())[1]
     if ext in IMAGE_EXTS:
-        frame = cv2.imread(path)
-        if frame is None:
-            raise RuntimeError("Unable to read image.")
-        return "image", [frame], 1.0
+        return "image", [read_image(path)], 1.0
     if ext == ".gif":
         frames, fps = read_gif_frames(path)
         return "video", frames, fps

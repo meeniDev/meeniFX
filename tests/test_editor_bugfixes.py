@@ -438,17 +438,12 @@ def test_video_effects_are_refused_on_audio_clips(editor, qapp):
                for effect in editor.engine.effects)
     assert any(set(effect.media_types()) == {"audio"} for effect in editor.engine.effects)
 
-    from PyQt6.QtCore import Qt
-    labels = {}
-    root = panel.effect_tree
-    for index in range(root.topLevelItemCount()):
-        top = root.topLevelItem(index)
-        for child in range(top.childCount()):
-            item = top.child(child)
-            labels[item.data(0, Qt.ItemDataRole.UserRole)] = item
-    mosaic = labels["mosaic"]
-    assert "video only" in mosaic.text(0)
-    assert not (mosaic.flags() & Qt.ItemFlag.ItemIsEnabled), "it must not be addable"
+    browser = panel.browser
+    browser.refresh()
+    mosaic_card = next(card for card in browser._cards if card.item["id"] == "mosaic")
+    assert "(video)" in mosaic_card.item["tooltip"], mosaic_card.item["tooltip"]
+    assert mosaic_card.item["unavailable"], "it must not be addable to an audio clip"
+    assert not mosaic_card.isEnabled()
 
     panel.add_effect("mosaic")
     pump(qapp, 0.05)

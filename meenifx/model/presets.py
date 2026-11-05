@@ -24,6 +24,9 @@ from . import easing as E
 
 CATEGORIES = ("in", "out", "loop")
 CATEGORY_LABELS = {"in": "In", "out": "Out", "loop": "Loop"}
+# A loop repeats its cycle across the clip; how it wraps is a per-instance choice.
+LOOP_MODES = ("repeat", "pingpong")
+LOOP_MODE_LABELS = {"repeat": "Repeat", "pingpong": "Ping-Pong"}
 UNITS = ("letter", "word", "line", "whole")
 UNIT_LABELS = {"letter": "Letter", "word": "Word", "line": "Line", "whole": "Whole"}
 DIRECTIONS = ("left", "right", "center", "edges", "random")
@@ -37,7 +40,7 @@ DEFAULT_EASING = "Smooth"
 DEFAULT_KNOBS = {"intensity": 1.0, "easing": DEFAULT_EASING, "direction": "left",
                  "stagger": 0.35, "unit": "word", "seed": 7}
 
-# label, minimum, maximum, step, decimals, unit (the Animation card builds SliderFields).
+# label, minimum, maximum, step, decimals, unit (the Animation card builds ScrubFields).
 KNOB_SPECS = {
     "intensity": ("Intensity", 0.0, 200.0, 1.0, 0, "%"),
     "stagger": ("Stagger", 0.0, 100.0, 1.0, 0, "%"),
@@ -504,12 +507,83 @@ def _knobs(instance):
     return knobs
 
 
-def window(instance, clip_duration):
-    """(start, length) of an instance inside its clip, or None when it is empty."""
+def loop_mode(instance):
+    """'repeat' (start over) or 'pingpong' (there and back) - default repeat."""
+    mode = _knobs(instance).get("loop_mode")
+    return mode if mode in LOOP_MODES else "repeat"
+
+
+def loop_cycle(instance):
+    """Frames of one pass. `duration` is the cycle for a loop, not its window."""
+    return max(1, int(instance.get("duration") or 1))
+
+
+def loop_gap(instance):
+    """Frames held at rest between two cycles (0 = seamless)."""
+    try:
+        return max(0, int(float(_knobs(instance).get("gap") or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def loop_period(instance):
+    """One cycle plus the rest that follows it, in frames."""
+    return loop_cycle(instance) + loop_gap(instance)
+
+
+def loop_phase(instance):
+    """Shift of the cycle pattern, in frames (negative values are fine)."""
+    try:
+        return float(_knobs(instance).get("phase") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def loop_repeat(instance):
+    """Number of cycles to play; 0 (the default) repeats until the clip ends."""
+    try:
+        return max(0, int(float(_knobs(instance).get("repeat") or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def loop_span(instance, clip_duration):
+    """(start, covered frames) of a loop inside its clip.
+
+    A loop has no window of its own: it starts where it was placed and repeats across
+    the rest of the clip, so trimming or extending the clip lengthens the animation
+    instead of cutting it off. `coverage` narrows the span (dragging the timeline bar),
+    and a finite repeat count stops it after that many cycles - whichever is shorter.
+    """
     duration = max(1, int(clip_duration))
-    length = int(instance.get("duration") or 0)
+    start = max(0, min(int(instance.get("start") or 0), duration - 1))
+    try:
+        coverage = int(float(_knobs(instance).get("coverage") or 0))
+    except (TypeError, ValueError):
+        coverage = 0
+    coverage = coverage or duration - start
+    coverage = max(1, min(coverage, duration - start))
+    count = loop_repeat(instance)
+    if count:
+        coverage = min(coverage, count * loop_period(instance))
+    return start, max(1, coverage)
+
+
+def set_loop_coverage(instance, frames):
+    """Limit how much of the clip the loop covers (frames from its start)."""
+    knobs = instance.setdefault("knobs", {})
+    knobs["coverage"] = max(1, int(frames))
+    return instance
+
+
+def window(instance, clip_duration):
+    """(start, length) of an instance's active range inside its clip."""
+    duration = max(1, int(clip_duration))
     start = int(instance.get("start") or 0)
     category = instance.get("category", "in")
+    if category == "loop":
+        return loop_span(instance, duration)
+    length = int(instance.get("duration") or 0)
     if category == "out":
         length = min(duration, length or duration)
         start = duration - length if not instance.get("offset_from_end") else start
@@ -592,6 +666,11 @@ def set_range(instance, start=None, duration=None, clip=None):
     if clip_duration:
         instance["duration"] = max(1, min(int(instance["duration"]), clip_duration))
         instance["start"] = max(0, min(int(instance["start"]), clip_duration - 1))
+        if instance.get("category") == "loop":
+            knobs = instance.setdefault("knobs", {})
+            coverage = int(float(knobs.get("coverage") or 0))
+            if coverage:
+                knobs["coverage"] = max(1, min(coverage, clip_duration - int(instance["start"])))
         if instance.get("category") == "out":
             # An exit stays glued to the clip end unless it was dragged there.
             if instance.get("offset_from_end", True):
@@ -651,12 +730,26 @@ def _run_program(instance, phase, knobs, unit, kind):
     return out
 
 
+def _loop_phase(instance, local_frame, start):
+    """Position (0..1) inside the loop's own cycle at a clip-local frame."""
+    cycle = loop_cycle(instance)
+    period = loop_period(instance)
+    elapsed = (float(local_frame) - start) + loop_phase(instance)
+    position = elapsed % period if period > 0 else 0.0
+    if position >= cycle:
+        # Between cycles: sit at the first pose instead of popping mid-motion.
+        return 0.0, 0.0
+    raw = position / float(cycle)
+    if loop_mode(instance) == "pingpong":
+        raw = raw * 2.0 if raw <= 0.5 else (1.0 - raw) * 2.0
+    return raw, raw
+
+
 def _phase(instance, knobs, local_frame, start, length):
     """(eased arrival phase, raw 0..1 position) for one instance at a frame."""
     category = instance.get("category", "in")
     if category == "loop":
-        raw = ((local_frame - start) % length) / float(length)
-        return raw, raw
+        return _loop_phase(instance, local_frame, start)
     raw = (local_frame - start) / float(length)
     raw = 0.0 if raw < 0.0 else (1.0 if raw > 1.0 else raw)
     if category == "out":
@@ -737,6 +830,29 @@ def split_instances(rows, frame, left_duration, right_duration):
         length = max(1, int(row.get("duration", 1)))
         end = start + length
         category = row.get("category", "in")
+        if category == "loop":
+            # Keep the cycle, its phase and the coverage: each half keeps playing the
+            # same poses it played before the cut. `frame` is exact here, so reading the
+            # span in original coordinates (total = left + right) stays consistent.
+            span_start, span = loop_span(row, max(1, int(left_duration) + int(right_duration)))
+            span_end = span_start + span
+            if span_start < frame:
+                clone = copy.deepcopy(row)
+                clone["start"] = span_start
+                knobs = clone.setdefault("knobs", {})
+                knobs["coverage"] = max(1, min(span, frame) - span_start)
+                left.append(clone)
+            if span_end > frame:
+                clone = copy.deepcopy(row)
+                clone["start"] = max(0, span_start - frame)
+                knobs = clone.setdefault("knobs", {})
+                knobs["coverage"] = max(1, min(span_end, left_duration + right_duration)
+                                        - max(span_start, frame))
+                if span_start < frame:
+                    # The right piece starts mid-cycle: shift the pattern by the cut.
+                    knobs["phase"] = loop_phase(row) + (frame - span_start)
+                right.append(clone)
+            continue
         if category == "out":
             if end > frame:
                 clone = copy.deepcopy(row)
@@ -775,7 +891,11 @@ def cache_key(clip):
 def summary(instance):
     """"Text In · Pop · 18f" for a card title."""
     category = CATEGORY_LABELS.get(instance.get("category"), "In")
-    return f"{instance.get('name') or instance.get('preset')} · {category} · {int(instance.get('duration', 0))}f"
+    name = instance.get('name') or instance.get('preset')
+    if instance.get("category") == "loop":
+        mode = LOOP_MODE_LABELS[loop_mode(instance)]
+        return f"{name} · Loop · {mode} · {loop_cycle(instance)}f cycle"
+    return f"{name} · {category} · {int(instance.get('duration', 0))}f"
 
 
 # ---------------------------------------------------------------------- baking

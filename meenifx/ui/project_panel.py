@@ -5,9 +5,9 @@ import os
 import cv2
 from PyQt6.QtCore import QMimeData, QObject, QPoint, QRunnable, QSize, Qt, QThreadPool, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor, QDrag, QIcon, QImage, QPainter, QPen, QPixmap, QPolygonF
-from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QHBoxLayout, QInputDialog, QLabel,
-                             QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton,
-                             QToolButton, QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QHBoxLayout, QInputDialog,
+                             QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox,
+                             QPushButton, QToolButton, QVBoxLayout, QWidget)
 
 from ..constants import AUDIO_EXT, IMAGE_EXT, MEDIA_MIME, VIDEO_EXT
 from ..project import io as project_io
@@ -279,6 +279,21 @@ class ProjectPanel(QWidget):
         self.search.setPlaceholderText("Search media")
         self.search.setClearButtonEnabled(True)
         layout.addWidget(self.search)
+        tools = QHBoxLayout()
+        tools.setSpacing(4)
+        self.kind_filter = QComboBox()
+        for label, value in (("All media", ""), ("Video", "video"), ("Audio", "audio"),
+                             ("Images", "image")):
+            self.kind_filter.addItem(label, value)
+        self.kind_filter.setToolTip("Show only one kind of media")
+        self.sort_box = QComboBox()
+        for label, value in (("Name", "name"), ("Type", "type"), ("Newest file", "date"),
+                             ("Longest", "duration")):
+            self.sort_box.addItem(label, value)
+        self.sort_box.setToolTip("Media order")
+        tools.addWidget(self.kind_filter, 1)
+        tools.addWidget(self.sort_box, 1)
+        layout.addLayout(tools)
         self.list = _MediaList()
         layout.addWidget(self.list, 1)
         self.hint = QLabel("Drop files here or press Import")
@@ -291,6 +306,8 @@ class ProjectPanel(QWidget):
         self.bin_button.clicked.connect(self.new_bin)
         self.view_button.clicked.connect(self.toggle_view)
         self.search.textChanged.connect(lambda _t: self.rebuild(force=True))
+        self.kind_filter.currentIndexChanged.connect(lambda _i: self.rebuild(force=True))
+        self.sort_box.currentIndexChanged.connect(lambda _i: self.rebuild(force=True))
         self.list.itemDoubleClicked.connect(self._double_clicked)
         self.list.customContextMenuRequested.connect(self._menu)
         self.list.files_dropped.connect(self._files_dropped)
@@ -373,8 +390,10 @@ class ProjectPanel(QWidget):
                 entry.setIcon(self._glyph_icon("\u25a4"))
                 entry.setFlags(entry.flags() | Qt.ItemFlag.ItemIsDropEnabled)
                 self.list.addItem(entry)
+        kind = self.kind_filter.currentData()
+        order = self.sort_box.currentData()
         shown = 0
-        for media in library.items.values():
+        for media in self._arrange(library.items.values(), kind, order):
             if needle:
                 if needle not in media.name.lower():
                     continue
@@ -391,6 +410,23 @@ class ProjectPanel(QWidget):
     @staticmethod
     def _key(item):
         return item.data(Qt.ItemDataRole.UserRole)[:2]
+
+    @staticmethod
+    def _arrange(items, kind="", order="name"):
+        """Filter by media type and order the list; dates come from the files themselves."""
+        rows = [item for item in items if not kind or item.type == kind]
+        if order == "type":
+            return sorted(rows, key=lambda item: (item.type, item.name.lower()))
+        if order == "duration":
+            return sorted(rows, key=lambda item: (-float(item.duration or 0.0), item.name.lower()))
+        if order == "date":
+            def modified(item):
+                try:
+                    return -os.path.getmtime(item.path) if item.path else 0.0
+                except OSError:
+                    return 0.0
+            return sorted(rows, key=lambda item: (modified(item), item.name.lower()))
+        return sorted(rows, key=lambda item: item.name.lower())
 
     def _make_item(self, media, used):
         missing = self._is_missing(media)

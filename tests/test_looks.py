@@ -173,11 +173,15 @@ def test_the_effects_panel_lists_looks_and_applies_one(qapp):
     engine, clip = make_engine()
     engine.session.set_selection({clip.id})
     panel = EffectsPanel(engine)
-    top = panel.effect_tree.topLevelItem(0)
-    assert top.text(0) == "Looks"
-    assert top.childCount() >= 10
-    item = top.child(0)
-    panel._on_double_click(item)
+    browser = panel.browser
+    browser.tabs.setCurrentIndex(2)          # Styles
+    assert browser.tab == "styles"
+    panel.refresh_effect_list()
+    browser.refresh()
+    cards = browser._cards
+    assert len(cards) >= 10
+    assert all(card.item["kind"] == "style" for card in cards)
+    browser._card_activated(cards[0].item)
     applied = engine.timeline.find_clip(clip.id).effects
     assert applied and applied[0]["effect_id"] == "look"
     panel.refresh_properties()

@@ -13,7 +13,7 @@ from ..model.timeline import timecode_text
 from .branding import wordmark
 from .filedialogs import save_file
 from .. import crashlog
-from .widgets import SliderField
+from .widgets import ScrubField
 
 
 def span_text(start, end, fps):
@@ -67,16 +67,16 @@ class ExportDialog(QDialog):
         form=QFormLayout()
         self.use_source_fps=QCheckBox("Use source FPS")
         self.use_source_fps.setChecked(engine.render_use_source_fps.get())
-        self.fps=SliderField("Render FPS", engine.render_fps.get(), 1, 240, default=30, step=1,
-                             unit=" fps", soft_min=12, soft_max=120,
+        self.fps=ScrubField("Render FPS", engine.render_fps.get(), 1, 240, default=30, step=1,
+                             unit=" fps",
                              tooltip="Frame rate written to the exported file")
         self.use_source_size=QCheckBox("Use source size")
         self.use_source_size.setChecked(engine.render_use_source_size.get())
-        self.width=SliderField("Width", max(2,engine.render_width.get()), 2, 16384, default=1280,
-                               step=2, unit=" px", soft_min=240, soft_max=4096,
+        self.width=ScrubField("Width", max(2,engine.render_width.get()), 2, 16384, default=1280,
+                               step=2, unit=" px",
                                tooltip="Pixels across the exported frame")
-        self.height=SliderField("Height", max(2,engine.render_height.get()), 2, 16384, default=720,
-                                step=2, unit=" px", soft_min=135, soft_max=2304,
+        self.height=ScrubField("Height", max(2,engine.render_height.get()), 2, 16384, default=720,
+                                step=2, unit=" px",
                                 tooltip="Pixels down the exported frame")
         self.format=QComboBox(); self.format.addItems(["mp4","avi","gif","png","jpg","jpeg"])
         self.format.setCurrentText(engine.render_format.get())
@@ -193,6 +193,46 @@ class MarkerListDialog(QDialog):
 
     def _jump(self, item):
         self.session.go_to_marker(self._marker_id(item))
+
+
+class PasteAttributesDialog(QDialog):
+    """Choose which attribute groups Paste Attributes transfers to the selected clips."""
+
+    PARTS = (("transform", "Transform", "Position, scale, rotation, anchor and opacity"),
+             ("effects", "Effects", "The effect stack, colour adjustments included"),
+             ("animations", "Animations", "Animation preset instances"),
+             ("audio", "Audio", "Volume, gain, fades and fade curves"),
+             ("text", "Text style", "Font, size, colours, outline, shadow and spacing"))
+
+    def __init__(self, parent=None, available=None):
+        super().__init__(parent)
+        self.setWindowTitle("Paste Attributes")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 14)
+        layout.setSpacing(8)
+        title = QLabel("Copy the chosen attributes from the copied clip onto every selected clip.")
+        title.setWordWrap(True)
+        layout.addWidget(title)
+        self.boxes = {}
+        for key, label, tip in self.PARTS:
+            box = QCheckBox(label)
+            box.setToolTip(tip)
+            box.setChecked(key != "text")
+            box.setEnabled(True if available is None else key in available)
+            self.boxes[key] = box
+            layout.addWidget(box)
+        note = QLabel("Effects that cannot run on a target clip's media type are skipped.")
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #8a8f9a;")
+        layout.addWidget(note)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                                   QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def parts(self):
+        return {key for key, box in self.boxes.items() if box.isChecked() and box.isEnabled()}
 
 
 class AboutDialog(QDialog):

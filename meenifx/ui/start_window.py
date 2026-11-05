@@ -450,9 +450,11 @@ def show_in_folder(path):
 
 
 class PreferencesDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, section=None):
         super().__init__(parent)
-        self.setWindowTitle("Preferences")
+        self.setWindowTitle("Preferences" if section != "previews"
+                            else "Preferences \u2013 Effect Previews")
+        self._section = section
         layout = QVBoxLayout(self)
         self.startup = QCheckBox("Show start window on startup")
         self.startup.setChecked(show_on_startup())
@@ -473,14 +475,22 @@ class PreferencesDialog(QDialog):
         row.addWidget(self.rec_folder, 1)
         row.addWidget(browse)
         layout.addLayout(row)
+        self.rec_float = QCheckBox("Show floating recording controls over other applications")
+        self.rec_float.setChecked(bool(self._recorder_settings.floating_bar))
+        self.rec_float.setToolTip("Off by default: the main window shows the recording time and "
+                                 "the stop button, so switching applications stays unobstructed")
+        layout.addWidget(self.rec_float)
         engine = getattr(parent, "engine", None)
         if engine is not None:
-            from .widgets import SliderField
-            self.fps_cap = SliderField("Playback FPS cap", engine.playback_fps.get(), 12, 60, default=30, step=1,
+            from .widgets import ScrubField
+            self.fps_cap = ScrubField("Playback FPS cap", engine.playback_fps.get(), 12, 60, default=30, step=1,
                                        label_width=110, tooltip="Upper limit for preview playback refresh")
             self.fps_cap.edited.connect(lambda value: engine.playback_fps.set(int(round(value))))
             layout.addWidget(self.fps_cap)
         self._build_playback_section(layout)
+        self._build_paste_section(layout)
+        self._build_caption_section(layout)
+        self._build_preview_section(layout)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -616,12 +626,247 @@ class PreferencesDialog(QDialog):
         if folder:
             self.rec_folder.setText(folder)
 
+    # ------------------------------------------------------------ smart paste
+    def _build_paste_section(self, layout):
+        """Smart Paste: what Ctrl+V does with a clipboard picture or file.
+
+        These values live in the app's INI file (``PasteSettings``): they describe how a
+        paste behaves, not what the project contains, so they never travel in ``.mfxpf``.
+        """
+        from PyQt6.QtWidgets import QDoubleSpinBox, QFormLayout, QGroupBox
+        from .smart_paste import PasteSettings
+        self.paste_settings = PasteSettings.load()
+        settings = self.paste_settings
+
+        group = QGroupBox("Smart Paste", self)
+        form = QFormLayout(group)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+
+        self.paste_seconds = QDoubleSpinBox()
+        self.paste_seconds.setRange(0.2, 120.0)
+        self.paste_seconds.setSingleStep(0.5)
+        self.paste_seconds.setDecimals(1)
+        self.paste_seconds.setSuffix(" s")
+        self.paste_seconds.setValue(settings.seconds)
+        self.paste_seconds.setToolTip("Clip length for an image pasted from the clipboard")
+        form.addRow("Default image duration", self.paste_seconds)
+
+        self.paste_placement = QComboBox()
+        self.paste_placement.addItem("At the playhead", "playhead")
+        self.paste_placement.addItem("After the selected clip", "after")
+        self.paste_placement.setCurrentIndex(max(0, self.paste_placement.findData(settings.placement)))
+        form.addRow("Paste placement", self.paste_placement)
+
+        self.paste_select = QCheckBox("Select the pasted clip")
+        self.paste_select.setChecked(settings.select)
+        form.addRow("", self.paste_select)
+
+        self.paste_fit = QCheckBox("Fit pasted images to the frame")
+        self.paste_fit.setChecked(settings.fit)
+        self.paste_fit.setToolTip("Reset the pasted picture's transform to the centred, 100 % fit")
+        form.addRow("", self.paste_fit)
+
+        note = QLabel("Ctrl+V in a text field still pastes text, and in the Media panel it only "
+                      "adds the file without touching the timeline.")
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #8a8f9a;")
+        form.addRow("", note)
+        layout.addWidget(group)
+
+    def _apply_paste_settings(self):
+        from .smart_paste import PasteSettings
+        PasteSettings(float(self.paste_seconds.value()),
+                      str(self.paste_placement.currentData() or "playhead"),
+                      self.paste_select.isChecked(),
+                      self.paste_fit.isChecked()).save()
+
+    # ----------------------------------------------------------- caption models
+    def _build_caption_section(self, layout):
+        """Speech models downloaded for Auto Captions: they can be deleted here."""
+        from PyQt6.QtWidgets import QGroupBox, QFormLayout
+        from ..captions import whisper
+        self._caption_whisper = whisper
+
+        group = QGroupBox("Captions \u2013 Speech Models", self)
+        form = QFormLayout(group)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        backend = ("faster-whisper is installed; transcription runs locally and offline."
+                   if whisper.backend_available() else
+                   "faster-whisper is not installed - Auto Captions cannot transcribe. "
+                   "Install it with:  pip install faster-whisper")
+        self.caption_backend = QLabel(backend)
+        self.caption_backend.setWordWrap(True)
+        form.addRow("Engine", self.caption_backend)
+        folder = QLabel(whisper.MODEL_DIR)
+        folder.setWordWrap(True)
+        folder.setStyleSheet("color: #8a8f9a;")
+        form.addRow("Models folder", folder)
+        self._caption_models_host = QWidget()
+        self._caption_models_layout = QVBoxLayout(self._caption_models_host)
+        self._caption_models_layout.setContentsMargins(0, 0, 0, 0)
+        self._caption_models_layout.setSpacing(4)
+        form.addRow("Downloaded", self._caption_models_host)
+        layout.addWidget(group)
+        self._refresh_caption_models()
+
+    def _refresh_caption_models(self):
+        whisper = self._caption_whisper
+        layout = self._caption_models_layout
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        models = whisper.installed_models()
+        if not models:
+            empty = QLabel("No model downloaded yet")
+            empty.setStyleSheet("color: #8a8f9a;")
+            layout.addWidget(empty)
+            return
+        for name, size in models:
+            row = QWidget()
+            line = QHBoxLayout(row)
+            line.setContentsMargins(0, 0, 0, 0)
+            label = QLabel(f"{name}  ({size / (1024 * 1024):.0f} MB)")
+            line.addWidget(label, 1)
+            delete = QPushButton("Delete")
+            delete.clicked.connect(lambda _checked=False, model=name: self._delete_caption_model(model))
+            line.addWidget(delete)
+            layout.addWidget(row)
+
+    def _delete_caption_model(self, name):
+        answer = QMessageBox.question(self, "Delete speech model",
+                                      f"Delete the downloaded {name} model?\n\n"
+                                      "Auto Captions will ask to download it again next time.")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._caption_whisper.delete_model(name)
+        self._refresh_caption_models()
+
+    # ------------------------------------------------------ effect preview images
+    def _build_preview_section(self, layout):
+        """Appearance > Effect Previews: the reference image and how cards draw it.
+
+        These values live in the app's INI file (``PreviewSettings``), never in a project:
+        changing the reference picture must not touch media, exports or ``.mfxpf`` files.
+        """
+        from PyQt6.QtWidgets import QGroupBox, QFormLayout
+        from .. import thumbnails as THUMBS
+        self.preview_settings = THUMBS.PreviewSettings.load()
+
+        group = QGroupBox("Appearance \u2013 Effect Previews", self)
+        form = QFormLayout(group)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+
+        self.preview_image = QComboBox()
+        self.preview_image.addItem("Default (figure_cafe.png)", "default")
+        self.preview_image.addItem("Custom image", "custom")
+        self.preview_image.setCurrentIndex(
+            max(0, self.preview_image.findData(self.preview_settings.image_mode)))
+        form.addRow("Preview image", self.preview_image)
+
+        row = QHBoxLayout()
+        self.preview_path = QLineEdit(self.preview_settings.custom_path)
+        self.preview_path.setReadOnly(True)
+        self.preview_path.setPlaceholderText(str(THUMBS.default_reference()
+                                                 or "figure_cafe.png not found"))
+        choose = QPushButton("Choose Image\u2026")
+        choose.clicked.connect(self._choose_preview_image)
+        reset = QPushButton("Reset to Default")
+        reset.clicked.connect(self._reset_preview_image)
+        row.addWidget(self.preview_path, 1)
+        row.addWidget(choose)
+        row.addWidget(reset)
+        form.addRow("", row)
+
+        self.preview_thumb = QLabel()
+        self.preview_thumb.setFixedSize(168, 112)
+        self.preview_thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        form.addRow("Preview", self.preview_thumb)
+
+        self.preview_background = QComboBox()
+        for label, value in (("Checkerboard", "checker"), ("Dark", "dark"),
+                             ("Light", "light")):
+            self.preview_background.addItem(label, value)
+        self.preview_background.setCurrentIndex(
+            max(0, self.preview_background.findData(self.preview_settings.background)))
+        form.addRow("Preview background", self.preview_background)
+
+        self.preview_quality = QComboBox()
+        for label, value in (("Low", "low"), ("Medium", "medium"), ("High", "high")):
+            self.preview_quality.addItem(label, value)
+        self.preview_quality.setCurrentIndex(
+            max(0, self.preview_quality.findData(self.preview_settings.quality)))
+        form.addRow("Thumbnail quality", self.preview_quality)
+
+        self.preview_image.currentIndexChanged.connect(self._refresh_preview_thumb)
+        self.preview_background.currentIndexChanged.connect(self._refresh_preview_thumb)
+        layout.addWidget(group)
+        self._refresh_preview_thumb()
+
+    def _preview_form_settings(self):
+        """The values currently shown in the section (not yet saved)."""
+        from .. import thumbnails as THUMBS
+        return THUMBS.PreviewSettings(
+            image_mode=str(self.preview_image.currentData() or "default"),
+            custom_path=self.preview_path.text().strip(),
+            background=str(self.preview_background.currentData() or "checker"),
+            quality=str(self.preview_quality.currentData() or "medium"))
+
+    def _refresh_preview_thumb(self, *_args):
+        from PyQt6.QtGui import QPixmap
+        from .. import thumbnails as THUMBS
+        settings = self._preview_form_settings()
+        ratio = self.preview_thumb.devicePixelRatioF() or 1.0
+        size = self.preview_thumb.size()
+        image = THUMBS.reference_preview(int(size.width() * ratio),
+                                        int(size.height() * ratio), settings)
+        if image is None:
+            self.preview_thumb.setText("Reference image missing")
+            self.preview_thumb.setPixmap(QPixmap())
+            return
+        pixmap = QPixmap.fromImage(image)
+        pixmap.setDevicePixelRatio(ratio)
+        self.preview_thumb.setPixmap(pixmap)
+
+    def _choose_preview_image(self):
+        path = open_file(self, "Choose preview image", "",
+                         "Images (*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff);;All files (*)")
+        if not path:
+            return
+        from .. import thumbnails as THUMBS
+        if not THUMBS._readable(path):
+            QMessageBox.warning(self, "Preview image",
+                                "That image cannot be read by this build of meeniFX.\n"
+                                "The default reference picture will be used instead.")
+            return
+        self.preview_path.setText(path)
+        self.preview_image.setCurrentIndex(max(0, self.preview_image.findData("custom")))
+        self._refresh_preview_thumb()
+
+    def _reset_preview_image(self):
+        self.preview_path.clear()
+        self.preview_image.setCurrentIndex(max(0, self.preview_image.findData("default")))
+        self._refresh_preview_thumb()
+
+    def _apply_preview_settings(self):
+        """Persist the preview values and ask the window to rebuild its thumbnails."""
+        self.preview_settings = self._preview_form_settings()
+        self.preview_settings.save()
+        parent = self.parent()
+        reload_thumbs = getattr(parent, "_reload_effect_previews", None)
+        if callable(reload_thumbs):
+            reload_thumbs()
+
     def accept(self):
         set_show_on_startup(self.startup.isChecked())
         set_prune_missing_on_startup(self.prune_missing.isChecked())
         self._recorder_settings.folder = self.rec_folder.text().strip()
+        self._recorder_settings.floating_bar = self.rec_float.isChecked()
         self._recorder_settings.save()
         self._apply_playback_settings()
+        self._apply_paste_settings()
+        self._apply_preview_settings()
         super().accept()
 
     def _apply_playback_settings(self):

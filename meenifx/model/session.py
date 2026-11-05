@@ -42,6 +42,7 @@ class TimelineSession:
         self.loop_changed = Signal()
         self.changed = Signal()
         self.play_toggle_requested = Signal()
+        self.clip_copied = Signal()      # the in-app clip clipboard changed (Smart Paste)
         self.status = Signal()
         # view-facing signals; a live TimelineWidget subscribes, a hidden panel simply has no listener
         self.redraw_requested = Signal()
@@ -190,23 +191,35 @@ class TimelineSession:
         return [clip for clip in (self.timeline.find_clip(i) for i in ids) if clip is not None]
 
     def can_link(self, ids=None):
-        """Two or more unlinked clips from one media file, on different track types."""
+        """Two or more unlocked clips that are not already one complete group.
+
+        Clips do not have to share a media file: linking separately recorded video and
+        audio is the point of the command. Track types may repeat too, so a whole
+        multi-camera or multi-mic selection can be linked where the model allows it.
+        Locked tracks are refused because linking would change their clip metadata.
+        """
         clips = self._clips_for(ids)
         if len(clips) < 2:
             return False
-        if len({clip.track.type for clip in clips}) < 2:
-            return False
-        if len({clip.source_path for clip in clips}) != 1:
+        if any(clip.track.locked for clip in clips):
             return False
         groups = {clip.link_id for clip in clips if clip.link_id}
-        return not groups or len(groups) > 1 or any(not c.link_id for c in clips)
+        if len(groups) == 1 and all(clip.link_id for clip in clips):
+            # The selection is already one group: there is nothing to create.
+            if len(self.timeline.link_group(next(iter(groups)))) == len(clips):
+                return False
+        return True
 
     def can_unlink(self, ids=None):
         clips = self._clips_for(ids)
         return any(clip.link_id and len(self.timeline.link_group(clip.link_id)) > 1 for clip in clips)
 
     def link_selected(self, ids=None):
-        """Link the selected clips into one group (positions are never changed)."""
+        """Link the selected clips into one group (positions are never changed).
+
+        A fresh id is allocated, so old groups stay valid for any members that were not
+        selected. Linking is one undo step and never moves, trims or retimes a clip.
+        """
         clip_ids = [clip.id for clip in self._clips_for(ids)]
         if not self.can_link(clip_ids):
             return 0
@@ -215,7 +228,7 @@ class TimelineSession:
         def action():
             holder["link"] = self.timeline.assign_link(clip_ids)
 
-        self.stack.run("Link video and audio", action)
+        self.stack.run("Link selected clips", action)
         link = holder.get("link") or 0
         if link:
             self.set_selection(set(clip_ids))
@@ -224,12 +237,17 @@ class TimelineSession:
         return link
 
     def unlink_selected(self, ids=None):
-        """Remove the link for good; clips stay where they are."""
+        """Remove the link for good; clips stay where they are.
+
+        Only the selected members leave the group. In a group of three, unlinking one
+        clip leaves the other two linked together; unlinking the last two dissolves the
+        group. Timing, source ranges, effects and keyframes are never touched.
+        """
         clip_ids = [clip.id for clip in self._clips_for(ids)]
         if not self.can_unlink(clip_ids):
             return False
         tl = self.timeline
-        self.stack.run("Unlink video and audio", lambda: tl.clear_link(clip_ids))
+        self.stack.run("Unlink selected clips", lambda: tl.clear_link(clip_ids))
         self.status.emit("Clips unlinked")
         self.request_redraw()
         return True
@@ -355,6 +373,25 @@ class TimelineSession:
                     found.add(partner.id)
         return sorted(found)
 
+    def _detach_split_links(self, new_ids):
+        """Give a split pair's right-hand pieces their own link id.
+
+        Splitting a linked video/audio pair used to leave all four pieces in one group, so
+        dragging the new pair also dragged the old one. The left pair keeps the old id and
+        every new pair (same start, at least two lanes) gets a fresh one.
+        """
+        created = [self.timeline.find_clip(cid) for cid in new_ids]
+        created = [clip for clip in created if clip is not None and clip.link_id]
+        groups = {}
+        for clip in created:
+            groups.setdefault((clip.link_id, clip.timeline_start), []).append(clip)
+        for group in groups.values():
+            if len(group) < 2:
+                continue
+            fresh = self.timeline.new_link_id()
+            for clip in group:
+                clip.link_id = fresh
+
     def split_at_playhead(self):
         frame = self.playhead
         ids = self._editable_ids(self.selected) or self._editable_ids(c.id for c in self.timeline.all_clips())
@@ -368,6 +405,7 @@ class TimelineSession:
                 new_id = self.timeline.split_clip(cid, frame)
                 if new_id is not None:
                     pairs.append((cid, new_id))
+            self._detach_split_links([new_id for _cid, new_id in pairs])
 
         self.stack.run("Split clips" if len(targets) > 1 else "Split clip", action)
         for pair in pairs:
@@ -382,6 +420,7 @@ class TimelineSession:
                 new_id = self.timeline.split_clip(cid, frame)
                 if new_id is not None:
                     pairs.append((cid, new_id))
+            self._detach_split_links([new_id for _cid, new_id in pairs])
 
         self.stack.run("Split clips" if len(targets) > 1 else "Split clip", action)
         for pair in pairs:
@@ -944,6 +983,55 @@ class TimelineSession:
     def set_double_click_opens_graph(self, on):
         self.double_click_opens_graph.set(bool(on))
 
+    def set_clip_duration(self, clip_id, duration):
+        """Set an exact clip length in frames, trimming the right edge.
+
+        Stills and text simply change length; media clips are limited by the frames their
+        source still has, exactly like dragging the right edge. A linked pair changes
+        together, so its audio never drifts out of sync.
+        """
+        clip = self.timeline.find_clip(clip_id)
+        if clip is None or clip.track.locked:
+            return 0
+        target = max(1, int(duration))
+        delta = target - clip.duration
+        if delta == 0:
+            return clip.duration
+        before = self.timeline.snapshot()
+        also = self.link_partners(clip)
+        self.timeline.apply_trim(before, clip_id, "right", delta, also=also)
+        self.stack.commit("Set clip duration", before)
+        self.changed.emit()
+        result = self.timeline.find_clip(clip_id)
+        return result.duration if result is not None else 0
+
+    def delete_gap(self):
+        """Close the empty space before each selected clip on its own track."""
+        ids = self._editable_ids(self.selected)
+        if not ids:
+            return False
+        timeline = self.timeline
+        tracks = {clip.track for clip in (timeline.find_clip(i) for i in ids) if clip is not None}
+
+        def action():
+            for track in tracks:
+                ordered = track.sorted_clips()
+                for index, clip in enumerate(ordered):
+                    if clip.id not in ids:
+                        continue
+                    previous_end = max((other.end for other in ordered
+                                        if other is not clip and other.end <= clip.timeline_start),
+                                       default=0)
+                    gap = clip.timeline_start - previous_end
+                    if gap <= 0:
+                        continue
+                    for other in ordered:
+                        if other.timeline_start >= clip.timeline_start:
+                            other.timeline_start = max(0, other.timeline_start - gap)
+            return True
+
+        return self.stack.run("Delete gap", action)
+
     def apply_clip_settings(self, clip_id, *, speed=None, reverse=None, loop=None, volume=None):
         clip = self.timeline.find_clip(clip_id)
         if clip is None or clip.track.locked:
@@ -1047,6 +1135,7 @@ class TimelineSession:
         if not clips:
             return False
         TimelineSession._clipboard = [self.timeline.clip_record(c) for c in clips]
+        self.clip_copied.emit()
         self.status.emit(f"Copied {len(clips)} clip(s)")
         return True
 
@@ -1068,6 +1157,146 @@ class TimelineSession:
         frame, mode, tl = self.playhead, self.overlap_mode, self.timeline
         ids = self.stack.run("Paste", lambda: tl.paste_records(records, frame, anchor, mode))
         self.set_selection(set(ids))
+
+    # ------------------------------------------------------ effects & attributes
+    _attributes = None
+
+    def copy_effects(self, ids=None):
+        """Copy the effect stack (and animations) of the first selected clip."""
+        clips = self._selected_clips() if ids is None else [
+            c for c in (self.timeline.find_clip(i) for i in ids) if c is not None]
+        if not clips:
+            return False
+        source = clips[0]
+        TimelineSession._attributes = {
+            "effects": clone_effects(source.effects),
+            "presets": copy.deepcopy(getattr(source, "presets", []) or []),
+            "transform": copy.deepcopy(source.transform),
+            "transform_meta": copy.deepcopy(source.transform_meta),
+            "audio": {"volume": source.volume, "gain": copy.deepcopy(source.gain),
+                      "fade_in": source.fade_in, "fade_out": source.fade_out,
+                      "fade_in_curve": source.fade_in_curve,
+                      "fade_out_curve": source.fade_out_curve},
+            "text": copy.deepcopy(source.text) if source.is_text else None,
+        }
+        self.status.emit(f"Copied effects from {source.name}")
+        return True
+
+    def copy_attributes(self, ids=None):
+        """Copy everything Paste Attributes can transfer from the first selected clip."""
+        return self.copy_effects(ids)
+
+    @staticmethod
+    def _compatible_effects(entries, clip, resolver):
+        """Drop effects whose declaration does not cover this clip's media type."""
+        if resolver is None:
+            return clone_effects(entries)
+        allowed = "audio" if (clip.track is not None and clip.track.type == "audio") else "video"
+        kept = []
+        for entry in entries or ():
+            runtime = resolver.get(entry.get("effect_id"))
+            if runtime is not None and hasattr(runtime, "supports_track_type") \
+                    and not runtime.supports_track_type(allowed):
+                continue
+            kept.append(copy.deepcopy(entry))
+        return kept
+
+    def paste_effects(self, ids=None, resolver=None):
+        """Replace the selected clips' effect stacks with the copied one."""
+        source = TimelineSession._attributes
+        if not source:
+            self.status.emit("Copy effects first")
+            return 0
+        ids = self.with_links(ids) if ids is not None else self.selected
+        clips = [clip for clip in (self.timeline.find_clip(i) for i in ids)
+                 if clip is not None and not clip.track.locked]
+        if not clips:
+            return 0
+        copied = source
+
+        def action():
+            for candidate in clips:
+                target = self.timeline.find_clip(candidate.id)
+                if target is None:
+                    continue
+                target.effects = self._compatible_effects(copied["effects"], target, resolver)
+                target.presets = copy.deepcopy(copied["presets"])
+            return len(clips)
+
+        self.stack.run("Paste effects", action)
+        self.changed.emit()
+        self.status.emit(f"Effects pasted onto {len(clips)} clip(s)")
+        return len(clips)
+
+    def paste_attributes(self, parts, ids=None, resolver=None):
+        """Apply chosen attribute groups from the copied clip; one undo step."""
+        source = TimelineSession._attributes
+        if not source:
+            self.status.emit("Copy attributes first")
+            return 0
+        parts = {str(part) for part in (parts or ())}
+        ids = self.with_links(ids) if ids is not None else self.selected
+        clips = [clip for clip in (self.timeline.find_clip(i) for i in ids)
+                 if clip is not None and not clip.track.locked]
+        if not clips or not parts:
+            return 0
+
+        def action():
+            for candidate in clips:
+                target = self.timeline.find_clip(candidate.id)
+                if target is None:
+                    continue
+                if "transform" in parts and isinstance(source.get("transform"), dict):
+                    T.ensure_transform(target)
+                    for name, value in copy.deepcopy(source["transform"]).items():
+                        if name in ("flip_h", "flip_v"):
+                            target.transform[name] = bool(value)
+                        else:
+                            target.transform[name] = value
+                    target.transform_meta = copy.deepcopy(source.get("transform_meta") or {})
+                if "effects" in parts:
+                    target.effects = self._compatible_effects(source["effects"], target, resolver)
+                if "animations" in parts:
+                    target.presets = copy.deepcopy(source.get("presets") or [])
+                if "audio" in parts:
+                    audio = source.get("audio") or {}
+                    for name in ("volume", "gain", "fade_in", "fade_out",
+                                 "fade_in_curve", "fade_out_curve"):
+                        if name in audio:
+                            setattr(target, name, copy.deepcopy(audio[name]))
+                    target.clamp_fades("in")
+                if "text" in parts and target.is_text and isinstance(source.get("text"), dict):
+                    for name, value in copy.deepcopy(source["text"]).items():
+                        if name in ("text", "keys", "caption"):
+                            continue
+                        target.text[name] = value
+            return len(clips)
+
+        self.stack.run("Paste attributes", action)
+        self.changed.emit()
+        self.status.emit(f"Attributes pasted onto {len(clips)} clip(s)")
+        return len(clips)
+
+    def remove_all_effects(self, ids=None):
+        """Clear the effects and animations of the selected clips (one undo step)."""
+        ids = self.with_links(ids) if ids is not None else self.selected
+        clips = [clip for clip in (self.timeline.find_clip(i) for i in ids)
+                 if clip is not None and not clip.track.locked]
+        clips = [clip for clip in clips if clip.effects or getattr(clip, "presets", None)]
+        if not clips:
+            return 0
+
+        def action():
+            for candidate in clips:
+                target = self.timeline.find_clip(candidate.id)
+                if target is not None:
+                    target.effects = []
+                    target.presets = []
+            return len(clips)
+
+        self.stack.run("Remove all effects", action)
+        self.changed.emit()
+        return len(clips)
 
     def duplicate_selected(self):
         clips = self._selected_clips()
@@ -1374,6 +1603,84 @@ class TimelineSession:
             self.status.emit(f"{name} applied to {added} clip{'s' if added != 1 else ''}")
         return added
 
+    def apply_animation(self, presets, ids=None, family_program=""):
+        """Apply one animation family - one variant, or an In+Out pair - atomically.
+
+        The family's previous instance is replaced in the same undo step, so switching
+        Slide from In to Out edits that animation instead of stacking a second one.
+        """
+        from . import preset_library as LIB
+        from . import presets as PM
+
+        clips = [clip for clip in (self.timeline.find_clip(cid) for cid in (ids or []))
+                 if clip is not None and clip.track is not None
+                 and clip.track.type == "video" and not clip.track.locked]
+        presets = [preset for preset in (presets or []) if preset]
+        if not clips or not presets:
+            return 0
+        specs = [LIB.preset_spec(preset, None) for preset in presets]
+        fps = self.timeline.fps
+        added = 0
+
+        def action():
+            nonlocal added
+            for candidate in clips:
+                target = self.timeline.find_clip(candidate.id)
+                if target is None:
+                    continue
+                if family_program:
+                    PM.instances(target)[:] = [row for row in PM.instances(target)
+                                               if row.get("program") != family_program]
+                for preset, spec in zip(presets, specs):
+                    category, program, args, knobs = spec
+                    instance_knobs = dict(knobs)
+                    if not target.is_text:
+                        instance_knobs["unit"] = "whole"
+                    PM.add(target, preset["id"], category, program, args, instance_knobs,
+                           duration=PM.default_duration(target, fps, category),
+                           name=preset.get("name") or preset.get("id", "Animation"))
+                    added += 1
+
+        name = presets[0].get("name") or "animation"
+        self.stack.run(f"Apply {name}", action)
+        if added:
+            self.status.emit(f"{name} applied to {added} clip{'s' if added != 1 else ''}")
+        return added
+
+    def switch_preset_variant(self, clip_id, index, label, preset_id, category, program,
+                              args=None, name=""):
+        """Turn one instance into another variant of its animation, in place.
+
+        Switching Slide from In to Out (or changing its direction) edits the instance the
+        clip already has: its knobs, its window and its place in the stack survive, and
+        no second animation is stacked on top.
+        """
+        from . import presets as PM
+
+        clip = self.timeline.find_clip(clip_id)
+        if clip is None or not 0 <= int(index) < len(PM.instances(clip)):
+            return False
+        if category not in PM.CATEGORIES:
+            return False
+
+        def action():
+            target = self.timeline.find_clip(clip_id)
+            if target is None or not 0 <= int(index) < len(PM.instances(target)):
+                return
+            instance = PM.instances(target)[int(index)]
+            instance["preset"] = str(preset_id)
+            instance["category"] = category
+            instance["program"] = str(program)
+            instance["args"] = dict(args or {})
+            if name:
+                instance["name"] = str(name)
+            if category == "in":
+                instance["start"] = 0
+            PM.set_range(instance, None, None, target)
+
+        self.stack.run(label, action)
+        return True
+
     def remove_preset(self, clip_id, index):
         """Drop one instance from a clip (one undo step)."""
         from . import presets as PM
@@ -1623,16 +1930,304 @@ class TimelineSession:
         self.status.emit("Text clip added")
         return clip.id
 
-    def add_media(self, entries, start=None, track=None, find_free=False, reveal=True):
-        """Place media entries (dict name/path/duration/type) one after another."""
+    def add_media(self, entries, start=None, track=None, find_free=False, reveal=True,
+                  select=True, fit=False, label="Import media"):
+        """Place media entries (dict name/path/duration/type) one after another.
+
+        `fit` scales the newly created stills to the project frame, and it happens inside
+        the same undo entry as the insert: one paste is one Undo, never two.
+        """
         tl = self.timeline
-        ids = self.stack.run("Import media", lambda: tl.place_clips(entries, start, track, find_free))
+
+        def action():
+            ids = tl.place_clips(entries, start, track, find_free)
+            if fit:
+                for clip_id in ids:
+                    clip = tl.find_clip(clip_id)
+                    if clip is not None and clip.kind == "image":
+                        T.fit_frame(clip)
+            return ids
+
+        ids = self.stack.run(label, action)
         if ids:
-            self.set_selection(set(ids))
+            if select:
+                self.set_selection(set(ids))
             first = tl.find_clip(ids[0])
             if reveal and first is not None:
                 self.reveal_requested.emit(first.timeline_start)
         return ids
+
+    def update_captions(self, edits, label="Edit captions"):
+        """Apply transcript/editor changes in one undo step.
+
+        Each edit is {"id": clip_id, "text": str|None, "start": frame|None, "end": frame|None};
+        missing keys leave that part of the caption alone.
+        """
+        from ..captions import model as caption_model
+
+        edits = [dict(edit) for edit in edits or ()]
+        if not edits:
+            return False
+
+        def action():
+            for edit in edits:
+                clip = self.timeline.find_clip(edit.get("id"))
+                if clip is None or not caption_model.is_caption(clip):
+                    continue
+                if edit.get("start") is not None:
+                    clip.timeline_start = max(0, int(edit["start"]))
+                if edit.get("end") is not None:
+                    clip.duration = max(2, int(edit["end"]) - clip.timeline_start)
+                if edit.get("text") is not None:
+                    TXT.set_content(clip, str(edit["text"]), 0)
+                clip.clamp_fades("in")
+
+        changed = self.stack.run(label, action)
+        if changed:
+            self.changed.emit()
+        return changed
+
+    # ------------------------------------------------------------------ normalize
+    def normalize_audio(self, targets, label="Normalize audio"):
+        """Set each (clip_id, gain_db) as one undo step; peak normalization, not loudness."""
+        from .animation import clamp_gain_db
+
+        targets = [(int(cid), float(db)) for cid, db in (targets or ())]
+        if not targets:
+            return False
+
+        def action():
+            for clip_id, gain_db in targets:
+                clip = self.timeline.find_clip(clip_id)
+                if clip is None or clip.track.locked:
+                    continue
+                clip.gain = clamp_gain_db(gain_db)
+
+        changed = self.stack.run(label, action)
+        if changed:
+            self.changed.emit()
+        return changed
+
+    # -------------------------------------------------------------- remove silences
+    def remove_silence(self, clip_id, cuts, *, members=None, crossfade_frames=0,
+                       ripple=True, label="Remove dead silence"):
+        """Cut silent ranges (seconds, relative to the analysed clip) from a group.
+
+        `members` is the authoritative set of clips the dialog chose to include; when it
+        is omitted the clip's link group is used. Every cut is converted to absolute
+        timeline frames once, then all members are split at those exact frames. Only the
+        span every member covers is edited, so a cut can never land where one member is
+        missing and pull the group out of sync. Surviving pieces are re-linked per
+        retained segment (not merely per start frame, so offset pairs keep working) with
+        fresh ids. Ripple closes gaps on the included tracks only; other tracks and all
+        source files are untouched. The whole edit is one undo step.
+        """
+        timeline = self.timeline
+        clip = timeline.find_clip(clip_id)
+        if clip is None:
+            return 0
+        fps = max(1, timeline.fps)
+        if members is None:
+            group = timeline.link_group(clip.link_id) if clip.link_id else [clip]
+        else:
+            group = [timeline.find_clip(cid) for cid in members]
+            group = [member for member in group if member is not None]
+            if not any(member.id == clip.id for member in group):
+                group.insert(0, clip)
+        unique = []
+        for member in group:
+            if all(member.id != other.id for other in unique):
+                unique.append(member)
+        locked = next((member for member in unique if member.track.locked), None)
+        if locked is not None:
+            self.status.emit(f"{locked.track.name} is locked — unlock it to remove dead silence")
+            return 0
+        window_start = max(member.timeline_start for member in unique)
+        window_end = min(member.end for member in unique)
+        if window_end - window_start < 2:
+            self.status.emit("The included clips do not overlap, so there is nothing to cut together")
+            return 0
+        # The detected cuts are relative to the analysed clip, but every member is split
+        # on the same absolute frame; one plan, one rounding rule.
+        ranges = []
+        for start_seconds, end_seconds in cuts or ():
+            first = clip.timeline_start + int(round(float(start_seconds) * fps))
+            last = clip.timeline_start + int(round(float(end_seconds) * fps))
+            first = max(window_start, int(first))
+            last = min(window_end, int(last))
+            if last - first >= 1:
+                ranges.append((first, last))
+        if not ranges:
+            return 0
+        merged = []
+        for first, last in sorted(ranges):
+            if merged and first <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], last))
+            else:
+                merged.append((first, last))
+        ranges = merged
+        spans = [(member.id, member.track, member.timeline_start, member.end)
+                 for member in unique]
+        removed_frames = 0
+
+        def action():
+            nonlocal removed_frames
+            boundaries = sorted({frame for pair in ranges for frame in pair})
+            pieces = []
+            piece_ids = set()
+            for member_id, track, start, end in spans:
+                current = timeline.find_clip(member_id)
+                for boundary in boundaries:
+                    if current is None:
+                        break
+                    if current.timeline_start < boundary < current.end:
+                        new_id = timeline.split_clip(current.id, boundary)
+                        current = timeline.find_clip(new_id) if new_id is not None else None
+                for candidate in list(track.clips):
+                    if (candidate.id not in piece_ids and candidate.timeline_start >= start
+                            and candidate.end <= end):
+                        pieces.append(candidate)
+                        piece_ids.add(candidate.id)
+            doomed = [piece for piece in pieces
+                      if any(piece.timeline_start < last and piece.end > first
+                             for first, last in ranges)]
+            doomed_ids = {piece.id for piece in doomed}
+            survivors = [piece for piece in pieces if piece.id not in doomed_ids]
+            removed_frames = sum(piece.duration for piece in doomed)
+
+            # A piece that ends where a cut begins gets a fade-out, and one that starts at
+            # the cut's end gets a fade-in: a short crossfade removes the click a hard cut
+            # would leave. Timings are the pre-ripple positions, so this runs before the
+            # delete moves anything.
+            if crossfade_frames > 0:
+                cut_starts = {first for first, _last in ranges}
+                cut_ends = {last for _first, last in ranges}
+                for piece in survivors:
+                    if piece.end in cut_starts:
+                        piece.fade_out = min(int(crossfade_frames), piece.duration)
+                        piece.clamp_fades("out")
+                    if piece.timeline_start in cut_ends:
+                        piece.fade_in = min(int(crossfade_frames), piece.duration)
+                        piece.clamp_fades("in")
+
+            # Re-link survivors per retained segment, before the ripple shifts them, so a
+            # pair keeps one id per surviving piece even when the members started apart.
+            retained = []
+            cursor = window_start
+            for first, last in ranges:
+                if first > cursor:
+                    retained.append((cursor, first))
+                cursor = max(cursor, last)
+            if cursor < window_end:
+                retained.append((cursor, window_end))
+            for piece in survivors:
+                piece.link_id = 0
+            for segment_start, segment_end in retained:
+                shared = [piece for piece in survivors
+                          if piece.timeline_start < segment_end and piece.end > segment_start]
+                if len(shared) >= 2:
+                    new_link = timeline.new_link_id()
+                    for piece in shared:
+                        piece.link_id = new_link
+            timeline.delete_clips(doomed_ids, ripple=ripple)
+
+        self.stack.run(label, action)
+        if removed_frames:
+            self.set_selection(set())
+            self.status.emit(f"Removed {removed_frames / float(fps):.2f}s of silence")
+        self.changed.emit()
+        return len(ranges)
+
+    # ------------------------------------------------------------------- captions
+    def caption_source_range(self, source="timeline"):
+        """(start_frame, end_frame, clip_ids or None) for one caption source choice.
+
+        `clip_ids` limits transcription to those clips (a selected clip or a whole track);
+        None means "every audible clip in the range", which is what the timeline uses.
+        """
+        timeline = self.timeline
+        primary = self.primary_clip()
+        if source == "clip":
+            if primary is None:
+                return None
+            return primary.timeline_start, primary.end, [primary.id]
+        if source == "track":
+            track = primary.track if primary is not None else None
+            if track is None or not track.clips:
+                return None
+            ids = [clip.id for clip in track.clips]
+            return (min(clip.timeline_start for clip in track.clips),
+                    max(clip.end for clip in track.clips), ids)
+        if source == "range":
+            region = timeline.loop_range()
+            if region is None:
+                return None
+            return int(region[0]), int(region[1]), None
+        return 0, max(1, int(timeline.duration)), None
+
+    def generate_captions(self, cues, *, style_id="classic", position=None, animation="",
+                          start_frame=0, width=1920, height=1080, replace_range=None,
+                          label="Generate captions"):
+        """Create caption clips from cues on the Captions track, as one undo step.
+
+        `replace_range` (frames) removes the captions already inside that range first, so
+        regenerating a range updates exactly that range and never touches the rest.
+        """
+        from ..captions import model as caption_model
+
+        cues = list(cues or ())
+        if not cues:
+            return []
+
+        def action():
+            track = caption_model.caption_track(self.timeline, create=True)
+            if replace_range is not None:
+                caption_model.clear_range(self.timeline, replace_range[0], replace_range[1], track=track)
+            created = caption_model.build_clips(
+                self.timeline, track, cues, style_id=style_id, position=position,
+                animation=animation, start_frame=start_frame, width=width, height=height,
+                fps=self.timeline.fps)
+            return [clip.id for clip in created]
+
+        ids = self.stack.run(label, action)
+        if ids:
+            self.set_selection(set(ids))
+            self.status.emit(f"{len(ids)} caption{'s' if len(ids) != 1 else ''} created")
+        self.changed.emit()
+        return ids
+
+    def restyle_captions(self, ids=None, style_id="classic", position=None):
+        """Apply one style to any number of captions, keeping their words and timings."""
+        from ..captions import model as caption_model
+        from ..captions import styles as caption_styles
+
+        ids = self.with_links(ids) if ids is not None else ({c.id for c in caption_model.caption_clips(self.timeline)})
+        clips = [self.timeline.find_clip(cid) for cid in ids]
+        clips = [clip for clip in clips if clip is not None and caption_model.is_caption(clip)]
+        if not clips:
+            return 0
+        width, height = self.project_size or (1920, 1080)
+        info = caption_styles.style(style_id)
+
+        def action():
+            for clip in clips:
+                target = self.timeline.find_clip(clip.id)
+                if target is None:
+                    continue
+                current = target.text.get(caption_model.CAPTION_KEY, {})
+                words = list(current.get("words") or ())
+                animation = current.get("animation", info["animation"])
+                target.text = caption_styles.caption_text(
+                    style_id, TXT.content_at(target, 0), width, height, position, animation,
+                    words=words, caption_id=current.get("id", ""),
+                    highlight=current.get("highlight"))
+                if position is not None:
+                    target.text[caption_model.CAPTION_KEY]["position"] = position
+            return len(clips)
+
+        self.stack.run("Caption style: " + info["name"], action)
+        self.changed.emit()
+        return len(clips)
 
     # ------------------------------------------------------------------- markers
     def selected_markers(self):

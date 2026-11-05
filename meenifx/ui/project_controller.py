@@ -16,7 +16,7 @@ from .filedialogs import open_file, save_file
 from .project_dialogs import MissingMediaDialog
 
 AUTOSAVE_INTERVAL_MS = 3 * 60 * 1000
-PROJECT_FOLDERS = ("Recordings", "Cache")
+PROJECT_FOLDERS = ("Recordings", "Cache", "Media")
 
 
 class _WriteJob(QRunnable):

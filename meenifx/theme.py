@@ -138,6 +138,10 @@ def configure_theme(app):
         QLineEdit {{ min-height: {CONTROL_H - 10}px; }}
         QFrame[card="true"] {{ background: {COLORS['panel_alt']}; border: 1px solid {COLORS['border']}; border-radius: {RADIUS + 2}px; }}
         QFrame[card="true"] QWidget {{ background: transparent; }}
+        /* A Style member inside its group: inset, so the nesting is visible at a glance. */
+        QFrame[subCard="true"] {{ background: {COLORS['panel_soft']}; border: 1px solid {COLORS['border']};
+                                  border-radius: {RADIUS}px; }}
+        QFrame[subCard="true"] QWidget {{ background: transparent; }}
         QLabel[quiet="true"] {{ color: {COLORS['muted']}; font-size: {FONT_SMALL}px; }}
         /* Drop-down lists (the zoom / quality combos and friends) open as a popup view. */
         QComboBox QAbstractItemView {{ background: {COLORS['panel_alt']}; color: {COLORS['text']};

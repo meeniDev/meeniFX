@@ -94,7 +94,7 @@ def test_before_and_between_instances_the_text_is_untouched():
     # An In preset that ends at frame 10 and a Loop that only covers 20..40.
     P.add(clip, "pop", "in", program="pop", duration=10, knobs={"unit": "word"})
     P.add(clip, "wave", "loop", program="pulse", duration=20, start=20,
-          knobs={"unit": "word"})
+          knobs={"unit": "word", "coverage": 20})
     for frame in (10, 11, 15, 19, 40, 41, 55):
         assert np.array_equal(engine.render_frame(frame, 1.0)[1], static[frame]), \
             f"frame {frame} sits between the animations and must look untouched"
@@ -111,7 +111,7 @@ def test_a_styled_multiline_title_is_untouched_at_rest():
     static = {frame: engine.render_frame(frame, 1.0)[1].copy() for frame in rest}
     P.add(clip, "fade", "in", program="fade", duration=10, knobs={"unit": "letter"})
     P.add(clip, "wave", "loop", program="pulse", duration=12, start=14,
-          knobs={"unit": "letter", "stagger": 0.5})
+          knobs={"unit": "letter", "stagger": 0.5, "coverage": 12})
     for frame in rest:
         assert np.array_equal(engine.render_frame(frame, 1.0)[1], static[frame]), \
             f"frame {frame} is outside every window and must not move a pixel"

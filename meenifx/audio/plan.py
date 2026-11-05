@@ -138,15 +138,20 @@ def processed_samples(clip, samples, rate, resolver, fps):
     return processed
 
 
-def build_segments(timeline, audio_for, rate, resolver=None):
+def build_segments(timeline, audio_for, rate, resolver=None, only_ids=None):
     """Build mixer segments for every audible clip that already has decoded audio.
 
     `resolver` is the engine's effect registry (``{key: effect}``); with it, a clip's
     audio effect chain is applied to its samples before mixing, which is what makes the
-    effects audible in playback and present in the exported audio.
+    effects audible in playback and present in the exported audio. `only_ids` restricts
+    the result to those clips, which is how Auto Captions analyses one clip or one track
+    instead of the whole mix.
     """
+    allowed = set(only_ids) if only_ids is not None else None
     segments = []
     for clip, gain in audible_clips(timeline):
+        if allowed is not None and clip.id not in allowed:
+            continue
         samples = audio_for(clip.source_path)
         samples = processed_samples(clip, samples, rate, resolver, timeline.fps)
         segment = clip_segment(clip, samples, rate, timeline.fps, gain)

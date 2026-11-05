@@ -137,22 +137,92 @@ def test_trim_limits_come_from_the_tightest_member():
     assert timeline.link_is_synced(video)
 
 
-def test_splitting_a_linked_pair_splits_both_and_keeps_one_group():
+def test_splitting_a_linked_pair_creates_two_independent_groups():
     timeline = fresh_timeline()
     ids = timeline.place_media([av_entry(duration=90)])
     session = TimelineSession(timeline)
     video = timeline.find_clip(ids[0])
+    old_link = video.link_id
     session.set_selection({video.id})
     session.set_playhead(40)
     session.split_at_playhead()
     clips = timeline.all_clips()
     assert len(clips) == 4, [(c.name, c.track.type, c.timeline_start) for c in clips]
-    assert len({c.link_id for c in clips}) == 1
-    assert timeline.link_is_synced(clips[0]), [(c.timeline_start, c.sync_key()) for c in clips]
     left = [c for c in clips if c.timeline_start == 0]
     right = [c for c in clips if c.timeline_start == 40]
     assert len(left) == 2 and len(right) == 2
     assert {c.track.type for c in right} == {"video", "audio"}
+    left_link, right_link = left[0].link_id, right[0].link_id
+    assert left[0].link_id == left[1].link_id == left_link
+    assert right[0].link_id == right[1].link_id == right_link
+    assert left_link != right_link, "each half must have its own group id"
+    assert left_link == old_link, "the left half keeps the original group"
+    assert left[0].source_in + left[0].duration == right[0].source_in + round(
+        right[0].source_offset), "the cut is contiguous"
+    assert left[1].source_in + left[1].duration == right[1].source_in + round(
+        right[1].source_offset)
+    assert timeline.link_is_synced(left[0]), "the left pair stays in sync"
+    assert timeline.link_is_synced(right[0]), "the right pair stays in sync"
+
+    session.set_selection({right[0].id})
+    session.move_selection_to([right[0].id], 10, 0)
+    assert timeline.find_clip(right[0].id).timeline_start == 50
+    assert timeline.find_clip(right[1].id).timeline_start == 50
+    assert timeline.find_clip(left[0].id).timeline_start == 0
+
+
+def test_clips_from_different_media_files_can_be_linked():
+    """Separately recorded audio and video must be linkable, without being moved."""
+    timeline = fresh_timeline()
+    video_track = timeline.tracks_of_type("video")[0]
+    audio_track = timeline.tracks_of_type("audio")[0]
+    video = timeline.new_clip("cam.mp4", "cam.mp4", video_track, 0, 60,
+                              source_out=60, stream="video")
+    audio = timeline.new_clip("mic.wav", "mic.wav", audio_track, 9, 60,
+                              source_out=60, stream="audio")
+    session = TimelineSession(timeline)
+    session.set_selection({video.id, audio.id})
+    assert session.can_link(ids=[video.id, audio.id])
+    link = session.link_selected()
+    assert link and video.link_id == audio.link_id == link
+    assert (video.timeline_start, audio.timeline_start) == (0, 9), \
+        "linking must never move a clip"
+    session.undo()
+    assert timeline.find_clip(video.id).link_id == 0
+    assert timeline.find_clip(audio.id).link_id == 0
+    assert (timeline.find_clip(video.id).timeline_start,
+            timeline.find_clip(audio.id).timeline_start) == (0, 9)
+
+
+def test_unlinking_one_member_leaves_the_rest_linked():
+    timeline = fresh_timeline()
+    tracks = (timeline.tracks_of_type("video")[0], timeline.tracks_of_type("audio")[0],
+              timeline.add_track("audio"))
+    clips = [timeline.new_clip(name, name, track, 0, 30, source_out=30, stream=stream)
+             for name, track, stream in (("cam.mp4", tracks[0], "video"),
+                                         ("mic-a.wav", tracks[1], "audio"),
+                                         ("mic-b.wav", tracks[2], "audio"))]
+    session = TimelineSession(timeline)
+    session.set_selection({clip.id for clip in clips})
+    assert session.link_selected()
+    assert len({clip.link_id for clip in clips}) == 1
+
+    session.set_selection({clips[0].id})
+    session.set_linked_selection(False)
+    session.set_selection({clips[0].id})
+    assert session.unlink_selected()
+    assert timeline.find_clip(clips[0].id).link_id == 0
+    assert timeline.find_clip(clips[1].id).link_id == timeline.find_clip(clips[2].id).link_id != 0, \
+        "the selected member leaves; the rest keep their group"
+    session.undo()
+    assert len({timeline.find_clip(c.id).link_id for c in clips}) == 1, \
+        "one undo restores the three-member group"
+    assert session.can_unlink([clips[0].id])
+    session.set_selection({clips[1].id, clips[2].id})
+    assert session.unlink_selected()
+    assert timeline.find_clip(clips[1].id).link_id == 0
+    assert timeline.find_clip(clips[2].id).link_id == 0
+    assert not session.can_unlink([clips[1].id]), "a single remaining member has no group"
 
 
 def test_delete_removes_the_linked_partner_and_undo_restores_it():

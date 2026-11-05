@@ -297,16 +297,28 @@ class EditorEngine:
         self.session.add_media([record], at_frame, track, find_free, reveal)
         return entry
 
-    def add_decoded_image(self, path, kind, frames, fps, at_frame=None, track=None, find_free=False, reveal=True):
-        """Install stills without changing the project canvas established by the first clip."""
+    def register_decoded(self, path, kind, frames, fps):
+        """Install worker-decoded frames as this path's media cache entry (no timeline edit)."""
         entry = self.media.entry(path)
         if entry is None:
             entry = MediaEntry(kind, len(frames), fps)
-            self.media._entries[path] = entry
         entry.kind, entry.frame_count, entry.fps, entry.frames = kind, len(frames), float(fps), frames
-        return self.session.add_media([{"name": os.path.basename(path), "path": path, "duration": self.timeline.fps * 3,
+        self.media._entries[path] = entry
+        return entry
+
+    def add_decoded_image(self, path, kind, frames, fps, at_frame=None, track=None, find_free=False, reveal=True,
+                          duration=None, select=True, fit=False, label="Import media"):
+        """Install stills without changing the project canvas established by the first clip.
+
+        `duration` overrides the three-second default (Smart Paste has its own preference),
+        and `select`/`fit` are applied inside the same undo step as the insert.
+        """
+        self.register_decoded(path, kind, frames, fps)
+        length = max(1, int(duration)) if duration else self.timeline.fps * 3
+        return self.session.add_media([{"name": os.path.basename(path), "path": path, "duration": length,
                                        "type": "video", "source_out": len(frames), "source_fps": fps}],
-                                      at_frame, track, find_free, reveal)
+                                      at_frame, track, find_free, reveal,
+                                      select=select, fit=fit, label=label)
 
     def import_records(self, paths, at_frame=None, track=None, find_free=False, reveal=True):
         """Place already probed media entries (used for audio placeholders/stills)."""
@@ -493,10 +505,15 @@ class EditorEngine:
         """{look id: 0..1} from the Look group cards on a clip (empty without any)."""
         strengths = {}
         for entry in entries or ():
-            if entry.get("effect_id") != "look" or not entry.get("enabled", True):
+            if entry.get("effect_id") != "look":
                 continue
             params = entry.get("params") or {}
             key = entry.get("look_id") or params.get("look")
+            if not entry.get("enabled", True):
+                # A disabled group is 0, not missing: otherwise its members would fall
+                # back to full strength and switching a Style off would do nothing.
+                strengths[key] = 0.0
+                continue
             value = parameter_value_at(params.get("strength", 100), local_frame)
             try:
                 strengths[key] = max(0.0, min(1.0, float(value) / 100.0))

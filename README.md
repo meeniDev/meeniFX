@@ -32,9 +32,42 @@ The application resolves bundled tile images, the demo clip, and default output 
 - One global dark theme for the whole application, including tooltips (dark #1b2230 tooltip, ~450 ms delay, shortcuts in the text), menus, context menus, combo drop-downs, message boxes and the non-native file dialogs.
 - Preview fit and percentage zoom, cursor-centered wheel zoom, pan, guides, and resize handling. The preview keeps two sizes: the logical project frame (which drives fit, zoom, pan and every crop decision) and the render size (project size x quality, drawn into the logical rectangle). Pixel-based effect parameters (mosaic tiles, ASCII cell size, tracker line thickness, minimum face size, blob areas, blur radius) are project pixels scaled by the quality factor, so lowering the quality only softens the image - it never changes the framing, and a 35% preview is the same picture as the export.
 - Mosaic, ASCII Art, Face Tracker, Hand Tracker and Blob Tracker plus the new Glitch, Stylize, Light, Time and LUT packs and one-click **Looks** (see *Compositing, effects and looks*); per-clip **blend modes**, **adjustment layers** and a **Mix** slider on every effect card. Every effect declares the media types it can process (`MEDIA_TYPES` on the effect class), and the browser, the timeline drop target and the engine all read that one declaration: on an audio clip the visual effects are listed greyed as *"(video only)"* and cannot be added, a drag or double-click is refused with a status message, and an effect loaded from an older project onto the wrong media type is switched off (kept, with an explanation in its card) instead of crashing or rendering. Each effect publishes a parameter table (range, unit, default, pixel-based or not) that the properties panel and the parameter audit test both build from, so a control can never write a value the effect does not read.
-- Keyframes on every numeric effect parameter: the stopwatch turns animation on and is accent-coloured while active, the slider and number follow the playhead, the diamond is filled exactly on a keyframe and hollow between, and the previous/next buttons jump between them (the cluster only appears for animated parameters). On the timeline a clip with keyframes shows a small diamond and an expand arrow that opens one animation row per parameter; its diamonds can be selected, dragged in time (snapping to the playhead) and deleted, all as single undo steps. See *Keyframe workflow* below for the full timeline keyframe editing, the envelopes, clip opacity and the text animation presets.
-- One numeric widget everywhere (`SliderField`: fixed label column, slider, typed number box, optional stopwatch): effect parameters, preview quality, playback FPS, speed, master volume, clip speed, fades, timeline zoom, track height and the export dialog. The number box selects all on focus, accepts both `,` and `.` and values like `50%`, applies on Enter, cancels on Esc, steps on Up/Down (Shift x10, Ctrl x0.1), and double-clicking the label resets the default. A drag is one undo step, a typed edit is one step.
+- Keyframes on every numeric effect parameter: the stopwatch turns animation on and is accent-coloured while active, the value follows the playhead, the diamond is filled exactly on a keyframe and hollow between, and the previous/next buttons jump between them (the cluster only appears for animated parameters). On the timeline a clip with keyframes shows a small diamond and an expand arrow that opens one animation row per parameter; its diamonds can be selected, dragged in time (snapping to the playhead) and deleted, all as single undo steps. See *Keyframe workflow* below for the full timeline keyframe editing, the envelopes, clip opacity and the text animation presets.
+- One numeric widget everywhere (`ScrubField`: fixed label column, a compact value with its unit, optional stopwatch and keyframe cluster): Transform, text, audio gain, every effect parameter including Mix, clip speed, fades, the Animation card, the export dialog, playback FPS and track height. The value is the handle: drag it sideways to scrub (right = up), Shift for a tenth of the speed, Ctrl for ten times, Alt to land between the field's steps; click once (or double-click, or just start typing) to type an exact number, Enter applies, Esc puts the previous value back; the arrow keys step, Page Up/Down jump ten steps, and the arrows that appear beside the value on hover step it too; double-clicking the label resets the default. A whole drag is one undo step and a typed edit is one step. Units (`px`, `%`, `°`, `dB`, `f`, `s`, `fps`) are drawn dimmed beside the number and accepted when typed, with both `,` and `.` as the decimal separator.
 - Whole-project or loop-region video/GIF/image export (the chosen range is written from frame 0) and Save Frame; frame processing and export run off the UI thread with progress and cancellation.
+
+## Effects browser, previews and styles
+
+- One browser, three tabs. **Effects** lists every effect with a category filter, search by
+  name or everyday word ("pixel" finds Mosaic), favourites, recently used, and a grid or
+  list view that is remembered between sessions. **Animations** lists the animation
+  families described above, and **Styles** holds the Looks, shipped and your own.
+- Every tile is a **real preview rendered by the same pipeline the export uses**: a private
+  effect instance runs on the reference picture through the same blend and compositor as a
+  clip, at the card's device pixel ratio and the chosen preview quality. Effects that have
+  no meaningful still (audio effects, Posterize Time, Stutter, Echo, Face Tracker, Hand
+  Tracker) show an icon and a description instead. Rendering runs on background workers
+  behind a shared cache keyed by effect, parameters, picture and quality, so scrolling
+  never blocks the UI; only the cards in view are rendered, and the cache is dropped when
+  the preview settings change.
+- The reference picture is `figure_cafe.png`, read once from beside `main.py`. Preferences >
+  Appearance > **Effect Previews** switches it to your own image (Choose Image… / Reset to
+  Default) and sets the **Background** (checkerboard, dark, light) and the preview
+  **Quality** (low, medium, high); the browser's `…` menu opens the same page. The setting
+  is global, is never written into a project, and falls back to `figure_cafe.png` when the
+  custom image cannot be read. Transparency is kept, the aspect ratio is letterboxed rather
+  than stretched, and the picture is scaled with smooth filtering.
+- **Double-click applies**; double-clicking a card whose effect is already on the selected
+  clip removes it again. Applied effects carry a check mark, and when a clip holds several
+  instances of one effect the browser asks which one to remove. Every apply and remove is a
+  single undo step. Effects that cannot run on the selected media type are disabled and say
+  why.
+- A **Style** applies as one group: Properties shows a single **Style card** with its member
+  effects collapsed inside it (each still expandable, disableable and reorderable within
+  the group, in the order the style defines), plus the style's Strength. Removing the style
+  removes exactly its members and leaves every other effect on the clip untouched;
+  disabling the group disables the whole look. Older Looks in an existing `.mfxpf` file open
+  as the same groups, and their ids keep working.
 
 ## Transform, motion paths and the Graph Editor
 
@@ -117,17 +150,17 @@ The application resolves bundled tile images, the demo clip, and default output 
 - **Audio gain envelope** on audio clips: the same line, in dB (0 dB by default, -60 dB is
   silence, the ceiling comes from Preferences > Playback & Performance > *Gain headroom*,
   0-24 dB). It is keyframeable, drives the real mixer and the export, and is independent of
-  the linked video clip. **Audio Gain** (numeric box, slider and reset) in the audio
-  clip's Inspector edits the same channel, so slider and envelope always agree.
+  the linked video clip. **Audio Gain** (scrubbable value and reset) in the audio
+  clip's Inspector edits the same channel, so the Inspector and the envelope always agree.
 - **Anchor presets**: a 3x3 grid plus *Center Anchor Point* in the Transform card. Choosing
   a preset keeps the picture where it is on screen (the position is compensated) unless
   *Keep picture in place* is switched off; the anchor is draggable in the preview,
   keyframeable and undoable like any other channel.
-- **Animation presets**: a Presets tab beside Effects with 81 shipped In/Out/Loop presets, a
-  search box, favourites and a hover preview; instances stack on top of the clip's own
-  transform and keyframes, animate text per letter/word/line, show as bars on the timeline,
-  bake to keyframes, and can be saved, imported and exported as `.mfxpreset`. See
-  *Animation presets* below.
+- **Animation families**: the browser's Animations tab folds 81 shipped In/Out/Loop presets
+  into 22 families with a Mode and Direction selector, search, favourites and grid/list
+  views; instances stack on top of the clip's own transform and keyframes, animate text per
+  letter/word/line, show as bars on the timeline, bake to keyframes, and can be saved,
+  imported and exported as `.mfxpreset`. See *Animation presets* below.
 - **Text animation presets** in the Text card: Fade In/Out, Slide In/Out Left/Right/Up/Down,
   Scale In/Out, Pop In, Typewriter, Blur In/Out, Rotation In/Out and Bounce In, applied to
   an **In** or **Out** slot with a duration, easing and delay. *Preview* sets the loop range
@@ -152,21 +185,26 @@ The application resolves bundled tile images, the demo clip, and default output 
 
 ## Animation presets (In / Out / Loop, on any clip)
 
-- The **Presets** tab beside Effects ships **81 presets** in six categories: Text In, Text
-  Out, Text Loop, Clip In, Clip Out and Clip Loop - Fade, Typewriter, Pop, Bounce, Slide in
-  all four directions, Scale Up Overshoot, Blur, Rotate, Drop, Wave, Flip, Spiral, Tracking,
-  Scramble/Decode, Glitch Reveal, Mask Wipe, Kinetic Punch and Vertical Slide, the matching
-  exits, and the loops (Wave, Float, Pulse, Shake, Jitter, Wiggle, Flicker, Glitch Stutter,
-  Colour Cycle, Swing, Camera Shake, Heartbeat, Strobe, Sway, Zoom Breath, Punch Zoom).
-  Search by name or keyword, star favourites, and hover a preset to watch it move in the
-  preview strip under the list. Apply with a double-click or by dragging it onto a clip.
+- The **Animations** tab ships the same **81 presets** folded into **22 families** (Fade,
+  Slide, Pop, Zoom, Rotate, Bounce, Blur, Wipe, Wave, Flip, Shake, Float, Pulse, Jitter,
+  Wiggle, Camera Shake, ...): one card per behaviour instead of separate In/Out/Loop
+  entries. A **Mode** selector (In / Out / Loop / Both) and a **Direction** selector sit
+  above the grid; categories All / Motion / Fade / Scale / Rotation / Text / Distortion /
+  Other, search by name or keyword, favourites and recently used, and a grid or list view.
+  Double-click a card, press Apply or drag it onto a clip to apply the chosen variant.
 - A preset is an **instance on the clip**, not a replacement for its animation. Each has a
   category (In, Out, Loop), a window, and the knobs Duration, Intensity, Easing, Direction,
   Stagger, Unit and Seed. A clip can carry several (In + Loop + Out) and they compose as a
   layer **on top of** the clip's own transform and keyframes: position, rotation, blur, hue
   and light add, scale and opacity multiply. So a hand-animated move keeps playing while a
-  shake rides on it, and nothing you keyed is overwritten. In is anchored to the clip start,
-  Out to the clip end, and a Loop covers its range (the whole clip unless you shorten it).
+  shake rides on it, and nothing you keyed is overwritten. In is anchored to the clip start
+  and Out to the clip end. A **Loop** repeats its cycle across the whole clip: **Cycle** is
+  the length of one pass and keeps repeating when the clip is trimmed or extended, **Span**
+  limits how much of the clip it covers, **Cycles** stops it after N passes (0 repeats to
+  the end), the **Loop** menu chooses **Repeat** or **Ping-Pong** (there and back), **Gap**
+  holds the first pose between passes and **Phase** shifts the pattern in frames. Splitting
+  a clip cuts the span at the split and carries the cycle phase onto the right half, so the
+  two pieces look exactly like the original.
 - Everything is deterministic: noise-based loops (shake, wiggle, jitter, flicker) are
   functions of the Seed, and the instances are part of the render-cache fingerprint, so the
   preview, the cache, baked keys and the export produce identical frames.
@@ -183,7 +221,10 @@ The application resolves bundled tile images, the demo clip, and default output 
   title drawn statically with its default shadow took 67 / 40 / 18 ms before the text
   buffer was trimmed to its content.
 - The **Animation card** in Properties lists the instances on the selected clip with their
-  knobs (the shared slider fields), **Bake** and remove. Baking samples the instance into
+  **Mode** and **Direction** menus and their knobs (the shared scrubbable values),
+  **Bake** and remove. Changing Mode or Direction edits that same instance - it never
+  stacks a second animation; a Loop also exposes Cycle, Span, Cycles, Loop mode, Gap and
+  Phase. Baking samples the instance into
   ordinary keyframes on the existing channels in one undo step, so the Graph Editor can then
   edit every value; per-unit instances are not bakeable there (their motion lives in the
   text layout) - use Split text instead.
@@ -192,10 +233,10 @@ The application resolves bundled tile images, the demo clip, and default output 
   the picture's transform, effects, fades, timing and presets (a per-unit instance becomes a
   whole-clip instance on every piece). One undo step.
 - **On the timeline** each instance is a thin coloured bar on its clip: green at the start
-  for In, orange at the end for Out, blue across the range for Loop. Drag the inner edge to
-  change the duration (snapping to the playhead, markers, clip edges and other keys, Shift
-  to switch snapping off); right-click a bar to bake or remove it. A whole drag is one undo
-  step.
+  for In, orange at the end for Out, blue across the span for Loop, with a faint tick where
+  every cycle starts. Drag the inner edge to change the duration (In/Out) or the span
+  (Loop), snapping to the playhead, markers, clip edges and other keys - Shift switches
+  snapping off; right-click a bar to bake or remove it. A whole drag is one undo step.
 - **Library and sharing**: shipped presets are plain JSON files in `presets/`; a user
   folder (the platform config directory, `%APPDATA%\meeniFX\presets` on Windows) is merged
   on top, so your own presets survive upgrades and override shipped ones with the same id.
@@ -222,7 +263,7 @@ The application resolves bundled tile images, the demo clip, and default output 
 - **Mix on every effect card**: 0-100 %, animatable like any parameter, blending the
   untouched layer with the effect's result (colour and alpha). At 0 % the effect is skipped
   entirely; Bake and Reset leave it at 100 %.
-- **New effects**, grouped by category with two or three main sliders and the rest under
+- **New effects**, grouped by category with two or three main values and the rest under
   *Advanced*; pixel parameters scale with the preview quality and every random pattern is
   seeded from the seed plus the frame, so a preview is the exported picture:
   - *Glitch & Distortion*: RGB Split (linear/radial with edge falloff), Glitch (slices,
@@ -238,7 +279,7 @@ The application resolves bundled tile images, the demo clip, and default output 
   - *Time*: Posterize Time (hold each picture for N frames), Stutter (hold, then jump) and
     Echo / Trail (blend the clip's own earlier frames). The frame timing is decided once in
     `EditorEngine.held_frame`, so picture, effects and transform freeze together.
-  - *Color*: LUT with a `.cube` loader, an intensity slider and three built-in tables; the
+  - *Color*: LUT with a `.cube` loader, an intensity value and three built-in tables; the
     lookup runs through a cached 7-bit table, one gather per pixel, and the colour depends
     only on the pixel, so every render scale matches exactly.
 - **Looks**: a *Looks* category with ten shipped bundles (VHS Tape, CRT Monitor, Anime
@@ -406,9 +447,120 @@ The application resolves bundled tile images, the demo clip, and default output 
 - Limits: the webcam is still recorded by Qt (MPEG-4 in Matroska, encoder chosen by Qt). Screen recording is H.264 (libx264, veryfast) because it needs to draw the pointer; its bitrate follows the same area-based estimate, or the value under the gear. No region capture. Closing a webcam can block the UI for ~2.5 s inside Qt, so it is deferred until after the clips are inserted. Recording the same microphone in two applications at once is up to Windows: a shared-mode stream is grabbed by the first one that opens it.
 - Tests: `tests\test_recording.py`, `tests\test_recording_audio.py` (WAV writing, resampling, drift correction, muxing, linked insertion, and a real capture from this machine's own endpoints), `tests\test_screen_recording.py` (the gdigrab command, the cursor switch, and a real one-second take that must be readable), `tests\test_stream_frames.py`; real-device scripts `tests\rec_hw_check.py` and `tests\rec_app_check.py`.
 
+## Smart Paste
+
+- **Ctrl+V** turns whatever is on the clipboard into project media. Copy an image in a
+  browser (right-click > Copy Image), a screenshot from another tool, files in Explorer, or
+  an internal clip and paste it straight into meeniFX - no download, no import dialog, no
+  dragging.
+- Clipboard pictures are written as **real PNG files in the project's `Media` folder**, so
+  they survive restarts and travelling with the project (the relative path is what
+  `.mfxpf` stores). Transparency, aspect ratio and the original pixels are kept; the file
+  is decoded with its alpha channel (`meenifx/media/reader.py`), so a transparent PNG
+  composites over the tracks below it in preview *and* export. A project that has never
+  been saved stores pasted pictures in the per-user data folder instead.
+- Behaviour follows the context: a text or numeric field keeps its normal text paste; the
+  **Media panel** imports the file without touching the timeline; everywhere else the
+  picture becomes a clip at the playhead. Local files (images, videos, audio, animated
+  GIFs) are linked, not copied again, and several files paste in order. Internal clip
+  copy/paste keeps working; a new clipboard picture wins over an older in-app copy.
+- Preferences > **Smart Paste**: default image duration (5 s), placement (at the playhead
+  or after the selected clip), select the pasted clip, and fit pasted images to the frame.
+  These are app preferences, never project data.
+- A copied *link* to a picture (plain text URL ending in an image type) offers an optional
+  download. It is never trusted: the response must be an image content type, must decode
+  and must stay under 32 MB, and the saved file is the re-encoded picture.
+- Every paste is one undo step. `tests/test_smart_paste.py` covers a transparent PNG
+  (alpha preserved in the saved file), save/reopen, the preferences, Explorer files, text
+  field behaviour, the Media-panel rule, internal copy precedence and GIF bytes.
+
+## Auto Captions
+
+- **Tools > Captions > Generate Auto Captions…** (or the `cc` button in the top toolbar)
+  transcribes the timeline audio locally. Choose **Audio source** (entire timeline,
+  selected clip, selected audio track, selected range), **Language** (auto detect or a
+  list), **Model quality** (Fast/Balanced/Accurate with sizes), **Grouping**
+  (word-by-word, short phrases, full sentences), **Maximum words per caption**,
+  **Style**, **Position** and **Animation**. A progress bar and Cancel sit above the
+  buttons; cancelling before transcription finishes writes nothing at all.
+- Speech recognition uses the optional **faster-whisper** package (`pip install
+  faster-whisper`). It runs on the CPU with `int8`, needs no account or API key, and works
+  offline once a model is on disk. A model is downloaded **only after you agree** (its size
+  is shown), into `~/.meenifx/models/whisper`, and can be deleted under Preferences >
+  Captions > Speech Models. Without the package the editor still starts and the dialog
+  explains what to install; SRT import/export keeps working.
+- Captions are **generated text clips on a track named `Captions`**, so they select, move,
+  trim, split, delete, keyframe, undo and save exactly like any text clip, and the existing
+  compositor draws them in preview and export with the same code. Each caption stores a
+  stable id, its style, optional word timings and its entrance animation in
+  `clip.text["caption"]`; the visible words stay in the normal text field, so editing is
+  ordinary text editing.
+- Eight styles: Classic Subtitles, Bold YouTube Shorts, Karaoke Highlight, Minimal Clean,
+  Gaming Captions, YMM4-Inspired, Pop Animation and Typewriter. A style is only a set of
+  text-model values (font, size, fill, outline, shadow, background box, padding,
+  alignment, spacing, position), so every part stays editable in the Properties panel; the
+  sizes scale with the project height. Entrance animations reuse the shipped text presets
+  (fade, pop, scale, slide, bounce, typewriter).
+- **Transcript Editor** (Tools > Captions) lists the captions with editable start/end times
+  and words, applies a style to all of them, and commits the corrections as one undo step.
+  Regenerating a range only replaces the captions inside that range.
+- Import **SRT** at the playhead, export **SRT** or **ASS** (the ASS header mirrors the
+  first caption's style). Burned-in captions need no extra step: they are part of the
+  normal render.
+- Limits: `faster-whisper` is not bundled, so transcription is unavailable in a build that
+  does not have it; ranges are limited to 30 minutes per run; karaoke word timing is used
+  for per-word captions, but colouring individual words *inside* one phrase is not
+  implemented (Word-by-word grouping is the accurate alternative).
+- Tests: `tests/test_captions.py` (clip creation, rendering, replacement ranges, SRT
+  round trip and import, ASS export, grouping, styles, transcript edits, restyling, save
+  and reopen).
+
+## Remove Silences and Normalize
+
+- **Tools > Remove Silences…** analyses the selected clip's decoded audio (trim, speed,
+  reverse and fades applied), draws its level curve with the proposed cuts in red, and
+  applies them only after you press Apply. Settings: silence threshold (dBFS), minimum
+  silence, minimum speech, padding before/after speech, keep a natural pause, crossfade at
+  the cuts, ripple delete, plus Gentle/Balanced/Aggressive presets.
+- Detection starts from short-window RMS levels (`meenifx/audio/silence.py`); no language
+  model or AI service is involved. Quiet-but-continuous audio is not mistaken for silence
+  once the threshold is set sensibly.
+- The edit splits and deletes clips, never rewrites media. A linked video/audio pair is cut
+  at the same absolute frames, each surviving piece is re-linked to its partner under a
+  fresh link id, and the whole operation is **one undo step**. Other tracks are untouched
+  unless ripple delete closes their gaps too, which is what ripple means.
+- **Tools > Normalize Audio…** measures each selected clip's peak, shows the resulting
+  gain, and applies it as one undo step. This is **peak normalization**, not loudness
+  normalization: there is no LUFS measurement in this build.
+- Capture fix: the WASAPI capture thread now writes any skipped endpoint time (leading
+  silence, intermittent quiet) as silence, using the device position from `GetBuffer`
+  instead of assuming packets arrive continuously. A recording that starts silent and gets
+  sound later therefore keeps its later audio where it was recorded.
+
+## Timeline and effect polish
+
+- **Delete Gap** closes the empty space before the selected clip on its track (Edit menu).
+  **Duplicate** (Ctrl+D), ripple delete (Shift+Delete), markers, snapping, Ctrl+wheel zoom
+  and Fit Timeline already existed and keep their behaviour.
+- Properties has an exact **Duration** field (frames) for stills, text and media; a linked
+  audio clip changes length with its picture, and media is limited by the frames its source
+  still has.
+- **Copy Effects / Paste Effects / Paste Attributes / Remove All Effects** (Edit menu).
+  Paste Attributes asks which groups to copy (transform, effects, animations, audio, text
+  style); effects whose declaration does not cover the target's media type are skipped.
+  Each paste is one undo step.
+- The Project panel gained a media-type filter and sorting by name, type, file date or
+  duration next to search, thumbnails, the missing-media warning and Relink.
+- **Help > Keyboard Shortcuts…** lists every menu shortcut from the live menu bar, with
+  search and conflicting assignments marked (shortcuts are still ignored while a text or
+  numeric field has focus).
+- Recording: the floating always-on-top bar is now **off by default** (Preferences >
+  Recording). While recording, the toolbar's Record button shows `● mm:ss` and stops the
+  take when clicked; the optional bar can be switched back on.
+
 ## Shortcuts
 
-Ctrl+N new project; Ctrl+O open; Ctrl+S save; Ctrl+Shift+S save as; Ctrl+I import media; Ctrl+R export; Ctrl+Alt+S save frame; Ctrl+T add text clip; Ctrl+Shift+T text keyframe; Space playback; C/S split; Ctrl+Z/Y undo/redo; Ctrl+C/X/V/D/A clipboard and select all; Home/End timeline start/end; I/O set the loop start/end at the playhead; Q toggle loop playback; F8 snap; V select tool; Shift+F add a freeze frame; M add a marker at the playhead; [ and ] jump to the previous/next marker; F2 rename the selected marker; Delete removes selected markers (or clips); Shift+Delete ripple delete.
+Ctrl+N new project; Ctrl+O open; Ctrl+S save; Ctrl+Shift+S save as; Ctrl+I import media; Ctrl+R export; Ctrl+Alt+S save frame; Ctrl+T add text clip; Ctrl+Shift+T text keyframe; Space playback; C/S split; Ctrl+Z/Y undo/redo; Ctrl+C/X/V/D/A clipboard and select all (Ctrl+V also pastes clipboard pictures and files); Home/End timeline start/end; I/O set the loop start/end at the playhead; Q toggle loop playback; F8 snap; V select tool; Shift+F add a freeze frame; M add a marker at the playhead; [ and ] jump to the previous/next marker; F2 rename the selected marker; Delete removes selected markers (or clips); Shift+Delete ripple delete.
 
 Transform tools: V selection, T transform, P puppet warp, K auto-keyframe, G graph editor, Ctrl+Shift+P show motion paths, arrows nudge, Shift+F7/F8/F9 fit/fill/centre, Shift+F10 reset the transform, Esc cancels a drag and drops the overlay selection. With pins selected in the preview: Ctrl+C/Ctrl+V copy and paste their keyframes, Ctrl+R resets them to rest, Ctrl+A selects them all, L locks, Shift+E enables/disables, Delete removes them - all of it also on the preview's right-click menu. Fade grips: drag sideways for length, up/down (or Alt+drag) to bend, Shift to apply to the linked clip, right-click for presets, double-click to clear. Text-entry widgets keep their normal Qt shortcuts.
 

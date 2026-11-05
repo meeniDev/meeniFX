@@ -1,0 +1,220 @@
+"""The browser contract: three tabs, double-click apply/remove, instance choice, styles.
+
+Thumbnail rendering itself is covered by test_thumbnails.py; this file drives the parts a
+person touches, without a MainWindow, so it stays fast.
+"""
+
+import copy
+import time
+
+import pytest
+from PyQt6.QtWidgets import QFrame
+
+from conftest import build_engine
+from meenifx import thumbnails as THUMBS
+from meenifx.model import looks as LOOKS
+from meenifx.ui.panels import EffectsPanel
+
+
+@pytest.fixture
+def panel_and_clip(qapp):
+    engine, clip = build_engine(duration=90)
+    engine.session.set_selection({clip.id})
+    panel = EffectsPanel(engine)
+    panel.refresh_effect_list()
+    panel.browser.refresh()
+    return panel, engine, clip
+
+
+def cards(panel):
+    return {card.item["id"]: card for card in panel.browser._cards}
+
+
+def effects_of(engine, clip):
+    return [entry["effect_id"] for entry in engine.timeline.find_clip(clip.id).effects]
+
+
+# ----------------------------------------------------------------------- tabs
+def test_the_browser_has_effects_animations_and_styles_tabs(panel_and_clip):
+    panel, _engine, _clip = panel_and_clip
+    browser = panel.browser
+    assert [browser.tabs.tabText(index) for index in range(browser.tabs.count())] == \
+        ["Effects", "Animations", "Styles"]
+    assert "mosaic" in cards(panel)
+
+    browser.tabs.setCurrentIndex(1)
+    assert browser.tab == "animations"
+    assert len(browser._cards) >= 15, "the families, not the 81 raw presets"
+    assert all(card.item["kind"] == "animation" for card in browser._cards)
+    assert "Looks" not in {card.item["subtitle"] for card in browser._cards}
+
+    browser.tabs.setCurrentIndex(2)
+    assert browser.tab == "styles"
+    assert len(browser._cards) >= 10
+    assert all(card.item["kind"] == "style" for card in browser._cards)
+
+
+def test_looks_are_styles_and_no_longer_a_category(panel_and_clip):
+    panel, _engine, _clip = panel_and_clip
+    browser = panel.browser
+    categories = {card.item["subtitle"] for card in browser._cards}
+    assert "Looks" not in categories
+    assert not any(card.item["id"] == "look" for card in browser._cards)
+
+
+def test_animation_cards_carry_a_real_preview(panel_and_clip):
+    panel, engine, _clip = panel_and_clip
+    browser = panel.browser
+    browser.tabs.setCurrentIndex(1)
+    entries = {card.item["id"]: browser._thumb_entries(card.item)
+               for card in browser._cards}
+    assert entries and all(value and value[0].get("animation")
+                           for value in entries.values())
+    item = next(card.item for card in browser._cards if "clip" in card.item["media"])
+    image = THUMBS.render_entries(engine, browser._thumb_entries(item), 140, 96,
+                                  THUMBS.PreviewSettings())
+    assert image is not None and image.shape[:2] == (96, 140)
+    assert float(image.std()) > 5.0, "a real picture, not a flat placeholder"
+    assert browser._thumb_payload(item, browser._thumb_entries(item)), \
+        "the media and variant must be part of the cache key"
+
+
+def test_visible_animation_cards_get_their_thumbnail(panel_and_clip, qapp):
+    panel, _engine, _clip = panel_and_clip
+    browser = panel.browser
+    browser.tabs.setCurrentIndex(1)
+    panel.resize(560, 680)
+    panel.show()
+    end = time.monotonic() + 10.0
+    while time.monotonic() < end:
+        qapp.processEvents()
+        if any(card.thumb_key for card in browser._cards):
+            break
+        time.sleep(0.01)
+    panel.hide()
+    assert any(card.thumb_key for card in browser._cards), \
+        "the visible animation cards have to ask for a preview"
+    browser.shutdown()
+
+
+def test_search_finds_effects_by_everyday_words(panel_and_clip):
+    panel, _engine, _clip = panel_and_clip
+    browser = panel.browser
+    browser.search.setText("pixel")
+    assert "mosaic" in cards(panel)
+    browser.search.setText("zzz-no-such-effect")
+    assert browser._cards == []
+    assert not browser.empty.isHidden()
+    browser.search.setText("")
+
+
+# ------------------------------------------------------------ apply and remove
+def test_double_click_applies_and_double_clicking_again_removes(panel_and_clip):
+    panel, engine, clip = panel_and_clip
+    browser = panel.browser
+    card = cards(panel)["mosaic"]
+    browser._card_activated(card.item)
+    assert effects_of(engine, clip) == ["mosaic"]
+    panel.refresh_effect_list()
+    browser.refresh()
+    assert cards(panel)["mosaic"].item["applied"], "an applied effect shows its check mark"
+
+    browser._card_activated(cards(panel)["mosaic"].item)
+    assert effects_of(engine, clip) == []
+    engine.session.stack.undo()
+    assert effects_of(engine, clip) == ["mosaic"]
+    engine.session.stack.redo()
+    assert effects_of(engine, clip) == []
+
+
+def add_copy(panel, engine, clip):
+    """A clip can carry the same effect twice (an older project, or a pasted card)."""
+    entry = engine.timeline.find_clip(clip.id).effects[0]
+    panel.engine.session.apply_to_clips(
+        [clip.id], "Duplicate effect", lambda target: target.effects.append(copy.deepcopy(entry)))
+
+
+def test_a_second_copy_asks_which_instance_to_remove(panel_and_clip):
+    panel, engine, clip = panel_and_clip
+    panel.add_effect("mosaic")
+    add_copy(panel, engine, clip)
+    assert effects_of(engine, clip) == ["mosaic", "mosaic"]
+    asked = []
+    panel._choose_effect_instance = lambda clips, key, name: asked.append(
+        (key, [len(c.effects) for c in clips]))
+    panel._browser_remove({"kind": "effect", "id": "mosaic", "name": "Mosaic"})
+    assert asked == [("mosaic", [2])], "the browser must never guess which copy to delete"
+    assert effects_of(engine, clip) == ["mosaic", "mosaic"]
+
+    panel._remove_instance_at([engine.timeline.find_clip(clip.id)], "mosaic", "Mosaic", 1)
+    assert effects_of(engine, clip) == ["mosaic"]
+    engine.session.stack.undo()
+    assert effects_of(engine, clip) == ["mosaic", "mosaic"]
+
+
+def test_remove_every_copy_is_one_step(panel_and_clip):
+    panel, engine, clip = panel_and_clip
+    panel.add_effect("mosaic")
+    add_copy(panel, engine, clip)
+    panel._remove_instance_at([engine.timeline.find_clip(clip.id)], "mosaic", "Mosaic", None)
+    assert effects_of(engine, clip) == []
+    engine.session.stack.undo()
+    assert effects_of(engine, clip) == ["mosaic", "mosaic"]
+
+
+def test_video_effects_are_unavailable_on_an_audio_clip(panel_and_clip):
+    panel, engine, clip = panel_and_clip
+    track = engine.timeline.add_track("audio")
+    voice = engine.timeline.new_clip("voice", "synthetic.png", track, 200, 40,
+                                     source_out=400, source_fps=30, stream="audio")
+    engine.session.set_selection({voice.id})
+    panel.refresh_effect_list()
+    panel.browser.refresh()
+    available = cards(panel)
+    assert available["mosaic"].item["unavailable"], "a picture effect cannot run on audio"
+    assert not available["mosaic"].isEnabled()
+    assert not available["audio_eq"].item["unavailable"], "the audio effects are offered"
+
+
+# --------------------------------------------------------------------- styles
+def test_a_style_is_one_group_and_removing_it_keeps_other_effects(panel_and_clip):
+    panel, engine, clip = panel_and_clip
+    panel.add_effect("invert")
+    look = LOOKS.all_looks()[0]
+    assert panel.apply_look(look["id"]), "the style applies to the selected clip"
+
+    entries = engine.timeline.find_clip(clip.id).effects
+    group = next(entry for entry in entries if entry.get("effect_id") == "look")
+    group_id = group["look_id"]
+    members = [entry for entry in entries
+               if entry.get("look_id") == group_id and entry.get("effect_id") != "look"]
+    assert members, "the style brought its effects in as its members"
+    assert effects_of(engine, clip)[0] == "invert", "the untouched effect keeps its order"
+
+    panel.refresh_properties()
+    assert not panel._opened_groups, "a style group starts collapsed"
+    keys = [frame.property("effect_key") for frame
+            in panel.properties_layout.parentWidget().findChildren(QFrame)
+            if frame.property("effect_key")]
+    assert "look" in keys, "the style gets one group card"
+
+    panel._browser_remove({"kind": "style", "id": look["id"]})
+    assert effects_of(engine, clip) == ["invert"], "only the style's own effects were removed"
+    engine.session.stack.undo()
+    assert len(effects_of(engine, clip)) == 1 + len(members) + 1
+
+
+def test_disabling_a_style_group_disables_its_members(panel_and_clip):
+    panel, engine, clip = panel_and_clip
+    look = LOOKS.all_looks()[0]
+    assert panel.apply_look(look["id"])
+    fresh = engine.timeline.find_clip(clip.id)
+    group = next(entry for entry in fresh.effects if entry.get("effect_id") == "look")
+    panel._set_enabled(fresh, group, False)
+    disabled_group = engine.timeline.find_clip(clip.id)
+    group_id = group["look_id"]
+    members = [entry for entry in disabled_group.effects
+               if entry.get("look_id") == group_id and entry.get("effect_id") != "look"]
+    strengths = type(engine).look_strengths(disabled_group.effects, 0)
+    assert strengths.get(group_id) == 0.0, "a disabled style contributes nothing"
+    assert members
