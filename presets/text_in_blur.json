@@ -1,0 +1,18 @@
+{
+ "args": {
+  "px": 22
+ },
+ "category": "text_in",
+ "format": "mfxpreset",
+ "id": "text_in_blur",
+ "keywords": [],
+ "knobs": {
+  "easing": "Smooth",
+  "intensity": 1.0,
+  "stagger": 0.4,
+  "unit": "letter"
+ },
+ "name": "Blur In",
+ "program": "blur",
+ "version": 1
+}

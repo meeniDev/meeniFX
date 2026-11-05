@@ -1,0 +1,16 @@
+{
+ "args": {
+  "px": 24
+ },
+ "category": "clip_out",
+ "format": "mfxpreset",
+ "id": "clip_out_blur",
+ "keywords": [],
+ "knobs": {
+  "easing": "Cubic In",
+  "intensity": 1.0
+ },
+ "name": "Blur Out",
+ "program": "blur",
+ "version": 1
+}

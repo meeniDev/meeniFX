@@ -111,8 +111,9 @@ def windows():
     return out
 
 
-def find_window(saved_id):
+def find_window(saved_title):
+    """The capturable window titled ``saved_title``, or None when it is gone."""
     for w in windows():
-        if w.id() == saved_id:
+        if w.description() == saved_title:
             return w
     return None

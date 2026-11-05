@@ -1,0 +1,36 @@
+{
+ "description": "Worn tape: soft chroma, scanlines, wobble and grain",
+ "format": "mfxlook",
+ "id": "vhs_tape",
+ "name": "VHS Tape",
+ "stack": [
+  {
+   "effect_id": "vhs_crt",
+   "params": {
+    "bleed": 16,
+    "curvature": 18,
+    "noise": 28,
+    "scanlines": 45,
+    "seed": 3,
+    "vignette": 32,
+    "wobble": 18
+   }
+  },
+  {
+   "effect_id": "chromatic_aberration",
+   "params": {
+    "amount": 5,
+    "falloff": 55
+   }
+  },
+  {
+   "effect_id": "film_grain",
+   "params": {
+    "amount": 16,
+    "shadows": 65,
+    "size": 2
+   }
+  }
+ ],
+ "version": 1
+}

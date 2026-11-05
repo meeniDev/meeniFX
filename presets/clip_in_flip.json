@@ -1,0 +1,14 @@
+{
+ "args": {},
+ "category": "clip_in",
+ "format": "mfxpreset",
+ "id": "clip_in_flip",
+ "keywords": [],
+ "knobs": {
+  "easing": "Smooth",
+  "intensity": 1.0
+ },
+ "name": "Flip In",
+ "program": "flip",
+ "version": 1
+}

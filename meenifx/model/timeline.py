@@ -10,6 +10,7 @@ import os
 
 from .animation import clamp_gain_db, db_to_gain
 from .keyframes import AnimatedValue
+from .presets import split_instances
 from .transform import default_transform
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
@@ -123,7 +124,7 @@ class Clip:
                  freeze=False, source_offset=0, source_min=None, source_max=None, volume=1.0,
                  fade_in=0, fade_out=0, fade_in_curve=0.0, fade_out_curve=0.0,
                  link_id=0, stream=None, transform=None, transform_meta=None, text=None,
-                 gain=0.0):
+                 gain=0.0, presets=None, blend="normal", adjustment=False):
         self.id = clip_id
         self.name = name
         self.source_path = source_path
@@ -167,6 +168,16 @@ class Clip:
         # normal media clip leaves it None. The renderer decides from this, not from the
         # file extension, so moving a text clip never needs a media entry.
         self.text = copy.deepcopy(text) if text else None
+        # Animation preset instances (see meenifx.model.presets): a layer on top of the
+        # transform and keyframes above, never a replacement for them.
+        self.presets = copy.deepcopy(presets) if presets else []
+        # How this layer is mixed with the tracks below it (see processing.blend). The
+        # stored key is validated so a hand-edited project can never crash the compositor.
+        from ..processing.blend import normalise_mode
+        self.blend = normalise_mode(blend)
+        # An adjustment layer carries no picture: its effects run on everything already
+        # composited below it. It is a normal clip otherwise (trim, fades, keyframes).
+        self.adjustment = bool(adjustment)
 
     @property
     def is_text(self):
@@ -268,7 +279,8 @@ class Clip:
                 self.volume, self.fade_in, self.fade_out, self.fade_in_curve, self.fade_out_curve,
                 self.link_id, self.stream, copy.deepcopy(self.transform),
                 copy.deepcopy(self.transform_meta), copy.deepcopy(self.text),
-                copy.deepcopy(self.gain))
+                copy.deepcopy(self.gain), copy.deepcopy(self.presets),
+                self.blend, bool(self.adjustment))
 
 
 # Fade shape presets. The stored truth is the number; the names are a convenience.
@@ -514,12 +526,13 @@ class Timeline:
                  source_fps=None, speed=1.0, reverse=False, loop=False, freeze=False, source_offset=0,
                  source_min=None, source_max=None, volume=1.0, fade_in=0, fade_out=0,
                  fade_in_curve=0.0, fade_out_curve=0.0, link_id=0, stream=None,
-                 transform=None, transform_meta=None, text=None, gain=0.0):
+                 transform=None, transform_meta=None, text=None, gain=0.0, presets=None,
+                 blend="normal", adjustment=False):
         clip = Clip(next(self._clip_ids), name, source_path, track, start, duration, source_in, effects,
                     source_out, source_fps, self.fps, speed, reverse, loop, freeze,
                     source_offset, source_min, source_max, volume, fade_in, fade_out,
                     fade_in_curve, fade_out_curve, link_id, stream, transform, transform_meta, text,
-                    gain)
+                    gain, presets, blend, adjustment)
         track.clips.append(clip)
         return clip
 
@@ -646,12 +659,13 @@ class Timeline:
             for (cid, name, path, start, dur, src_in, src_out, src_fps, timeline_fps,
                  speed, reverse, loop, freeze, source_offset, source_min, source_max, effects, volume,
                  fade_in, fade_out, fade_in_curve, fade_out_curve, link_id, stream,
-                 transform, transform_meta, text, gain) in clips:
+                 transform, transform_meta, text, gain, presets, blend, adjustment) in clips:
                 track.clips.append(Clip(cid, name, path, track, start, dur, src_in, clone_effects(effects),
                                         src_out, src_fps, timeline_fps, speed, reverse, loop, freeze,
                                         source_offset, source_min, source_max, volume,
                                         fade_in, fade_out, fade_in_curve, fade_out_curve,
-                                        link_id, stream, transform, transform_meta, text, gain))
+                                        link_id, stream, transform, transform_meta, text, gain,
+                                        presets, blend, adjustment))
             self.tracks.append(track)
         self.markers = [Marker(mid, frame, name, color) for mid, frame, name, color in markers]
         self.markers.sort(key=lambda m: (m.frame, m.id))
@@ -986,6 +1000,8 @@ class Timeline:
         # Gain automation splits like any other animated value, so the left piece keeps
         # the fade it played and the right piece starts where the split landed.
         left_gain, right_gain = split_animated({"gain": clip.gain}, left_len)
+        left_presets, right_presets = split_instances(clip.presets, left_len, left_len,
+                                                      clip.duration - left_len)
         right = self.new_clip(
             clip.name, clip.source_path, clip.track, frame, clip.duration - left_len,
             clip.source_in, right_effects, clip.source_out, clip.source_fps,
@@ -993,9 +1009,11 @@ class Timeline:
             clip.source_min, clip.source_max, clip.volume,
             link_id=clip.link_id, stream=clip.stream, transform=right_transform,
             transform_meta=right_meta, text=right_text, gain=right_gain["gain"],
+            presets=right_presets,
         )
         right.source_offset = clip.source_offset + left_len * clip.source_fps / max(1.0, clip.timeline_fps) * clip.speed
         clip.effects = left_effects
+        clip.presets = left_presets
         clip.transform = left_transform
         clip.transform_meta = left_meta
         clip.gain = left_gain["gain"]
@@ -1030,6 +1048,7 @@ class Timeline:
             "transform_meta": copy.deepcopy(clip.transform_meta),
             "text": copy.deepcopy(clip.text),
             "gain": copy.deepcopy(clip.gain),
+            "presets": copy.deepcopy(getattr(clip, "presets", [])),
         }
 
     def paste_records(self, records, at_frame, anchor_track=None, mode="snap"):
@@ -1114,6 +1133,7 @@ class Timeline:
                                  rec.get("volume", 1.0), rec.get("fade_in", 0), rec.get("fade_out", 0),
                                  rec.get("fade_in_curve", 0.0), rec.get("fade_out_curve", 0.0),
                                  stream=rec.get("stream"), gain=rec.get("gain", 0.0))
+            clip.presets = copy.deepcopy(rec.get("presets") or [])
             clip.text = copy.deepcopy(rec.get("text"))
             clip.source_offset = rec.get("source_offset", 0)
             old_link = rec.get("link") or 0

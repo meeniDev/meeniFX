@@ -68,6 +68,7 @@ ZOOM_STOPS = ("Fit", "25%", "50%", "100%", "200%", "400%")
 # refers to the media the project already imported instead of importing it again.
 MEDIA_MIME = "application/x-meenifx-media"
 EFFECT_MIME = "application/x-meenifx-effect"
+PRESET_MIME = "application/x-meenifx-preset"
 
 VIDEO_EXT = (".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v")
 IMAGE_EXT = (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".gif")

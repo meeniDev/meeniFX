@@ -1,0 +1,17 @@
+{
+ "args": {
+  "amp": 0.006
+ },
+ "category": "text_loop",
+ "format": "mfxpreset",
+ "id": "text_loop_wiggle",
+ "keywords": [],
+ "knobs": {
+  "easing": "Linear",
+  "stagger": 0.1,
+  "unit": "word"
+ },
+ "name": "Wiggle",
+ "program": "wiggle",
+ "version": 1
+}

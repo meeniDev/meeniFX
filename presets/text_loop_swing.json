@@ -1,0 +1,17 @@
+{
+ "args": {
+  "deg": 5.0
+ },
+ "category": "text_loop",
+ "format": "mfxpreset",
+ "id": "text_loop_swing",
+ "keywords": [],
+ "knobs": {
+  "easing": "Linear",
+  "stagger": 0.25,
+  "unit": "letter"
+ },
+ "name": "Swing",
+ "program": "swing",
+ "version": 1
+}

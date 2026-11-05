@@ -1,0 +1,37 @@
+{
+ "description": "A curved glass tube: heavy scanlines, bloom and vignette",
+ "format": "mfxlook",
+ "id": "crt_monitor",
+ "name": "CRT Monitor",
+ "stack": [
+  {
+   "effect_id": "vhs_crt",
+   "params": {
+    "bleed": 5,
+    "curvature": 52,
+    "noise": 6,
+    "scanlines": 72,
+    "seed": 8,
+    "vignette": 48,
+    "wobble": 0
+   }
+  },
+  {
+   "effect_id": "bloom_streaks",
+   "params": {
+    "intensity": 50,
+    "length": 70,
+    "radius": 30,
+    "threshold": 72
+   }
+  },
+  {
+   "effect_id": "chromatic_aberration",
+   "params": {
+    "amount": 2,
+    "falloff": 60
+   }
+  }
+ ],
+ "version": 1
+}

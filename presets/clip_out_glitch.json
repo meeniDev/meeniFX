@@ -1,0 +1,14 @@
+{
+ "args": {},
+ "category": "clip_out",
+ "format": "mfxpreset",
+ "id": "clip_out_glitch",
+ "keywords": [],
+ "knobs": {
+  "easing": "Linear",
+  "intensity": 1.0
+ },
+ "name": "Glitch Out",
+ "program": "glitch_reveal",
+ "version": 1
+}

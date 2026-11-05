@@ -1,0 +1,36 @@
+{
+ "description": "Lifted shadows, wide glow and long soft streaks",
+ "format": "mfxlook",
+ "id": "dreamy_bloom",
+ "name": "Dreamy Bloom",
+ "stack": [
+  {
+   "effect_id": "glow",
+   "params": {
+    "intensity": 130,
+    "radius": 55,
+    "softness": 85,
+    "threshold": 45
+   }
+  },
+  {
+   "effect_id": "bloom_streaks",
+   "params": {
+    "intensity": 90,
+    "length": 280,
+    "radius": 40,
+    "threshold": 48
+   }
+  },
+  {
+   "effect_id": "color_correct",
+   "params": {
+    "brightness": 5,
+    "contrast": -4,
+    "saturation": 8,
+    "shadows": 14
+   }
+  }
+ ],
+ "version": 1
+}

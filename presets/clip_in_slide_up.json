@@ -1,0 +1,16 @@
+{
+ "args": {
+  "dir": "up"
+ },
+ "category": "clip_in",
+ "format": "mfxpreset",
+ "id": "clip_in_slide_up",
+ "keywords": [],
+ "knobs": {
+  "easing": "Smooth",
+  "intensity": 1.0
+ },
+ "name": "Slide In Up",
+ "program": "slide",
+ "version": 1
+}

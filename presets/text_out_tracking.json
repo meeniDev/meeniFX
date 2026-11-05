@@ -1,0 +1,17 @@
+{
+ "args": {
+  "px": 0.3
+ },
+ "category": "text_out",
+ "format": "mfxpreset",
+ "id": "text_out_tracking",
+ "keywords": [],
+ "knobs": {
+  "easing": "Cubic In",
+  "stagger": 0.2,
+  "unit": "letter"
+ },
+ "name": "Tracking Out",
+ "program": "tracking",
+ "version": 1
+}

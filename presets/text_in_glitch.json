@@ -1,0 +1,19 @@
+{
+ "args": {},
+ "category": "text_in",
+ "format": "mfxpreset",
+ "id": "text_in_glitch",
+ "keywords": [
+  "digital",
+  "rgb"
+ ],
+ "knobs": {
+  "easing": "Linear",
+  "intensity": 1.0,
+  "stagger": 0.5,
+  "unit": "letter"
+ },
+ "name": "Glitch Reveal",
+ "program": "glitch_reveal",
+ "version": 1
+}

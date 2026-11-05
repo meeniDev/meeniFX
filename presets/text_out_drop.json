@@ -1,0 +1,17 @@
+{
+ "args": {
+  "px": 1.2
+ },
+ "category": "text_out",
+ "format": "mfxpreset",
+ "id": "text_out_drop",
+ "keywords": [],
+ "knobs": {
+  "easing": "Cubic In",
+  "stagger": 0.45,
+  "unit": "letter"
+ },
+ "name": "Drop Out",
+ "program": "drop",
+ "version": 1
+}

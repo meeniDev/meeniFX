@@ -1,0 +1,18 @@
+{
+ "args": {
+  "px": 1.3
+ },
+ "category": "text_in",
+ "format": "mfxpreset",
+ "id": "text_in_drop",
+ "keywords": [],
+ "knobs": {
+  "easing": "Bounce Out",
+  "intensity": 1.0,
+  "stagger": 0.35,
+  "unit": "letter"
+ },
+ "name": "Drop In",
+ "program": "drop",
+ "version": 1
+}

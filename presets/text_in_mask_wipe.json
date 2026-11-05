@@ -1,0 +1,20 @@
+{
+ "args": {
+  "soft": 0.3
+ },
+ "category": "text_in",
+ "format": "mfxpreset",
+ "id": "text_in_mask_wipe",
+ "keywords": [
+  "reveal"
+ ],
+ "knobs": {
+  "easing": "Linear",
+  "intensity": 1.0,
+  "stagger": 0.7,
+  "unit": "word"
+ },
+ "name": "Mask Wipe",
+ "program": "wipe",
+ "version": 1
+}

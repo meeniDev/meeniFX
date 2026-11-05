@@ -1,0 +1,16 @@
+{
+ "args": {
+  "deg": 180
+ },
+ "category": "clip_in",
+ "format": "mfxpreset",
+ "id": "clip_in_spin",
+ "keywords": [],
+ "knobs": {
+  "easing": "Smooth",
+  "intensity": 1.0
+ },
+ "name": "Spin In",
+ "program": "spin",
+ "version": 1
+}

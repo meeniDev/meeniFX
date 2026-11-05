@@ -4,6 +4,8 @@ import os
 
 import cv2
 
+from ..media.cache import entry_size
+
 from . import container as C
 from .convert import convert_timeline_fps
 from .media import MediaLibrary, media_type_for
@@ -57,8 +59,9 @@ def register_media(engine, library, path, audio_duration=None):
     if entry is not None and kind != "audio":
         fps = float(entry.fps or 0)
         duration = 0.0 if entry.kind == "image" else entry.frame_count / max(1e-6, entry.fps)
-        if entry.frames:
-            height, width = entry.frames[0].shape[:2]
+        size = entry_size(entry)
+        if size:
+            width, height = size
     if kind == "audio" and audio_duration:
         duration = float(audio_duration(path) or 0)
     if existing is not None:

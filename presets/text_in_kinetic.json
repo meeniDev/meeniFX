@@ -1,0 +1,22 @@
+{
+ "args": {
+  "punch": 0.5,
+  "steps": 4
+ },
+ "category": "text_in",
+ "format": "mfxpreset",
+ "id": "text_in_kinetic",
+ "keywords": [
+  "japanese",
+  "hardcut"
+ ],
+ "knobs": {
+  "easing": "Linear",
+  "intensity": 1.0,
+  "stagger": 0.8,
+  "unit": "word"
+ },
+ "name": "Kinetic Punch",
+ "program": "kinetic",
+ "version": 1
+}

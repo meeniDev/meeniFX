@@ -1,0 +1,16 @@
+{
+ "args": {
+  "period": 0.2
+ },
+ "category": "clip_loop",
+ "format": "mfxpreset",
+ "id": "clip_loop_strobe",
+ "keywords": [],
+ "knobs": {
+  "easing": "Smooth",
+  "intensity": 1.0
+ },
+ "name": "Strobe",
+ "program": "strobe",
+ "version": 1
+}

@@ -1,0 +1,16 @@
+{
+ "args": {
+  "amp": 0.004
+ },
+ "category": "clip_loop",
+ "format": "mfxpreset",
+ "id": "clip_loop_jitter",
+ "keywords": [],
+ "knobs": {
+  "easing": "Smooth",
+  "intensity": 1.0
+ },
+ "name": "Jitter",
+ "program": "jitter",
+ "version": 1
+}

@@ -1,0 +1,20 @@
+{
+ "args": {
+  "amp": 0.01,
+  "speed": 8.0
+ },
+ "category": "clip_loop",
+ "format": "mfxpreset",
+ "id": "clip_loop_shake",
+ "keywords": [
+  "noise",
+  "handheld"
+ ],
+ "knobs": {
+  "easing": "Smooth",
+  "intensity": 1.0
+ },
+ "name": "Shake",
+ "program": "shake",
+ "version": 1
+}

@@ -262,6 +262,44 @@ def test_the_recorder_panel_starts_with_real_audio_sources(tmp_path, qt_app):
         panel.hide()
 
 
+def test_window_capture_saves_the_title_because_qt_has_no_window_id(tmp_path, qt_app, monkeypatch):
+    """Picking a window used to raise AttributeError: QCapturableWindow has no id()."""
+    from meenifx.recording import devices
+    from meenifx.ui.recorder_panel import RecorderPanel
+
+    class _Window:
+        def __init__(self, title):
+            self._title = title
+
+        def description(self):
+            return self._title
+
+        def isValid(self):
+            return True
+
+    titles = ["meeniFX - project", "VLC media player"]
+    monkeypatch.setattr(devices, "windows", lambda: [_Window(title) for title in titles])
+    panel = RecorderPanel(None, default_folder=str(tmp_path))
+    try:
+        panel.settings = RecorderSettings(screen_mode="window", window_title=titles[1],
+                                          folder=str(tmp_path))
+        panel._loading = True                     # do not push the stub into the real captures
+        try:
+            panel._load_into_controls()           # the traceback's crash site
+        finally:
+            panel._loading = False
+        assert panel.screen_target.count() == len(titles)
+        assert panel.screen_target.currentData().description() == titles[1],             "the saved window was not reselected"
+        assert panel.collect().window_title == titles[1], "the choice is saved as the title"
+        panel.screen_target.setCurrentIndex(0)
+        assert panel.collect().window_title == titles[0]
+        assert devices.find_window(titles[0]).description() == titles[0]
+        assert devices.find_window("a window that is gone") is None
+    finally:
+        panel.stop_previews()
+        panel.hide()
+
+
 def _peak_level(path):
     """Loudest sample in a 16-bit WAV, for the "was anything playing?" check."""
     import numpy as np

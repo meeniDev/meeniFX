@@ -24,7 +24,7 @@ import time
 import zipfile
 
 FORMAT_NAME = "mfxpf"
-FORMAT_VERSION = 5
+FORMAT_VERSION = 7
 
 JSON_ENTRIES = {
     "meta": "meta.json",
@@ -121,6 +121,38 @@ def _migrate_4_to_5(sections):
 
 
 MIGRATIONS[4] = _migrate_4_to_5
+
+
+def _migrate_5_to_6(sections):
+    """Format 6 adds animation preset instances to clips.
+
+    A format 5 project simply has none, and the loader treats a missing column as an
+    empty list, so nothing has to be rewritten.
+    """
+    clips = sections.get("clips")
+    if isinstance(clips, dict) and "presets" not in clips:
+        clips["presets"] = [None for _ in clips.get("id") or ()]
+    return sections
+
+
+MIGRATIONS[5] = _migrate_5_to_6
+
+
+def _migrate_6_to_7(sections):
+    """Format 7 adds per-clip blend modes and adjustment layers.
+
+    Older projects blend normally and carry no adjustment layer, which are exactly the
+    defaults the loader uses for a missing column, so nothing is rewritten.
+    """
+    clips = sections.get("clips")
+    if isinstance(clips, dict):
+        count = len(clips.get("id") or ())
+        clips.setdefault("blend", ["normal" for _ in range(count)])
+        clips.setdefault("adjust", [False for _ in range(count)])
+    return sections
+
+
+MIGRATIONS[6] = _migrate_6_to_7
 
 
 def migrate(sections, version):

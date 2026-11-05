@@ -1,0 +1,16 @@
+{
+ "args": {
+  "dir": "right"
+ },
+ "category": "clip_out",
+ "format": "mfxpreset",
+ "id": "clip_out_slide",
+ "keywords": [],
+ "knobs": {
+  "easing": "Cubic In",
+  "intensity": 1.0
+ },
+ "name": "Slide Out",
+ "program": "slide",
+ "version": 1
+}

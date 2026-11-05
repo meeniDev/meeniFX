@@ -1,0 +1,16 @@
+{
+ "args": {
+  "amp": 0.06
+ },
+ "category": "clip_loop",
+ "format": "mfxpreset",
+ "id": "clip_loop_heartbeat",
+ "keywords": [],
+ "knobs": {
+  "easing": "Smooth",
+  "intensity": 1.0
+ },
+ "name": "Heartbeat",
+ "program": "heartbeat",
+ "version": 1
+}

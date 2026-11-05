@@ -1,0 +1,16 @@
+{
+ "args": {
+  "amp": 0.015
+ },
+ "category": "clip_loop",
+ "format": "mfxpreset",
+ "id": "clip_loop_sway",
+ "keywords": [],
+ "knobs": {
+  "easing": "Smooth",
+  "intensity": 1.0
+ },
+ "name": "Sway",
+ "program": "sway",
+ "version": 1
+}

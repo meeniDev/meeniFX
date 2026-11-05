@@ -1,0 +1,17 @@
+{
+ "args": {
+  "deg": 35
+ },
+ "category": "text_out",
+ "format": "mfxpreset",
+ "id": "text_out_rotate",
+ "keywords": [],
+ "knobs": {
+  "easing": "Cubic In",
+  "stagger": 0.45,
+  "unit": "letter"
+ },
+ "name": "Rotate Out",
+ "program": "rotate",
+ "version": 1
+}

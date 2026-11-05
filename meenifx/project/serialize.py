@@ -7,6 +7,7 @@ keyframes, and the owner's `kind` says where it belongs ("effect", "transform" o
 interpolation names survive a save/load round trip untouched.
 """
 
+import copy
 import itertools
 
 from ..model import text as text_model
@@ -17,7 +18,7 @@ from ..model.timeline import Clip, Marker, Timeline, Track
 CLIP_COLUMNS = ("id", "track", "media", "name", "start", "dur", "src_in", "src_out", "src_min", "src_max",
                 "src_fps", "tl_fps", "speed", "reverse", "loop", "freeze", "offset", "volume",
                 "fade_in", "fade_out", "fade_in_curve", "fade_out_curve", "stream", "link",
-                "transform", "meta", "text", "gain")
+                "transform", "meta", "text", "gain", "presets", "blend", "adjust")
 KF_FIELDS = ("in_influence", "out_influence", "in_value_handle", "out_value_handle")
 PIN_KEYS = ("id", "src", "locked")
 RESERVED_EFFECT_KEYS = ("effect_id", "enabled", "params", "pins")
@@ -91,7 +92,8 @@ def timeline_to_sections(timeline, media_id_for):
                     c.source_fps, c.timeline_fps, c.speed, c.reverse, c.loop, c.freeze, c.source_offset,
                     c.volume, c.fade_in, c.fade_out, c.fade_in_curve, c.fade_out_curve,
                     c.stream, c.link_id, transform_static, c.transform_meta or {}, text_column,
-                    gain_static)):
+                    gain_static, copy.deepcopy(getattr(c, "presets", []) or []),
+                    getattr(c, "blend", "normal"), bool(getattr(c, "adjustment", False)))):
                 cols[key].append(val)
             for effect in c.effects:
                 static, animated = _split_animated(effect.get("params", {}))
@@ -209,6 +211,9 @@ def sections_to_timeline(sections, fps, path_for_media):
     for clip_index, _name, animated in gain_owners:
         gain_by_clip[clip_index] = animated
     gain_column = c.get("gain") or [0.0 for _ in range(count)]
+    presets_column = c.get("presets") or [None for _ in range(count)]
+    blend_column = c.get("blend") or ["normal" for _ in range(count)]
+    adjust_column = c.get("adjust") or [False for _ in range(count)]
     for i in range(count):
         track = timeline.tracks[c["track"][i]]
         path = path_for_media(c["media"][i]) if c["media"][i] else ""
@@ -219,7 +224,9 @@ def sections_to_timeline(sections, fps, path_for_media):
                     c["fade_in_curve"][i], c["fade_out_curve"][i],
                     link_id=int(streams["link"][i] or 0), stream=streams["stream"][i] or None,
                     transform=transform_column[i] or None, transform_meta=meta_column[i] or None,
-                    text=text_column[i] or None, gain=gain_column[i])
+                    text=text_column[i] or None, gain=gain_column[i],
+                    presets=presets_column[i] or None, blend=blend_column[i],
+                    adjustment=bool(adjust_column[i]))
         track.clips.append(clip)
         if i in gain_by_clip:
             clip.gain = gain_by_clip[i]

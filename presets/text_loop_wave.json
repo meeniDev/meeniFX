@@ -1,0 +1,21 @@
+{
+ "args": {
+  "amp": 0.03,
+  "cycles": 2.0,
+  "spread": 0.18
+ },
+ "category": "text_loop",
+ "format": "mfxpreset",
+ "id": "text_loop_wave",
+ "keywords": [
+  "idle"
+ ],
+ "knobs": {
+  "easing": "Linear",
+  "stagger": 0.35,
+  "unit": "letter"
+ },
+ "name": "Wave",
+ "program": "wave",
+ "version": 1
+}

@@ -1,0 +1,21 @@
+{
+ "args": {
+  "from": 0.2
+ },
+ "category": "text_in",
+ "format": "mfxpreset",
+ "id": "text_in_pop",
+ "keywords": [
+  "scale",
+  "bounce"
+ ],
+ "knobs": {
+  "easing": "Back Out",
+  "intensity": 1.0,
+  "stagger": 0.55,
+  "unit": "letter"
+ },
+ "name": "Pop",
+ "program": "pop",
+ "version": 1
+}

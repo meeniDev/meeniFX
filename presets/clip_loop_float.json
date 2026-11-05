@@ -1,0 +1,16 @@
+{
+ "args": {
+  "amp": 0.02
+ },
+ "category": "clip_loop",
+ "format": "mfxpreset",
+ "id": "clip_loop_float",
+ "keywords": [],
+ "knobs": {
+  "easing": "Smooth",
+  "intensity": 1.0
+ },
+ "name": "Float",
+ "program": "float",
+ "version": 1
+}

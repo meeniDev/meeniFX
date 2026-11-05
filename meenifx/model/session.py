@@ -13,7 +13,7 @@ from . import text as TXT
 from . import transform as T
 from .keyframes import AnimatedValue, animation_value
 from .values import Value
-from .timeline import CommandStack, Signal, Timeline, timecode_text
+from .timeline import CommandStack, Signal, Timeline, clone_effects, timecode_text
 
 
 class TimelineSession:
@@ -875,11 +875,10 @@ class TimelineSession:
         if clip is not None and clip.is_text:
             size = self.project_size
             return (int(size[0]), int(size[1])) if size else (1920, 1080)
-        entry = self.media._entries.get(clip.source_path) if (clip is not None and clip.source_path
-                                                             and self.media is not None) else None
-        if entry is not None and getattr(entry, "frames", None):
-            height, width = entry.frames[0].shape[:2]
-            return int(width), int(height)
+        media_size = (self.media.source_size(clip.source_path) if (clip is not None
+                      and clip.source_path and self.media is not None) else None)
+        if media_size:
+            return media_size
         size = self.project_size
         return (int(size[0]), int(size[1])) if size else (1920, 1080)
 
@@ -1327,6 +1326,260 @@ class TimelineSession:
 
         self.stack.run(label, action)
 
+    # ---------------------------------------------------------------- presets
+    def apply_preset(self, preset, unit=None, ids=None):
+        """Add a library preset to every selected video clip as one undoable edit.
+
+        In and Out presets replace their own category (one entrance and one exit per
+        clip); Loops stack instead. Text clips take the requested unit, media clips
+        ignore it.
+        """
+        from . import preset_library as LIB
+        from . import presets as PM
+
+        clips = [clip for clip in self._selected_clips()
+                 if clip.track is not None and clip.track.type == "video"
+                 and not clip.track.locked]
+        if ids is not None:
+            clips = [clip for clip in (self.timeline.find_clip(cid) for cid in ids)
+                     if clip is not None and clip.track.type == "video"]
+        if not clips or not preset:
+            return 0
+        category, program, args, knobs = LIB.preset_spec(preset, unit)
+        name = preset.get("name") or preset.get("id", "Preset")
+        fps = self.timeline.fps
+        added = 0
+
+        def action():
+            nonlocal added
+            for candidate in clips:
+                target = self.timeline.find_clip(candidate.id)
+                if target is None:
+                    continue
+                if preset.get("instances") and not preset.get("program"):
+                    # Saved from a clip: replay its whole animation, not just one program.
+                    PM.from_payload(preset, target)
+                    added += 1
+                    continue
+                instance_knobs = dict(knobs)
+                if not target.is_text:
+                    # Media clips animate as a whole; the Unit knob never reaches them.
+                    instance_knobs["unit"] = "whole"
+                PM.add(target, preset["id"], category, program, args, instance_knobs,
+                       duration=PM.default_duration(target, fps, category), name=name)
+                added += 1
+
+        self.stack.run(f"Apply {name}", action)
+        if added:
+            self.status.emit(f"{name} applied to {added} clip{'s' if added != 1 else ''}")
+        return added
+
+    def remove_preset(self, clip_id, index):
+        """Drop one instance from a clip (one undo step)."""
+        from . import presets as PM
+
+        clip = self.timeline.find_clip(clip_id)
+        if clip is None or not 0 <= int(index) < len(PM.instances(clip)):
+            return False
+        name = PM.instances(clip)[int(index)].get("name") or "preset"
+
+        def action():
+            target = self.timeline.find_clip(clip_id)
+            if target is not None and 0 <= int(index) < len(PM.instances(target)):
+                PM.instances(target).pop(int(index))
+
+        self.stack.run(f"Remove {name}", action)
+        return True
+
+    def update_preset(self, clip_id, index, label="Preset", knobs=None, start=None,
+                      duration=None):
+        """Change some knobs and/or the window of one instance as one undo step."""
+        from . import presets as PM
+
+        clip = self.timeline.find_clip(clip_id)
+        if clip is None or not 0 <= int(index) < len(PM.instances(clip)):
+            return False
+        knobs = dict(knobs or {})
+        if not knobs and start is None and duration is None:
+            return False
+
+        def action():
+            target = self.timeline.find_clip(clip_id)
+            if target is None or not 0 <= int(index) < len(PM.instances(target)):
+                return
+            instance = PM.instances(target)[int(index)]
+            for key, value in knobs.items():
+                PM.set_knob(instance, key, value)
+            if start is not None or duration is not None:
+                PM.set_range(instance, start, duration, target)
+
+        self.stack.run(label, action)
+        return True
+
+    def bake_preset(self, clip_id, index):
+        """Turn one instance into plain keyframes (one undo step)."""
+        from . import presets as PM
+
+        clip = self.timeline.find_clip(clip_id)
+        if clip is None or not 0 <= int(index) < len(PM.instances(clip)):
+            return False
+        instance = PM.instances(clip)[int(index)]
+        if not PM.bakeable(instance, clip):
+            self.status.emit("Per-unit presets need Split text; bake works on whole-clip presets")
+            return False
+        name = instance.get("name") or "preset"
+        size = self.project_size or (1920, 1080)
+
+        def action():
+            target = self.timeline.find_clip(clip_id)
+            if target is not None and 0 <= int(index) < len(PM.instances(target)):
+                PM.bake(target, PM.instances(target)[int(index)], project_size=size)
+
+        self.stack.run(f"Bake {name}", action)
+        self.status.emit(f"{name} baked to keyframes")
+        return True
+
+    def split_text_clip(self, clip_id, pieces, mode="letter"):
+        """Split a text clip into one clip per unit, at the exact same positions.
+
+        `pieces` is [(text, offset_x, offset_y)] in project pixels relative to the frame
+        centre, produced by the text layout (the model stays free of font metrics). The
+        pieces inherit the picture's transform, effects and fades, and a per-unit preset
+        instance becomes a whole-clip instance on each piece - which is the point of
+        splitting: every letter can then be edited and animated on its own.
+        """
+        from . import presets as PM
+        from . import text as TXT
+
+        clip = self.timeline.find_clip(clip_id)
+        if clip is None or not clip.is_text or len(pieces or ()) < 2:
+            return []
+        if clip.track is None or clip.track.locked:
+            return []
+        source = {key: value for key, value in (clip.text or {}).items() if key != "keys"}
+        created = []
+
+        def action():
+            nonlocal created
+            created = []
+            track = clip.track
+            start, duration = clip.timeline_start, clip.duration
+            for text_value, offset_x, offset_y in pieces:
+                piece = self.timeline.new_clip(
+                    name=str(text_value)[:40] or "Text", source_path="", track=track,
+                    start=start, duration=duration, source_in=clip.source_in,
+                    effects=clone_effects(clip.effects), source_out=clip.source_out,
+                    source_fps=clip.source_fps, speed=clip.speed, reverse=clip.reverse,
+                    loop=clip.loop, freeze=clip.freeze, source_offset=clip.source_offset,
+                    source_min=clip.source_min, source_max=clip.source_max,
+                    volume=clip.volume, fade_in=clip.fade_in, fade_out=clip.fade_out,
+                    fade_in_curve=clip.fade_in_curve, fade_out_curve=clip.fade_out_curve,
+                    stream=clip.stream, transform=copy.deepcopy(clip.transform),
+                    transform_meta=copy.deepcopy(clip.transform_meta),
+                    gain=copy.deepcopy(clip.gain))
+                settings = copy.deepcopy(source)
+                settings["text"] = str(text_value)
+                settings["keys"] = {}
+                piece.text = settings
+                TXT.ensure_text(piece)
+                piece.text["offset_x"] = float(TXT.DEFAULTS["offset_x"]) + float(offset_x)
+                piece.text["offset_y"] = float(TXT.DEFAULTS["offset_y"]) + float(offset_y)
+                piece.presets = copy.deepcopy(PM.instances(clip))
+                for instance in PM.instances(piece):
+                    instance.setdefault("knobs", {})["unit"] = "whole"
+                created.append(piece.id)
+            track.clips.remove(clip)
+
+        self.stack.run(f"Split text into {mode}s", action)
+        if created:
+            self.set_selection(set(created), expand=False)
+            self.status.emit(f"Split into {len(created)} {mode} clips")
+        return created
+
+
+    def apply_look(self, look, ids=None):
+        """Insert a look's effect stack plus its Strength card (one undo step).
+
+        The stack is a normal list of effect entries, so every effect inside a look can
+        still be reordered, tweaked or removed; the group card only scales their Mix.
+        """
+        from . import looks as LOOKS
+        look = LOOKS.get(look) if not isinstance(look, dict) else look
+        if look is None:
+            return []
+        ids = list(ids if ids is not None else sorted(self.selected))
+        targets = []
+        for clip_id in ids:
+            clip = self.timeline.find_clip(clip_id)
+            if clip is None:
+                continue
+            track = getattr(clip, "track", None)
+            if track is not None and track.type != "video":
+                continue
+            targets.append(clip_id)
+        if not targets:
+            self.status.emit("Looks need a video clip or an adjustment layer")
+            return []
+        group_counter = [0]
+
+        def action():
+            for clip_id in targets:
+                clip = self.timeline.find_clip(clip_id)
+                if clip is None:
+                    continue
+                group_counter[0] += 1
+                group = f"{look['id']}#{group_counter[0]}"
+                clip.effects.append({"effect_id": "look", "enabled": True,
+                                     "look_id": group, "name": look["name"],
+                                     "params": {"look": look["id"], "strength": 100}})
+                for item in LOOKS.stack_for(look):
+                    clip.effects.append({"effect_id": item["effect_id"],
+                                         "enabled": item.get("enabled", True),
+                                         "look_id": group,
+                                         "params": copy.deepcopy(item.get("params") or {})})
+
+        self.stack.run(f"Apply {look['name']} look", action)
+        self.status.emit(f"{look['name']} applied")
+        return targets
+
+    def set_blend_mode(self, clip_id, mode):
+        """Set how a clip is mixed with the layers below it (one undo step)."""
+        from ..processing.blend import normalise_mode
+        key = normalise_mode(mode)
+        clip = self.timeline.find_clip(clip_id)
+        if clip is None or clip.blend == key:
+            return False
+        self.apply_to_clips([clip_id], "Blend mode", lambda c: setattr(c, "blend", key))
+        return True
+
+    def add_adjustment_clip(self, start=None, duration=None, track=None):
+        """Create an adjustment layer on a video track and select it.
+
+        It has no picture: its effects run over everything already composited below it
+        for as long as the clip plays, and it is editable like any other clip (trim,
+        fades, opacity keyframes, blend mode, effects).
+        """
+        tl = self.timeline
+        start = max(0, int(self.playhead if start is None else start))
+        duration = max(1, int(duration if duration is not None else round(tl.fps * 5)))
+        holder = {}
+
+        def action():
+            target = track
+            if target is None or target.type != "video":
+                # A new video track becomes the top layer, above every picture below it.
+                target = tl.add_track("video")
+            holder["clip"] = tl.new_clip(name="Adjustment", source_path="", track=target,
+                                         start=start, duration=duration, adjustment=True)
+
+        self.stack.run("Add adjustment layer", action)
+        clip = holder.get("clip")
+        if clip is None:
+            return None
+        self.set_selection({clip.id})
+        self.reveal_requested.emit(clip.timeline_start)
+        self.status.emit("Adjustment layer added")
+        return clip.id
 
     # ---------------------------------------------------------------- text clips
     def add_text_clip(self, text="Text", start=None, duration=None, track=None):

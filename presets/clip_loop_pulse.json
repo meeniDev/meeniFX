@@ -1,0 +1,16 @@
+{
+ "args": {
+  "amp": 0.035
+ },
+ "category": "clip_loop",
+ "format": "mfxpreset",
+ "id": "clip_loop_pulse",
+ "keywords": [],
+ "knobs": {
+  "easing": "Smooth",
+  "intensity": 1.0
+ },
+ "name": "Pulse",
+ "program": "pulse",
+ "version": 1
+}

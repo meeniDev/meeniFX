@@ -20,7 +20,9 @@ class RecorderSettings:
     camera_format: str = ""          # "WxH@fps"
     screen_mode: str = "screen"      # screen | window
     screen_name: str = ""
-    window_id: int = 0
+    # Qt exposes a capturable window only by its description, so the title is the
+    # handle the recorder can save and the only thing it can match on reload.
+    window_title: str = ""
     show_cursor: bool = True
     mic_id: str = ""
     mic_volume: int = 100            # percent

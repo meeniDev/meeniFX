@@ -1,0 +1,16 @@
+{
+ "args": {
+  "dir": "right"
+ },
+ "category": "clip_out",
+ "format": "mfxpreset",
+ "id": "clip_out_whip",
+ "keywords": [],
+ "knobs": {
+  "easing": "Exponential In",
+  "intensity": 1.0
+ },
+ "name": "Whip Out",
+ "program": "whip",
+ "version": 1
+}

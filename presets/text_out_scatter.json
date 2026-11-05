@@ -1,0 +1,17 @@
+{
+ "args": {},
+ "category": "text_out",
+ "format": "mfxpreset",
+ "id": "text_out_scatter",
+ "keywords": [
+  "explode"
+ ],
+ "knobs": {
+  "easing": "Cubic In",
+  "stagger": 0.7,
+  "unit": "letter"
+ },
+ "name": "Scatter",
+ "program": "scatter",
+ "version": 1
+}

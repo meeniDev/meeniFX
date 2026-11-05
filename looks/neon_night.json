@@ -1,0 +1,44 @@
+{
+ "description": "Cool shadows, hot highlights and a cyan bloom",
+ "format": "mfxlook",
+ "id": "neon_night",
+ "name": "Neon Night",
+ "stack": [
+  {
+   "effect_id": "duotone",
+   "params": {
+    "detail": 60,
+    "highlight_hue": -25,
+    "intensity": 45,
+    "shadow_hue": -150
+   }
+  },
+  {
+   "effect_id": "glow",
+   "params": {
+    "glow_b": 255,
+    "glow_g": 215,
+    "glow_r": 70,
+    "intensity": 110,
+    "radius": 40,
+    "threshold": 58
+   }
+  },
+  {
+   "effect_id": "bloom_streaks",
+   "params": {
+    "intensity": 85,
+    "length": 200,
+    "threshold": 60
+   }
+  },
+  {
+   "effect_id": "color_correct",
+   "params": {
+    "contrast": 16,
+    "saturation": 24
+   }
+  }
+ ],
+ "version": 1
+}

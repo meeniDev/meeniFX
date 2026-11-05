@@ -1,0 +1,16 @@
+{
+ "args": {
+  "from": 0.55
+ },
+ "category": "clip_out",
+ "format": "mfxpreset",
+ "id": "clip_out_zoom",
+ "keywords": [],
+ "knobs": {
+  "easing": "Cubic In",
+  "intensity": 1.0
+ },
+ "name": "Zoom Out",
+ "program": "zoom",
+ "version": 1
+}

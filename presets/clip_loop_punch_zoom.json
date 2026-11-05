@@ -1,0 +1,17 @@
+{
+ "args": {
+  "amp": 0.1,
+  "hold": 0.35
+ },
+ "category": "clip_loop",
+ "format": "mfxpreset",
+ "id": "clip_loop_punch_zoom",
+ "keywords": [],
+ "knobs": {
+  "easing": "Smooth",
+  "intensity": 1.0
+ },
+ "name": "Punch Zoom",
+ "program": "punch_zoom",
+ "version": 1
+}

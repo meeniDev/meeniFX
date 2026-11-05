@@ -1,0 +1,19 @@
+{
+ "args": {},
+ "category": "text_in",
+ "format": "mfxpreset",
+ "id": "text_in_typewriter",
+ "keywords": [
+  "typing",
+  "decode"
+ ],
+ "knobs": {
+  "easing": "Linear",
+  "intensity": 1.0,
+  "stagger": 1.0,
+  "unit": "letter"
+ },
+ "name": "Typewriter",
+ "program": "stagger_fade",
+ "version": 1
+}

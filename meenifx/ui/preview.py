@@ -186,11 +186,15 @@ class PreviewWidget(QWidget):
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         painter.fillRect(self.rect(), QColor("#101114"))
         if self._image.isNull() or not self._frame_size[0]:
+            # Nothing to show yet, but the statistics are live: an empty timeline still
+            # answers "is the overlay on?" instead of drawing nothing at all.
+            self._paint_perf_overlay(painter)
             painter.end()
             return
         rect = self.frame_rect()
         visible = rect.intersected(QRectF(self.rect()))
         if visible.isEmpty():
+            self._paint_perf_overlay(painter)
             painter.end()
             return
         # Normalized coordinates inside the logical frame: the image (whatever its
@@ -223,9 +227,13 @@ class PreviewWidget(QWidget):
         if self.overlay is not None:
             self.overlay.paint(painter)
         painter.restore()
+        self._paint_perf_overlay(painter)
+        painter.end()
+
+    def _paint_perf_overlay(self, painter):
+        """The FPS/cache HUD, over the picture but never part of it."""
         if self.perf_overlay is not None:
             self.perf_overlay.paint(painter, QRectF(self.rect()))
-        painter.end()
 
     def wheelEvent(self, event):
         steps = event.angleDelta().y() / 120.0

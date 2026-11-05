@@ -1,0 +1,17 @@
+{
+ "args": {
+  "dir": "up"
+ },
+ "category": "text_out",
+ "format": "mfxpreset",
+ "id": "text_out_slide_up",
+ "keywords": [],
+ "knobs": {
+  "easing": "Smooth",
+  "stagger": 0.45,
+  "unit": "letter"
+ },
+ "name": "Slide Out Up",
+ "program": "slide",
+ "version": 1
+}

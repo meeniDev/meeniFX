@@ -1,0 +1,18 @@
+{
+ "args": {
+  "dir": "right"
+ },
+ "category": "text_in",
+ "format": "mfxpreset",
+ "id": "text_in_slide_right",
+ "keywords": [],
+ "knobs": {
+  "easing": "Smooth",
+  "intensity": 1.0,
+  "stagger": 0.4,
+  "unit": "letter"
+ },
+ "name": "Slide In Right",
+ "program": "slide",
+ "version": 1
+}

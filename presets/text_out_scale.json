@@ -1,0 +1,17 @@
+{
+ "args": {
+  "from": 0.2
+ },
+ "category": "text_out",
+ "format": "mfxpreset",
+ "id": "text_out_scale",
+ "keywords": [],
+ "knobs": {
+  "easing": "Cubic In",
+  "stagger": 0.45,
+  "unit": "letter"
+ },
+ "name": "Scale Out",
+ "program": "scale",
+ "version": 1
+}

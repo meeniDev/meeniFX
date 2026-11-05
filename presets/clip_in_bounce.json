@@ -1,0 +1,16 @@
+{
+ "args": {
+  "px": 1.0
+ },
+ "category": "clip_in",
+ "format": "mfxpreset",
+ "id": "clip_in_bounce",
+ "keywords": [],
+ "knobs": {
+  "easing": "Bounce Out",
+  "intensity": 1.0
+ },
+ "name": "Bounce In",
+ "program": "bounce",
+ "version": 1
+}

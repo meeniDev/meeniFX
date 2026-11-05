@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QPoint, QPointF, Qt  # noqa: E402
-from PyQt6.QtGui import QMouseEvent  # noqa: E402
+from PyQt6.QtGui import QImage, QMouseEvent, QPainter  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from meenifx.model import channels as CH  # noqa: E402
@@ -75,6 +75,64 @@ def add_still(window):
     clips = window.insert_media_items([item], frame=0)
     assert clips, "the still was not inserted"
     return window.engine.timeline.find_clip(clips[0])
+
+
+def test_a_source_that_cannot_decode_does_not_break_sizing(editor):
+    """A moved or corrupt file used to raise IndexError from inside the overlay's paint."""
+    window = editor
+    clip = window.engine.timeline.all_clips()[0]
+    entry = window.engine.media._entries[clip.source_path]
+    original = entry.frames
+
+    class _NoFrames:
+        def __len__(self):
+            return 0
+
+        def __getitem__(self, index):
+            raise IndexError(index)
+
+    entry.frames = _NoFrames()
+    try:
+        assert window.engine.media.source_size(clip.source_path) is None
+        assert window.overlay.image_size(clip) == window.engine.project_size()
+        assert len(window.overlay.clip_corners(clip)) == 4
+        assert window.engine.session.clip_image_size(clip) == window.engine.project_size()
+        image = QImage(96, 96, QImage.Format.Format_ARGB32)
+        painter = QPainter(image)
+        try:
+            window.overlay.paint(painter)          # the frame that crashed the app
+        finally:
+            painter.end()
+        assert window.engine.media.tile_width(clip, 40) == 71, "falls back to 16:9"
+    finally:
+        entry.frames = original
+
+
+def test_the_performance_overlay_menu_item_actually_shows_the_overlay(editor):
+    """The menu item used to flip the action and the saved flag, but not the overlay."""
+    window = editor
+    view = window.preview_panel.view
+    window.perf_overlay.visible = False
+    window.perf_overlay_action.setChecked(False)
+    view.update()
+    pump(0.1)
+    plain = view.grab().toImage()
+
+    window.timeline_panel.canvas.setFocus()
+    window.perf_overlay_action.trigger()          # what clicking the menu item does
+    pump(0.15)
+    assert window.perf_overlay.visible is True
+    assert window.playback_settings.show_overlay is True
+    shown = view.grab().toImage()
+    assert plain.pixelColor(12, 12) != shown.pixelColor(12, 12), "the HUD painted nothing"
+    stats = window._overlay_stats()
+    assert isinstance(stats["fps"], float) and stats["target_fps"] == float(
+        window.engine.timeline.fps)
+
+    window.perf_overlay_action.trigger()
+    pump(0.1)
+    assert window.perf_overlay.visible is False
+    assert view.grab().toImage().pixelColor(12, 12) == plain.pixelColor(12, 12)
 
 
 # --------------------------------------------------------------------- preview

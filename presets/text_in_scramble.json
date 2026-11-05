@@ -1,0 +1,21 @@
+{
+ "args": {
+  "pool": "ABCDEFGHKLMNPRSTUVWXYZ0123456789#%&"
+ },
+ "category": "text_in",
+ "format": "mfxpreset",
+ "id": "text_in_scramble",
+ "keywords": [
+  "decode",
+  "hacker"
+ ],
+ "knobs": {
+  "easing": "Linear",
+  "intensity": 1.0,
+  "stagger": 0.6,
+  "unit": "letter"
+ },
+ "name": "Scramble Decode",
+ "program": "scramble",
+ "version": 1
+}

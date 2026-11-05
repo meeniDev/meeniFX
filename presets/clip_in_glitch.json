@@ -1,0 +1,14 @@
+{
+ "args": {},
+ "category": "clip_in",
+ "format": "mfxpreset",
+ "id": "clip_in_glitch",
+ "keywords": [],
+ "knobs": {
+  "easing": "Linear",
+  "intensity": 1.0
+ },
+ "name": "Glitch In",
+ "program": "glitch_reveal",
+ "version": 1
+}

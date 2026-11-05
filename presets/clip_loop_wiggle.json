@@ -1,0 +1,16 @@
+{
+ "args": {
+  "amp": 0.008
+ },
+ "category": "clip_loop",
+ "format": "mfxpreset",
+ "id": "clip_loop_wiggle",
+ "keywords": [],
+ "knobs": {
+  "easing": "Smooth",
+  "intensity": 1.0
+ },
+ "name": "Wiggle",
+ "program": "wiggle",
+ "version": 1
+}

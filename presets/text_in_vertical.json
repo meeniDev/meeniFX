@@ -1,0 +1,20 @@
+{
+ "args": {
+  "dir": "up"
+ },
+ "category": "text_in",
+ "format": "mfxpreset",
+ "id": "text_in_vertical",
+ "keywords": [
+  "column"
+ ],
+ "knobs": {
+  "easing": "Back Out",
+  "intensity": 1.0,
+  "stagger": 0.6,
+  "unit": "letter"
+ },
+ "name": "Vertical Slide",
+ "program": "slide",
+ "version": 1
+}

@@ -1,0 +1,21 @@
+{
+ "args": {
+  "from": 0.45
+ },
+ "category": "text_in",
+ "format": "mfxpreset",
+ "id": "text_in_scale_overshoot",
+ "keywords": [
+  "zoom",
+  "overshoot"
+ ],
+ "knobs": {
+  "easing": "Back Out",
+  "intensity": 1.0,
+  "stagger": 0.35,
+  "unit": "letter"
+ },
+ "name": "Scale Up Overshoot",
+ "program": "scale",
+ "version": 1
+}

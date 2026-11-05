@@ -1,0 +1,20 @@
+{
+ "args": {
+  "from": 0.85
+ },
+ "category": "text_in",
+ "format": "mfxpreset",
+ "id": "text_in_float_up",
+ "keywords": [
+  "gentle"
+ ],
+ "knobs": {
+  "easing": "Smooth",
+  "intensity": 1.0,
+  "stagger": 0.5,
+  "unit": "word"
+ },
+ "name": "Float Up",
+ "program": "scale",
+ "version": 1
+}

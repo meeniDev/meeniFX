@@ -1,0 +1,18 @@
+{
+ "args": {
+  "chance": 0.5,
+  "rate": 9.0
+ },
+ "category": "text_loop",
+ "format": "mfxpreset",
+ "id": "text_loop_glitch",
+ "keywords": [],
+ "knobs": {
+  "easing": "Linear",
+  "stagger": 0.2,
+  "unit": "letter"
+ },
+ "name": "Glitch Stutter",
+ "program": "glitch_stutter",
+ "version": 1
+}

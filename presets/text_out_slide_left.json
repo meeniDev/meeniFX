@@ -1,0 +1,17 @@
+{
+ "args": {
+  "dir": "left"
+ },
+ "category": "text_out",
+ "format": "mfxpreset",
+ "id": "text_out_slide_left",
+ "keywords": [],
+ "knobs": {
+  "easing": "Smooth",
+  "stagger": 0.45,
+  "unit": "letter"
+ },
+ "name": "Slide Out Left",
+ "program": "slide",
+ "version": 1
+}

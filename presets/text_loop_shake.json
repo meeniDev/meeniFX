@@ -1,0 +1,20 @@
+{
+ "args": {
+  "amp": 0.006,
+  "speed": 6.0
+ },
+ "category": "text_loop",
+ "format": "mfxpreset",
+ "id": "text_loop_shake",
+ "keywords": [
+  "noise"
+ ],
+ "knobs": {
+  "easing": "Linear",
+  "stagger": 0.0,
+  "unit": "word"
+ },
+ "name": "Shake",
+ "program": "shake",
+ "version": 1
+}

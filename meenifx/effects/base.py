@@ -8,6 +8,7 @@ user drags and the value the effect reads can never drift apart again.
 import math
 from dataclasses import dataclass
 
+import cv2
 import numpy as np
 
 from ..constants import parse_palette_colors as _parse_palette_colors
@@ -81,6 +82,20 @@ class ParamSpec:
         if not self.minimum <= number <= self.maximum:
             number = max(self.minimum, min(self.maximum, number))
         return int(round(number)) if self.kind == "int" else number
+
+
+def param_number(value, frame=0):
+    """A parameter's number at `frame`: a Value, an animated curve or a plain number.
+
+    One helper for every effect module, so keyframed parameters behave the same
+    everywhere and no effect accidentally reads an animated curve's base value only.
+    """
+    from ..model.keyframes import AnimatedValue, parameter_value_at
+    if isinstance(value, AnimatedValue):
+        return float(parameter_value_at(value, frame))
+    if hasattr(value, "get"):
+        return float(value.get())
+    return float(value)
 
 
 class EffectBase:
@@ -163,6 +178,31 @@ class EffectBase:
     @staticmethod
     def scaled(value, param_scale):
         return max(1, int(round(float(value) * param_scale)))
+
+    # ------------------------------------------------------- cheap smooth fields
+    @staticmethod
+    def work_size(width, height, max_edge=720):
+        """(w, h, factor) for computing a smooth field at a bounded resolution.
+
+        Glow, bloom, leaks, vignettes and grain are low-frequency: computing them on a
+        smaller grid and scaling the result back looks the same and costs a fraction of
+        a full-resolution pass. The size depends only on the render size, so preview and
+        export stay deterministic.
+        """
+        factor = min(1.0, float(max_edge) / max(1.0, float(max(width, height))))
+        return max(1, int(round(width * factor))), max(1, int(round(height * factor))), factor
+
+    @staticmethod
+    def resize_to(field, width, height):
+        """Scale a 2-D/3-D float field back to the layer's size (no-op when equal)."""
+        if field.shape[1] == width and field.shape[0] == height:
+            return field
+        resized = cv2.resize(field, (int(width), int(height)), interpolation=cv2.INTER_LINEAR)
+        if field.ndim == 3 and resized.ndim == 2:
+            # OpenCV drops a single-channel axis; callers rely on the last axis to
+            # broadcast a field across BGR.
+            resized = resized[:, :, None]
+        return resized
 
 
 class LayerEffect(EffectBase):

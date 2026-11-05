@@ -463,8 +463,13 @@ class RecorderPanel(QDialog):
         if self.screen_mode.currentData() == "window":
             for w in devices.windows():
                 self.screen_target.addItem(w.description()[:60], w)
-            index = max(0, next((i for i in range(self.screen_target.count())
-                                 if self.screen_target.itemData(i).id() == self.settings.window_id), 0))
+            # QCapturableWindow has no numeric id: its description (the title) is all Qt
+            # shares, so that is what the saved selection is matched against.
+            index = 0
+            for i in range(self.screen_target.count()):
+                if self.screen_target.itemData(i).description() == self.settings.window_title:
+                    index = i
+                    break
             self.screen_target.setCurrentIndex(index)
         else:
             for s in devices.screens():
@@ -627,7 +632,7 @@ class RecorderPanel(QDialog):
         target = self.screen_target.currentData()
         if target is not None:
             if s.screen_mode == "window":
-                s.window_id = int(target.id())
+                s.window_title = target.description()
             else:
                 s.screen_name = target.name()
         s.mic_id = self.mic_combo.currentData() or s.mic_id

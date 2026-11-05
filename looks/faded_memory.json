@@ -1,0 +1,44 @@
+{
+ "description": "Washed-out colour, a warm leak and gentle grain",
+ "format": "mfxlook",
+ "id": "faded_memory",
+ "name": "Faded Memory",
+ "stack": [
+  {
+   "effect_id": "color_correct",
+   "params": {
+    "brightness": 4,
+    "contrast": -14,
+    "preset": "vintage",
+    "saturation": -28
+   }
+  },
+  {
+   "effect_id": "light_leak",
+   "params": {
+    "amount": 26,
+    "blend": "screen",
+    "hue": 22,
+    "seed": 4,
+    "spread": 70
+   }
+  },
+  {
+   "effect_id": "vignette",
+   "params": {
+    "amount": 24,
+    "radius": 68,
+    "softness": 72
+   }
+  },
+  {
+   "effect_id": "film_grain",
+   "params": {
+    "amount": 12,
+    "seed": 30,
+    "size": 1
+   }
+  }
+ ],
+ "version": 1
+}

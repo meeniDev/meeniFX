@@ -1,0 +1,40 @@
+{
+ "description": "Printed dots, hard outlines and flat colour",
+ "format": "mfxlook",
+ "id": "comic_halftone",
+ "name": "Comic Halftone",
+ "stack": [
+  {
+   "effect_id": "halftone",
+   "params": {
+    "angle": 45,
+    "contrast": 42,
+    "dot": 8,
+    "mode": "dots"
+   }
+  },
+  {
+   "effect_id": "edge_outline",
+   "params": {
+    "mode": "edges",
+    "strength": 65,
+    "thickness": 1
+   }
+  },
+  {
+   "effect_id": "posterize",
+   "params": {
+    "levels": 8,
+    "mode": "rgb"
+   }
+  },
+  {
+   "effect_id": "color_correct",
+   "params": {
+    "contrast": 18,
+    "saturation": 32
+   }
+  }
+ ],
+ "version": 1
+}

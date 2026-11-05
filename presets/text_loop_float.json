@@ -1,0 +1,17 @@
+{
+ "args": {
+  "amp": 0.025
+ },
+ "category": "text_loop",
+ "format": "mfxpreset",
+ "id": "text_loop_float",
+ "keywords": [],
+ "knobs": {
+  "easing": "Linear",
+  "stagger": 0.3,
+  "unit": "word"
+ },
+ "name": "Float",
+ "program": "float",
+ "version": 1
+}

@@ -1,0 +1,16 @@
+{
+ "args": {
+  "from": 0.2
+ },
+ "category": "clip_in",
+ "format": "mfxpreset",
+ "id": "clip_in_pop",
+ "keywords": [],
+ "knobs": {
+  "easing": "Back Out",
+  "intensity": 1.0
+ },
+ "name": "Pop In",
+ "program": "pop",
+ "version": 1
+}

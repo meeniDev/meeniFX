@@ -1,0 +1,17 @@
+{
+ "args": {
+  "amount": 0.4
+ },
+ "category": "text_loop",
+ "format": "mfxpreset",
+ "id": "text_loop_flicker",
+ "keywords": [],
+ "knobs": {
+  "easing": "Linear",
+  "stagger": 0.0,
+  "unit": "word"
+ },
+ "name": "Flicker",
+ "program": "flicker",
+ "version": 1
+}

@@ -111,21 +111,40 @@ def apply_transform(layer, rect, state, project_size, scale=1.0):
                           borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
 
 
+def preset_look(layer, blur=0.0, hue=0.0, light=0.0):
+    """Whole-clip preset post: blur, hue rotation and a brightness lift on a BGRA layer.
+
+    Kept here (not in the preset model) so the preview, the export and the thumbnails all
+    run the same pixel maths. `blur` arrives in render pixels.
+    """
+    if blur <= 0.05 and abs(hue) < 0.05 and abs(light) < 0.005:
+        return layer
+    output = layer
+    if blur > 0.05:
+        output = cv2.GaussianBlur(output, (0, 0), max(0.1, float(blur) / 2.0))
+    if abs(hue) >= 0.05:
+        hsv = cv2.cvtColor(output[:, :, :3], cv2.COLOR_BGR2HSV)
+        hsv[:, :, 0] = (hsv[:, :, 0].astype(np.int32) + int(round(hue / 2.0))) % 180
+        output = np.dstack([cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR), output[:, :, 3]])
+    if abs(light) >= 0.005:
+        rgb = np.clip(output[:, :, :3].astype(np.float32) + light * 255.0, 0, 255).astype(np.uint8)
+        output = np.dstack([rgb, output[:, :, 3]])
+    return np.ascontiguousarray(output)
+
+
 def layer_alpha(layer):
     """Float alpha (0..1) of a BGRA layer."""
     return layer[:, :, 3].astype(np.float32) / 255.0
 
 
-def composite(canvas, layer, opacity=1.0):
-    """Alpha-composite `layer` over a float32 BGR `canvas` in place; returns it."""
-    alpha = layer_alpha(layer) * float(max(0.0, opacity))
-    if not alpha.any():
-        return canvas
-    rgb = layer[:, :, :3].astype(np.float32)
-    a = alpha[:, :, None]
-    canvas *= (1.0 - a)
-    canvas += rgb * a
-    return canvas
+def composite(canvas, layer, opacity=1.0, mode="normal"):
+    """Alpha-composite `layer` over a float32 BGR `canvas` in place; returns it.
+
+    `mode` is one of :data:`meenifx.processing.blend.BLEND_MODES`; the blend itself
+    lives in that module so the preview and the exporter run the same maths.
+    """
+    from . import blend as blend_ops
+    return blend_ops.composite(canvas, layer, opacity, mode)
 
 
 def flatten(canvas, background_bgr=(0, 0, 0)):

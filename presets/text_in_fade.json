@@ -1,0 +1,19 @@
+{
+ "args": {},
+ "category": "text_in",
+ "format": "mfxpreset",
+ "id": "text_in_fade",
+ "keywords": [
+  "opacity",
+  "simple"
+ ],
+ "knobs": {
+  "easing": "Smooth",
+  "intensity": 1.0,
+  "stagger": 0.5,
+  "unit": "letter"
+ },
+ "name": "Fade",
+ "program": "fade",
+ "version": 1
+}

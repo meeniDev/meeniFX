@@ -1,0 +1,16 @@
+{
+ "args": {
+  "px": 24
+ },
+ "category": "clip_in",
+ "format": "mfxpreset",
+ "id": "clip_in_blur",
+ "keywords": [],
+ "knobs": {
+  "easing": "Smooth",
+  "intensity": 1.0
+ },
+ "name": "Blur In",
+ "program": "blur",
+ "version": 1
+}

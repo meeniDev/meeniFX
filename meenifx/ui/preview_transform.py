@@ -170,11 +170,8 @@ class PreviewOverlay:
         if getattr(clip, "is_text", False):
             # A text layer is generated at project size, so its picture is the frame.
             return self.project_size()
-        entry = self.engine.media._entries.get(clip.source_path)
-        if entry is not None and getattr(entry, "frames", None):
-            height, width = entry.frames[0].shape[:2]
-            return int(width), int(height)
-        return 1920, 1080
+        size = self.engine.media.source_size(clip.source_path)
+        return size or self.project_size()
 
     def matrix(self, clip):
         return T.matrix(self.state(clip), self.project_size(), self.image_size(clip))

@@ -13,7 +13,16 @@ from .effects.builtins import AsciiEffect, BlobTrackerEffect, FaceTrackerEffect,
 from .effects.blur import (BoxBlurEffect, DirectionalBlurEffect, GaussianBlurEffect,
                            MotionBlurEffect, RadialBlurEffect, ZoomBlurEffect)
 from .effects.color import ColorCorrectEffect
+from .effects.glitch import (BulgePinchEffect, ChromaticAberrationEffect, GlitchEffect,
+                             KaleidoscopeEffect, TwirlEffect, WaveWarpEffect)
 from .effects.glow import GlowEffect
+from .effects.light import (BloomStreaksEffect, ExposureFlickerEffect, FlashEffect,
+                            LightLeakEffect)
+from .effects.looks import LookEffect
+from .effects.lut import LutEffect
+from .effects.stylize import (DuotoneEffect, EdgeOutlineEffect, FilmGrainEffect, HalftoneEffect,
+                              InvertEffect, PosterizeEffect, VhsCrtEffect, VignetteEffect)
+from .effects.temporal import EchoEffect, PosterizeTimeEffect, StutterEffect
 from .effects.warp import (CornerPinEffect, DistortionEffect, MeshWarpEffect,
                            PerspectiveEffect, PuppetWarpEffect, SkewEffect)
 from .media.cache import MediaCache, MediaEntry
@@ -23,9 +32,11 @@ from .model.keyframes import parameter_value_at
 from .model.session import TimelineSession
 from .model.timeline import Timeline
 from .model.values import Value
+from .model import presets as preset_model
 from .model import text as text_model
 from .processing import layers as layer_ops
 from .processing import text as text_render
+from .processing import text_units as text_unit_render
 from .processing.mosaic import build_palette
 
 
@@ -36,7 +47,13 @@ class EditorEngine:
                     ColorCorrectEffect, GaussianBlurEffect, BoxBlurEffect, DirectionalBlurEffect,
                     RadialBlurEffect, ZoomBlurEffect, MotionBlurEffect, GlowEffect,
                     PuppetWarpEffect, CornerPinEffect, PerspectiveEffect, MeshWarpEffect, SkewEffect,
-                    DistortionEffect) + AUDIO_EFFECTS
+                    DistortionEffect,
+                    ChromaticAberrationEffect, GlitchEffect, WaveWarpEffect, BulgePinchEffect,
+                    TwirlEffect, KaleidoscopeEffect,
+                    VhsCrtEffect, FilmGrainEffect, HalftoneEffect, PosterizeEffect,
+                    EdgeOutlineEffect, DuotoneEffect, InvertEffect, VignetteEffect,
+                    FlashEffect, ExposureFlickerEffect, LightLeakEffect, BloomStreaksEffect,
+                    PosterizeTimeEffect, StutterEffect, EchoEffect, LutEffect, LookEffect) + AUDIO_EFFECTS
 
     def __init__(self, fps=30):
         self.timeline = Timeline(fps=fps)
@@ -228,8 +245,16 @@ class EditorEngine:
         return frame
 
     def project_size(self):
-        """The logical (project) frame size; preview quality never changes it."""
-        return self.source_width, self.source_height
+        """The logical (project) frame size; preview quality never changes it.
+
+        The session keeps its own copy because it has no engine reference; publishing it
+        here keeps Bake to Keyframes sampling at the same size the preview uses, whatever
+        order the project was opened in.
+        """
+        size = (self.source_width, self.source_height)
+        if size[0] and size[1] and self.session.project_size != size:
+            self.session.project_size = size
+        return size
 
     def prepare_mosaic_resources(self, tile_w, tile_h):
         """(tiles, palette averages) for one tile size, cached per size."""
@@ -305,19 +330,27 @@ class EditorEngine:
             if track.type != "video" or not track.visible:
                 continue
             for clip in track.sorted_clips():
-                if (clip.source_path or clip.is_text) and clip.timeline_start <= frame_no < clip.end:
+                # Adjustment layers carry no picture but occupy their track: they are part
+                # of the stack so their effects can see everything composited below them.
+                if ((clip.source_path or clip.is_text or getattr(clip, "adjustment", False))
+                        and clip.timeline_start <= frame_no < clip.end):
                     stack.append(clip)
                     break
         return stack
 
-    def _layer_for(self, clip, frame_no, scale):
-        """(BGRA layer, picture rect) for one clip, or (None, None) when it cannot decode."""
+    def _layer_for(self, clip, frame_no, scale, unit_poses=None, spec=None):
+        """(BGRA layer, picture rect) for one clip, or (None, None) when it cannot decode.
+
+        `unit_poses` is the preset layer's per-text-unit animation; `spec` lets the caller
+        (which already needed the text layout) pass the resolved text in.
+        """
         if clip.is_text:
             # Text lives in project space, so its layer is the whole frame: the transform
             # then moves/scales it exactly like a fitted picture.
             width, height = layer_ops.render_size(self.project_size(), scale)
-            spec = text_model.resolve(clip, frame_no - clip.timeline_start)
-            layer = text_render.render(spec, width, height, scale)
+            if spec is None:
+                spec = text_model.resolve(clip, frame_no - clip.timeline_start)
+            layer = text_render.render(spec, width, height, scale, poses=unit_poses)
             if layer is None:
                 return None, None
             return layer, (0.0, 0.0, float(self.project_size()[0]), float(self.project_size()[1]))
@@ -354,25 +387,135 @@ class EditorEngine:
         canvas[:] = self.background_bgr
         painted = False
         for clip in stack:
-            layer, rect = self._layer_for(clip, frame_no, scale)
+            local = self.held_frame(clip, frame_no - clip.timeline_start)
+            if getattr(clip, "adjustment", False):
+                canvas = self.compose_adjustment(canvas, clip, frame_no, local, scale)
+                painted = True
+                continue
+            # The preset layer is evaluated before the picture is built: a per-unit text
+            # animation needs the glyph layout the renderer is about to draw.
+            effect = preset_model.Effect()
+            spec = None
+            if getattr(clip, "presets", None):
+                units = None
+                if clip.is_text:
+                    width, height = layer_ops.render_size(self.project_size(), scale)
+                    spec = text_model.resolve(clip, local)
+                    units = text_unit_render.layout_units(spec, width, height, scale)
+                effect = preset_model.evaluate(clip, local, units=units,
+                                               project_size=self.project_size())
+            # Sample the *held* moment, so posterize time and stutter really do freeze
+            # the picture instead of only freezing the effect parameters.
+            layer, rect = self._layer_for(clip, clip.timeline_start + local, scale,
+                                          effect.unit_poses if clip.is_text else None, spec)
             if layer is None:
                 continue
-            local = frame_no - clip.timeline_start
             layer = self.apply_effects_layer(layer, clip.effects, local, scale,
                                              self.track_type_of(clip), clip=clip, rect=rect)
             state = transforms.evaluate(clip, local)
+            pose = effect.pose
+            if not pose.is_identity():
+                # Additive/multiplicative: the preset never replaces the clip's own
+                # transform, it is applied on top of it.
+                state = transforms.TransformState(
+                    position_x=state.position_x + pose.dx,
+                    position_y=state.position_y + pose.dy,
+                    scale_x=state.scale_x * pose.scale_x,
+                    scale_y=state.scale_y * pose.scale_y,
+                    rotation=state.rotation + pose.rotation,
+                    anchor_x=state.anchor_x, anchor_y=state.anchor_y,
+                    opacity=state.opacity, flip_h=state.flip_h, flip_v=state.flip_v)
             layer = layer_ops.apply_transform(layer, rect, state, self.project_size(), scale)
-            opacity = transforms.opacity_at(clip, local) * clip.fade_gain_at(frame_no)
+            if not pose.is_identity():
+                layer = layer_ops.preset_look(layer, pose.blur * scale, pose.hue, pose.light)
+            opacity = transforms.opacity_at(clip, local) * clip.fade_gain_at(frame_no) * pose.opacity
             if opacity <= 0.001:
                 continue
-            if (clip is top and len(stack) == 1 and opacity >= 0.999
-                    and state.is_identity() and layer[:, :, 3].min() == 255):
+            if (clip is top and len(stack) == 1 and opacity >= 0.999 and pose.is_identity()
+                    and state.is_identity() and layer[:, :, 3].min() == 255
+                    and clip.blend == "normal" and not getattr(clip, "adjustment", False)):
                 return np.ascontiguousarray(layer[:, :, :3])
-            layer_ops.composite(canvas, layer, opacity)
+            layer_ops.composite(canvas, layer, opacity, getattr(clip, "blend", "normal"))
             painted = True
         if not painted:
             return None
         return layer_ops.flatten(canvas)
+
+    def compose_adjustment(self, canvas, clip, frame_no, local, scale):
+        """Run an adjustment layer's effects over everything composited below it.
+
+        The canvas so far (opaque float BGR) becomes the layer, so every effect sees a
+        real picture - a warp, a glow or a colour grade works exactly as it does on a
+        clip. Opacity, fades and the clip's blend mode then mix the graded result back,
+        which is what makes adjustment layers trim, fade and keyframe like any clip.
+        """
+        height, width = canvas.shape[:2]
+        layer = np.empty((height, width, 4), dtype=np.uint8)
+        layer[:, :, :3] = np.clip(canvas, 0.0, 255.0).astype(np.uint8)
+        layer[:, :, 3] = 255
+        layer = self.apply_effects_layer(layer, clip.effects, local, scale, "video",
+                                         clip=clip, rect=(0.0, 0.0, float(width), float(height)))
+        opacity = transforms.opacity_at(clip, local) * clip.fade_gain_at(frame_no)
+        if opacity <= 0.001:
+            return canvas
+        return layer_ops.composite(canvas, layer, opacity, getattr(clip, "blend", "normal"))
+
+    def held_frame(self, clip, local):
+        """The clip-local frame its picture is sampled at, after temporal effects.
+
+        Posterize time and stutter are edits to the *clip's* frame rate, not to a few
+        pixels, so the engine holds the sampled moment for the whole pipeline. That keeps
+        the choppy look identical in preview and export, and keyframes stay on the
+        timeline's own clock.
+        """
+        frame = max(0, int(local))
+        for entry in getattr(clip, "effects", None) or ():
+            if not entry.get("enabled", True):
+                continue
+            key = entry.get("effect_id")
+            params = entry.get("params") or {}
+            if key == "posterize_time":
+                step = max(1, int(round(parameter_value_at(params.get("step", 1), frame))))
+                offset = max(0, int(round(parameter_value_at(params.get("offset", 0), frame))))
+                frame = max(0, frame - ((frame - offset) % step))
+            elif key == "stutter":
+                interval = max(1, int(round(parameter_value_at(params.get("interval", 8), frame))))
+                hold = max(1, min(interval, int(round(parameter_value_at(params.get("hold", 3), frame)))))
+                offset = max(0, int(round(parameter_value_at(params.get("offset", 0), frame))))
+                position = (frame - offset) % interval
+                if position < hold:
+                    # Freeze at the first frame of this cycle, then play the rest.
+                    frame = max(0, frame - position)
+        return max(0, frame)
+
+    @staticmethod
+    def look_strengths(entries, local_frame):
+        """{look id: 0..1} from the Look group cards on a clip (empty without any)."""
+        strengths = {}
+        for entry in entries or ():
+            if entry.get("effect_id") != "look" or not entry.get("enabled", True):
+                continue
+            params = entry.get("params") or {}
+            key = entry.get("look_id") or params.get("look")
+            value = parameter_value_at(params.get("strength", 100), local_frame)
+            try:
+                strengths[key] = max(0.0, min(1.0, float(value) / 100.0))
+            except (TypeError, ValueError):
+                strengths[key] = 1.0
+        return strengths
+
+    @classmethod
+    def entry_mix(cls, entry, local_frame, looks=None):
+        """An effect entry's Mix (0..1), scaled by its Look group's Strength."""
+        params = entry.get("params") or {}
+        try:
+            mix = float(parameter_value_at(params.get("mix", 100), local_frame)) / 100.0
+        except (TypeError, ValueError):
+            mix = 1.0
+        group = entry.get("look_id")
+        if looks and group in looks:
+            mix *= looks[group]
+        return max(0.0, min(1.0, mix))
 
     def apply_effects_layer(self, layer, entries, local_frame, scale, track_type="video", clip=None,
                             rect=None):
@@ -383,13 +526,21 @@ class EditorEngine:
         `rect` is where the picture sits inside the layer; a warp uses it so it never
         deforms the transparent letterbox margin around the picture.
         """
+        from .processing import blend as blend_ops
+
+        entries = list(entries or ())
+        looks = self.look_strengths(entries, local_frame)
         output = layer
-        for entry in entries or ():
+        for entry in entries:
             if not entry.get("enabled", True):
                 continue
             runtime = self.runtime_effects.get(entry.get("effect_id"))
             if runtime is None or not runtime.supports_track_type(track_type):
                 continue
+            mix = self.entry_mix(entry, local_frame, looks)
+            if mix <= 0.001:
+                continue
+            original = output
             # Start from the effect's own defaults so one clip's settings can never
             # leak into the next clip that uses the same effect object.
             params = dict(getattr(runtime, "defaults", {}) or {})
@@ -403,13 +554,14 @@ class EditorEngine:
             runtime.local_frame = int(local_frame)
             runtime.load_params(params)
             if hasattr(runtime, "apply_layer"):
-                output = runtime.apply_layer(output)
+                result = runtime.apply_layer(output)
             else:
                 colour = runtime.apply(np.ascontiguousarray(output[:, :, :3]))
                 if colour.shape[:2] != output.shape[:2]:
                     colour = cv2.resize(colour, (output.shape[1], output.shape[0]),
                                         interpolation=cv2.INTER_AREA)
-                output = np.dstack([colour, output[:, :, 3]])
+                result = np.dstack([colour, output[:, :, 3]])
+            output = blend_ops.mix_layers(original, result, mix)
         return output
 
     def fit_to_project(self, src):
@@ -432,13 +584,20 @@ class EditorEngine:
         `scale` is the render scale of `frame` relative to the logical project size;
         effects use it for their pixel-based parameters so a preview matches export.
         """
+        from .processing import blend as blend_ops
+
         output = frame
         local_frame = self.current_clip_local_frame if local_frame is None else local_frame
-        for entry in (self.current_fx if entries is None else entries):
+        entries = list(self.current_fx if entries is None else entries)
+        looks = self.look_strengths(entries, local_frame)
+        for entry in entries:
             if not entry.get("enabled", True):
                 continue
             runtime = self.runtime_effects.get(entry["effect_id"])
             if runtime is None:
+                continue
+            mix = self.entry_mix(entry, local_frame, looks)
+            if mix <= 0.001:
                 continue
             # Start from the effect's own defaults so one clip's settings can never
             # leak into the next clip that uses the same effect object.
@@ -447,7 +606,12 @@ class EditorEngine:
                            for name, value in entry.get("params", {}).items()})
             runtime.param_scale = float(scale)
             runtime.load_params(params)
-            output = runtime.apply(output)
+            result = runtime.apply(output)
+            if mix < 0.999:
+                flat = np.full(output.shape[:2], 255, np.uint8)
+                result = blend_ops.mix_layers(np.dstack([output, flat]),
+                                              np.dstack([result, flat]), mix)[:, :, :3]
+            output = result
         return output
 
     def render_size(self, scale=1.0):

@@ -1,0 +1,42 @@
+{
+ "description": "Slice tears, channel split and a cool neon leak",
+ "format": "mfxlook",
+ "id": "cyber_glitch",
+ "name": "Cyber Glitch",
+ "stack": [
+  {
+   "effect_id": "glitch",
+   "params": {
+    "block": 40,
+    "color": 55,
+    "seed": 21,
+    "slices": 65,
+    "speed": 1
+   }
+  },
+  {
+   "effect_id": "chromatic_aberration",
+   "params": {
+    "amount": 10,
+    "falloff": 70
+   }
+  },
+  {
+   "effect_id": "light_leak",
+   "params": {
+    "amount": 20,
+    "blend": "screen",
+    "hue": 120,
+    "seed": 41
+   }
+  },
+  {
+   "effect_id": "color_correct",
+   "params": {
+    "contrast": 12,
+    "saturation": 38
+   }
+  }
+ ],
+ "version": 1
+}

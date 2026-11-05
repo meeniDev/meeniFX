@@ -1,0 +1,14 @@
+{
+ "args": {},
+ "category": "clip_out",
+ "format": "mfxpreset",
+ "id": "clip_out_fade",
+ "keywords": [],
+ "knobs": {
+  "easing": "Smooth",
+  "intensity": 1.0
+ },
+ "name": "Fade Out",
+ "program": "fade",
+ "version": 1
+}

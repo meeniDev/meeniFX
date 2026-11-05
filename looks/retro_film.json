@@ -1,0 +1,34 @@
+{
+ "description": "Vintage stock: warm fade, grain and a soft vignette",
+ "format": "mfxlook",
+ "id": "retro_film",
+ "name": "Retro Film",
+ "stack": [
+  {
+   "effect_id": "film_grain",
+   "params": {
+    "amount": 34,
+    "seed": 14,
+    "shadows": 60,
+    "size": 2
+   }
+  },
+  {
+   "effect_id": "color_correct",
+   "params": {
+    "contrast": 5,
+    "preset": "vintage",
+    "saturation": -8
+   }
+  },
+  {
+   "effect_id": "vignette",
+   "params": {
+    "amount": 38,
+    "radius": 52,
+    "softness": 65
+   }
+  }
+ ],
+ "version": 1
+}

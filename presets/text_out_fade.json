@@ -1,0 +1,15 @@
+{
+ "args": {},
+ "category": "text_out",
+ "format": "mfxpreset",
+ "id": "text_out_fade",
+ "keywords": [],
+ "knobs": {
+  "easing": "Smooth",
+  "stagger": 0.5,
+  "unit": "letter"
+ },
+ "name": "Fade Out",
+ "program": "fade",
+ "version": 1
+}

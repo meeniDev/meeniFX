@@ -1,0 +1,17 @@
+{
+ "args": {
+  "axis": "x"
+ },
+ "category": "text_out",
+ "format": "mfxpreset",
+ "id": "text_out_flip",
+ "keywords": [],
+ "knobs": {
+  "easing": "Smooth",
+  "stagger": 0.45,
+  "unit": "letter"
+ },
+ "name": "Flip Out",
+ "program": "flip",
+ "version": 1
+}

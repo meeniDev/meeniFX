@@ -1,0 +1,17 @@
+{
+ "args": {
+  "dir": "right"
+ },
+ "category": "text_out",
+ "format": "mfxpreset",
+ "id": "text_out_slide_right",
+ "keywords": [],
+ "knobs": {
+  "easing": "Smooth",
+  "stagger": 0.45,
+  "unit": "letter"
+ },
+ "name": "Slide Out Right",
+ "program": "slide",
+ "version": 1
+}

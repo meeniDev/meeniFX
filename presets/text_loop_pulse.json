@@ -1,0 +1,17 @@
+{
+ "args": {
+  "amp": 0.05
+ },
+ "category": "text_loop",
+ "format": "mfxpreset",
+ "id": "text_loop_pulse",
+ "keywords": [],
+ "knobs": {
+  "easing": "Linear",
+  "stagger": 0.0,
+  "unit": "word"
+ },
+ "name": "Pulse",
+ "program": "pulse",
+ "version": 1
+}

@@ -1,0 +1,14 @@
+{
+ "args": {},
+ "category": "clip_in",
+ "format": "mfxpreset",
+ "id": "clip_in_flash",
+ "keywords": [],
+ "knobs": {
+  "easing": "Quadratic Out",
+  "intensity": 1.0
+ },
+ "name": "Flash In",
+ "program": "flash",
+ "version": 1
+}

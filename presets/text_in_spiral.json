@@ -1,0 +1,19 @@
+{
+ "args": {
+  "deg": 260,
+  "px": 0.3
+ },
+ "category": "text_in",
+ "format": "mfxpreset",
+ "id": "text_in_spiral",
+ "keywords": [],
+ "knobs": {
+  "easing": "Smooth",
+  "intensity": 1.0,
+  "stagger": 0.5,
+  "unit": "letter"
+ },
+ "name": "Spiral",
+ "program": "spiral",
+ "version": 1
+}

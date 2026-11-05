@@ -109,13 +109,38 @@ class GlowEffect(LayerEffect):
         passes = max(1, int(self.quality.get()))
         # Splitting the blur over N passes at sigma/sqrt(N) adds up to the same spread,
         # but is smoother (and cheaper) than one very wide kernel.
-        step = sigma / math.sqrt(passes)
-        blurred = bright
-        for _pass in range(passes):
-            blurred = cv2.GaussianBlur(blurred, (0, 0), sigmaX=step, sigmaY=step,
-                                       borderType=cv2.BORDER_REPLICATE)
-        glow_mask = cv2.GaussianBlur(mask.astype(np.float32), (0, 0), sigmaX=sigma, sigmaY=sigma,
-                                     borderType=cv2.BORDER_REPLICATE)
+        # A wide halo is low frequency: blur it on a smaller grid and scale it back. The
+        # glow looks the same and a 1080p bloom no longer costs two full-resolution
+        # gaussian passes per clip.
+        factor = 1.0
+        if sigma > 4.0 and max(layer.shape[:2]) > 480:
+            factor = 0.5
+        if factor < 1.0:
+            small_h = max(1, int(round(layer.shape[0] * factor)))
+            small_w = max(1, int(round(layer.shape[1] * factor)))
+            bright_small = cv2.resize(bright, (small_w, small_h), interpolation=cv2.INTER_AREA)
+            mask_small = cv2.resize(mask.astype(np.float32), (small_w, small_h),
+                                    interpolation=cv2.INTER_AREA)
+            step = (sigma * factor) / math.sqrt(passes)
+            blurred_small = bright_small
+            for _pass in range(passes):
+                blurred_small = cv2.GaussianBlur(blurred_small, (0, 0), sigmaX=step, sigmaY=step,
+                                                 borderType=cv2.BORDER_REPLICATE)
+            glow_small = cv2.GaussianBlur(mask_small, (0, 0), sigmaX=sigma * factor,
+                                          sigmaY=sigma * factor,
+                                          borderType=cv2.BORDER_REPLICATE)
+            blurred = cv2.resize(blurred_small, (layer.shape[1], layer.shape[0]),
+                                 interpolation=cv2.INTER_LINEAR)
+            glow_mask = cv2.resize(glow_small, (layer.shape[1], layer.shape[0]),
+                                   interpolation=cv2.INTER_LINEAR)
+        else:
+            step = sigma / math.sqrt(passes)
+            blurred = bright
+            for _pass in range(passes):
+                blurred = cv2.GaussianBlur(blurred, (0, 0), sigmaX=step, sigmaY=step,
+                                           borderType=cv2.BORDER_REPLICATE)
+            glow_mask = cv2.GaussianBlur(mask.astype(np.float32), (0, 0), sigmaX=sigma,
+                                         sigmaY=sigma, borderType=cv2.BORDER_REPLICATE)
 
         # Bloom compensation: a wide blur spreads the same light thin, so a big radius
         # would otherwise nearly vanish. Normalising by the halo's own peak (bounded)

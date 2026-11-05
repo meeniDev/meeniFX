@@ -1,0 +1,20 @@
+{
+ "args": {
+  "px": 0.28
+ },
+ "category": "text_in",
+ "format": "mfxpreset",
+ "id": "text_in_tracking",
+ "keywords": [
+  "letterspacing"
+ ],
+ "knobs": {
+  "easing": "Smooth",
+  "intensity": 1.0,
+  "stagger": 0.1,
+  "unit": "letter"
+ },
+ "name": "Tracking In",
+ "program": "tracking",
+ "version": 1
+}

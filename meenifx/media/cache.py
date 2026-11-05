@@ -7,6 +7,24 @@ from .proxy import proxy_path
 from .reader import probe_media, read_media
 
 
+def entry_size(entry, default=None):
+    """(width, height) of an entry's first frame, or `default` when it has none.
+
+    ``entry.frames`` is a lazy reader for a file that can have been moved, renamed or
+    hold no decodable frame; indexing it raises IndexError. The overlay paints and the
+    inspector rebuilds with this size on every redraw, so asking must never raise.
+    """
+    if entry is None or getattr(entry, "frames", None) is None:
+        return default
+    try:
+        height, width = entry.frames[0].shape[:2]
+    except (IndexError, KeyError, TypeError, AttributeError, ValueError):
+        return default
+    if not width or not height:
+        return default
+    return int(width), int(height)
+
+
 class MediaEntry:
     def __init__(self, kind, frame_count, fps):
         self.kind = kind
@@ -130,8 +148,12 @@ class MediaCache:
         return thumbnail
 
     def tile_width(self, clip, height):
-        entry = self._entries.get(clip.source_path)
-        if entry is None or entry.frames is None:
+        size = entry_size(self._entries.get(clip.source_path))
+        if size is None:
             return int(height * 16 / 9)
-        h, w = entry.frames[0].shape[:2]
+        w, h = size
         return max(1, int(round(height * w / h)))
+
+    def source_size(self, path, default=None):
+        """(width, height) of a source's first frame, or `default` when none decodes."""
+        return entry_size(self._entries.get(path), default)

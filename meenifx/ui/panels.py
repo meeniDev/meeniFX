@@ -12,29 +12,40 @@ import copy
 
 from PyQt6.QtCore import QMimeData, QPoint, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QDrag, QFont
-from PyQt6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, QFrame, QGridLayout,
-                             QHBoxLayout, QLabel, QLineEdit, QMenu, QPlainTextEdit, QScrollArea,
-                             QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
-                             QWidget)
+from PyQt6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, QFrame,
+                             QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMenu,
+                             QPlainTextEdit, QScrollArea, QToolButton, QTreeWidget,
+                             QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from .. import tokens
+from .filedialogs import open_file, save_file
 from ..constants import EFFECT_MIME
+from ..effects.base import ParamSpec
 from ..icons import icon
 from ..model import animation as ANIM
+from ..model import looks as LOOKS
 from ..model import channels as CH
+from ..model import preset_library as LIB
+from ..model import presets as PM
 from ..model import text as TXT
 from ..model import transform as T
 from ..model.keyframes import AnimatedValue, parameter_value_at
+from ..processing.blend import BLEND_LABELS, normalise_mode
 from .widgets import SliderField
 
 CARD_MIME = "application/x-meenifx-card"
 # Effects panel order: everyday picture work first, technical/motion tools after.
-CATEGORY_ORDER = ("Video Effects", "Color Correction", "Blur & Sharpen", "Glow & Light",
-                  "Transform", "Distortion & Warp", "Warp", "Text Effects", "Audio Effects",
-                  "Stylize", "Blur and Sharpen", "Color", "Distort", "Tracking")
+CATEGORY_ORDER = ("Video Effects", "Looks", "Glitch & Distortion", "Stylize", "Color Correction",
+                  "Blur & Sharpen", "Glow & Light", "Light", "Time", "Transform",
+                  "Distortion & Warp", "Warp", "Text Effects", "Audio Effects",
+                  "Blur and Sharpen", "Color", "Distort", "Tracking")
 LABEL_W = 70
 ROTATE_STEP = 15.0      # degrees per step when rotation snapping is on
 COLOR_NAMES = ("color_r", "color_g", "color_b")
+# Every effect card carries this control; it is not part of an effect's own PARAMS table
+# because it never reaches the effect - the engine blends the result with the original.
+MIX_SPEC = ParamSpec("mix", "Mix", "float", 0.0, 100.0, 100.0, step=1.0, unit="%",
+                     help="Blend the original picture with this effect's result")
 
 
 def qty(clip, meta):
@@ -182,11 +193,32 @@ class EffectsPanel(QWidget):
         self.effect_tree = _EffectTree(self)
         self.effect_tree.itemDoubleClicked.connect(self._on_double_click)
         self.effect_tree.setToolTip("Double-click or drag an effect onto a clip to add it")
+        # Looks are saved, imported and exported from one compact menu beside the search
+        # box, so the browser keeps its width for the effect names.
+        self.looks_button = QToolButton()
+        self.looks_button.setText("\u22ef")
+        self.looks_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.looks_button.setToolTip("Save the selected clip's effects as a look, or "
+                                     "import / export a .mfxlook file")
+        looks_menu = QMenu(self.looks_button)
+        looks_menu.addAction("Save effects as look\u2026",
+                             lambda: self._save_look(self._clip()) if self._clip() else None)
+        looks_menu.addAction("Import look\u2026", self._import_look)
+        export_menu = looks_menu.addMenu("Export look\u2026")
+        for look in LOOKS.all_looks():
+            export_menu.addAction(look["name"],
+                                  lambda _checked=False, look_id=look["id"]: self._export_look(look_id))
+        self.looks_button.setMenu(looks_menu)
+        search_row = QHBoxLayout()
+        search_row.setContentsMargins(0, 0, 0, 0)
+        search_row.setSpacing(tokens.SP1)
+        search_row.addWidget(self.search, 1)
+        search_row.addWidget(self.looks_button)
         page = QWidget()
         page_layout = QVBoxLayout(page)
         page_layout.setContentsMargins(tokens.SP2, tokens.SP2, tokens.SP2, tokens.SP2)
         page_layout.setSpacing(tokens.SP2)
-        page_layout.addWidget(self.search)
+        page_layout.addLayout(search_row)
         page_layout.addWidget(self.effect_tree, 1)
         self.properties = _CardHost()
         self.properties.card_dropped.connect(self._card_dropped)
@@ -229,6 +261,20 @@ class EffectsPanel(QWidget):
         added = set.intersection(*[{e["effect_id"] for e in c.effects} for c in clips]) if clips else set()
         bold = QFont(self.font())
         bold.setBold(True)
+        looks = [look for look in LOOKS.all_looks()
+                 if not term or term in look["name"].lower()
+                 or term in look["description"].lower() or term in look["id"]]
+        if looks:
+            top = QTreeWidgetItem(["Looks"])
+            top.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            top.setFont(0, bold)
+            self.effect_tree.addTopLevelItem(top)
+            for look in looks:
+                item = QTreeWidgetItem([look["name"]])
+                item.setData(0, Qt.ItemDataRole.UserRole, f"look:{look['id']}")
+                item.setToolTip(0, look.get("description") or "Apply this look's effect stack")
+                top.addChild(item)
+            top.setExpanded(bool(term) or "Looks" not in collapsed)
         for category, effects in self._categories():
             matches = [e for e in effects if not term or term in e.name.lower() or term in e.key.lower()]
             if not matches:
@@ -274,6 +320,10 @@ class EffectsPanel(QWidget):
             item.setExpanded(not item.isExpanded())
 
     def add_effect(self, effect_id):
+        # Look items carry "look:<id>" from the tree and the drag payload.
+        if str(effect_id).startswith("look:"):
+            self.apply_look(str(effect_id).split(":", 1)[1])
+            return
         clips = self._selected_clips()
         effect = next((e for e in self.engine.effects if e.key == effect_id), None)
         if not clips or effect is None:
@@ -297,12 +347,86 @@ class EffectsPanel(QWidget):
         self.properties_requested.emit()
         self.refresh_properties()
 
+    # ------------------------------------------------------------------- looks
+    def apply_look(self, look_id):
+        """Insert a look's stack on every selected video clip (one undo step)."""
+        clips = self._selected_clips()
+        if not clips:
+            self.engine.session.status.emit("Select a clip or adjustment layer to apply a look")
+            return []
+        applied = self.engine.session.apply_look(look_id, ids=[clip.id for clip in clips])
+        if applied:
+            self.properties_requested.emit()
+            self.refresh_properties()
+        return applied
+
+    def _save_look(self, clip, name=None):
+        """Save the clip's current effect stack as a user look."""
+        if clip is None:
+            return None
+        stack = LOOKS.from_effects(clip.effects)
+        if not stack:
+            self.engine.session.status.emit("Add at least one effect before saving a look")
+            return None
+        if name is None:
+            name, accepted = QInputDialog.getText(self, "Save look", "Look name:",
+                                                  text="My look")
+            if not accepted:
+                return None
+        name = str(name or "").strip()
+        if not name:
+            return None
+        _path, look = LOOKS.write_user_look(name, stack)
+        if look is not None:
+            self.refresh_effect_list()
+            self.engine.session.status.emit(f"Look saved: {look['name']}")
+        return look
+
+    def _import_look(self, path=None):
+        if path is None:
+            path = open_file(
+                self, "Import look", "", "Looks (*.mfxlook *.json);;All files (*)")
+        if not path:
+            return None
+        _saved, look = LOOKS.import_file(path)
+        if look is not None:
+            self.refresh_effect_list()
+            self.engine.session.status.emit(f"Look imported: {look['name']}")
+        else:
+            self.engine.session.status.emit("That file is not a meeniFX look")
+        return look
+
+    def _export_look(self, look_id, path=None):
+        look = LOOKS.get(look_id)
+        if look is None:
+            return None
+        if path is None:
+            path = save_file(
+                self, "Export look", f"{look['name']}.mfxlook", "Looks (*.mfxlook)")
+        if not path:
+            return None
+        written = LOOKS.export_file(look_id, path)
+        if written:
+            self.engine.session.status.emit(f"Look exported: {written}")
+        return written
+
+    def _remove_look(self, clip, entry):
+        """Remove a look's group card and every effect it brought in, as one undo step."""
+        group = entry.get("look_id")
+
+        def remove(target):
+            target.effects = [item for item in target.effects
+                              if group is None or item.get("look_id") != group]
+        self.engine.session.apply_to_clips([clip.id], "Remove look", remove)
+        self.refresh_properties()
+
     # --------------------------------------------------------------- properties
     def _structure_key(self, clips):
         if not clips:
             return ("none",)
         clip = clips[0]
         effects = tuple((id(entry), entry["effect_id"], entry.get("enabled", True),
+                         entry.get("look_id"), entry.get("name"),
                          tuple(sorted((name, isinstance(value, AnimatedValue))
                                       for name, value in entry.get("params", {}).items())),
                          tuple(sorted((pin.get("id"), isinstance(pin.get("x"), AnimatedValue),
@@ -321,8 +445,12 @@ class EffectsPanel(QWidget):
             text_animation = tuple(sorted((slot, meta.get("preset"), meta.get("duration"))
                                           for slot, meta in animation.items()
                                           if isinstance(meta, dict)))
+        # The preset card is rebuilt when an instance appears, goes or changes kind.
+        preset_rows = tuple((row.get("preset"), row.get("category"), int(row.get("duration", 0)),
+                             (row.get("knobs") or {}).get("unit"))
+                            for row in PM.instances(clip)) if hasattr(clip, "presets") else ()
         return (tuple(sorted(c.id for c in clips)), clip.id, clip.name, effects, animated, flags,
-                gain, text_animation)
+                gain, text_animation, preset_rows)
 
     def refresh_properties(self):
         """Rebuild only when the shape changed; otherwise just follow the playhead."""
@@ -351,6 +479,7 @@ class EffectsPanel(QWidget):
             if clip.is_text:
                 self._text_card(clip)
             self._transform_card(clip)
+            self._animation_card(clip)
         elif clip.track is not None and clip.track.type == "audio":
             self._audio_card(clip)
         for index, entry in enumerate(clip.effects):
@@ -371,10 +500,9 @@ class EffectsPanel(QWidget):
     # --------------------------------------------------------------- transform
     def _clip_media_size(self, clip):
         """Picture size used by Fill Frame; generated clips are the project frame."""
-        entry = self.engine.media._entries.get(clip.source_path) if clip.source_path else None
-        if entry is not None and getattr(entry, "frames", None):
-            height, width = entry.frames[0].shape[:2]
-            return int(width), int(height)
+        size = self.engine.media.source_size(clip.source_path) if clip.source_path else None
+        if size:
+            return size
         size = self.engine.project_size()
         if size and size[0] and size[1]:
             return int(size[0]), int(size[1])
@@ -993,6 +1121,16 @@ class EffectsPanel(QWidget):
         toggles.addWidget(loop)
         toggles.addStretch(1)
         form.addLayout(toggles)
+        if clip.track is not None and clip.track.type == "video":
+            blend = QComboBox()
+            for key, label in BLEND_LABELS:
+                blend.addItem(label, key)
+            blend.setCurrentIndex(max(0, [key for key, _label in BLEND_LABELS].index(
+                normalise_mode(clip.blend))))
+            blend.setToolTip("How this clip is mixed with the tracks below it")
+            blend.activated.connect(lambda index, cid=clip.id, w=blend:
+                                    self.engine.session.set_blend_mode(cid, w.itemData(index)))
+            form.addWidget(self._labelled("Blend", blend, "How this clip is mixed with the layers below it"))
         for edge, label in (("in", "Fade in"), ("out", "Fade out")):
             frames = clip.fade_in if edge == "in" else clip.fade_out
             field = SliderField(label, frames, 0, max(1, clip.duration), default=0, step=1,
@@ -1006,8 +1144,141 @@ class EffectsPanel(QWidget):
         outer.addWidget(body)
         self.properties_layout.addWidget(frame)
 
+    def _animation_card(self, clip):
+        """The preset instances on this clip: knobs, Bake and remove.
+
+        Every row edits the instance through the session, so each change is one undo step
+        and the compositor picks it up on the next frame, just like a transform value.
+        """
+        rows = PM.instances(clip)
+        if not rows:
+            return
+        frame, outer = self._card("animation")
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        title = QLabel("Animation")
+        title.setStyleSheet(f"font-size: {tokens.FONT_TITLE}px; font-weight: 600;")
+        header.addWidget(title)
+        count = QLabel(f"{len(rows)} preset{'s' if len(rows) != 1 else ''}")
+        count.setProperty("quiet", True)
+        header.addWidget(count)
+        header.addStretch(1)
+        outer.addLayout(header)
+        body, form = self._form()
+        for index, instance in enumerate(rows):
+            form.addWidget(self._preset_row(clip, index, instance))
+        outer.addWidget(body)
+        self.properties_layout.addWidget(frame)
+
+    def _preset_row(self, clip, index, instance):
+        """One instance: its name, knobs, Bake and Remove."""
+        knobs = PM._knobs(instance)
+        category = PM.CATEGORY_LABELS.get(instance.get("category"), "In")
+        box = QFrame()
+        box.setProperty("card", False)
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(0, 0, 0, tokens.SP2)
+        layout.setSpacing(tokens.SP1)
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        name = QLabel(f"{instance.get('name') or instance.get('preset')}  ·  {category}")
+        name.setStyleSheet("font-weight: 600;")
+        name.setToolTip(PM.summary(instance))
+        top.addWidget(name, 1)
+        bake = QToolButton()
+        bake.setText("Bake")
+        bake.setToolTip("Turn this preset into ordinary keyframes (one undo step)")
+        bake.setEnabled(PM.bakeable(instance, clip))
+        if not PM.bakeable(instance, clip):
+            bake.setToolTip("Bake needs Unit = Whole: per-unit motion lives in the text "
+                            "layout. Use Split text to give each letter its own clip")
+        bake.clicked.connect(lambda _=False, c=clip.id, i=index: self._bake_preset(c, i))
+        top.addWidget(bake)
+        remove = QToolButton()
+        remove.setText("\u2715")
+        remove.setToolTip("Remove this preset")
+        remove.clicked.connect(lambda _=False, c=clip.id, i=index: self._remove_preset(c, i))
+        top.addWidget(remove)
+        layout.addLayout(top)
+
+        duration = SliderField("Duration", int(instance.get("duration", 15)), 1,
+                               max(1, int(clip.duration)), default=15, step=1, unit=" f",
+                               soft_max=max(1, int(clip.duration) // 2), label_width=LABEL_W,
+                               box_width=56,
+                               tooltip="Length of this preset's window, in frames")
+        duration.committed.connect(
+            lambda value, c=clip.id, i=index: self._commit_preset(
+                c, i, "Preset duration", duration=int(value)))
+        layout.addWidget(duration)
+
+        for key, label, span in (("intensity", "Intensity", 200.0), ("stagger", "Stagger", 100.0),
+                                 ("seed", "Seed", 9999.0)):
+            if key == "stagger" and not (clip.is_text and knobs["unit"] != "whole"):
+                continue
+            field = SliderField(label, float(knobs[key]) * (100.0 if key != "seed" else 1.0),
+                                0.0, span, default=35.0 if key == "stagger" else 100.0,
+                                step=1.0, decimals=0,
+                                unit=" %" if key != "seed" else "",
+                                label_width=LABEL_W, box_width=56,
+                                tooltip={"intensity": "How far the preset pushes",
+                                         "stagger": "Share of the window used to spread the units",
+                                         "seed": "Random seed: the same seed gives the same frames"}[key])
+            field.committed.connect(
+                lambda value, c=clip.id, i=index, k=key: self._commit_preset(
+                    c, i, "Preset settings",
+                    knobs={k: (int(value) if k == "seed" else float(value) / 100.0)}))
+            layout.addWidget(field)
+
+        easing = QComboBox()
+        easing.addItems(PM.EASINGS)
+        easing.setCurrentText(str(knobs.get("easing") or PM.DEFAULT_EASING))
+        easing.currentTextChanged.connect(
+            lambda text_value, c=clip.id, i=index: self._commit_preset(
+                c, i, "Preset easing", knobs={"easing": text_value}))
+        layout.addWidget(self._labelled("Easing", easing))
+
+        if clip.is_text and knobs["unit"] != "whole":
+            direction = QComboBox()
+            for key in PM.DIRECTIONS:
+                direction.addItem(PM.DIRECTION_LABELS[key], key)
+            direction.setCurrentIndex(max(0, direction.findData(knobs.get("direction"))))
+            direction.currentIndexChanged.connect(
+                lambda _row, c=clip.id, i=index, box=direction: self._commit_preset(
+                    c, i, "Preset direction", knobs={"direction": box.currentData()}))
+            layout.addWidget(self._labelled("Direction", direction))
+        if clip.is_text:
+            unit = QComboBox()
+            for key in PM.UNITS:
+                unit.addItem(PM.UNIT_LABELS[key], key)
+            unit.setCurrentIndex(max(0, unit.findData(knobs.get("unit"))))
+            unit.currentIndexChanged.connect(
+                lambda _row, c=clip.id, i=index, box=unit: self._commit_preset(
+                    c, i, "Preset unit", knobs={"unit": box.currentData()}, rebuild=True))
+            layout.addWidget(self._labelled("Unit", unit))
+        return box
+
+    def _commit_preset(self, clip_id, index, label, knobs=None, duration=None, rebuild=False):
+        if self.engine.session.update_preset(clip_id, index, label, knobs=knobs, duration=duration):
+            self._notify()
+        if rebuild:
+            self._built_key = None
+            self.refresh_properties()
+
+    def _remove_preset(self, clip_id, index):
+        if self.engine.session.remove_preset(clip_id, index):
+            self._built_key = None
+            self.refresh_properties()
+            self._notify()
+
+    def _bake_preset(self, clip_id, index):
+        if self.engine.session.bake_preset(clip_id, index):
+            self._built_key = None
+            self.refresh_properties()
+            self._notify()
+
     def _effect_card(self, clip, index, effect, entry):
         key = effect.key
+
         frame, outer = self._card(key)
         header = _CardHeader(key)
         header.setToolTip("Drag to reorder")
@@ -1019,7 +1290,7 @@ class EffectsPanel(QWidget):
         enabled = _tool("check", "Enable or disable this effect", checkable=True)
         enabled.setChecked(entry.get("enabled", True))
         enabled.toggled.connect(lambda on, c=clip, e=entry: self._set_enabled(c, e, on))
-        name = QLabel(effect.name)
+        name = QLabel(entry.get("name") or effect.name)
         name.setStyleSheet(f"font-size: {tokens.FONT_TITLE}px; font-weight: 600;")
         reset = _tool("reset", "Reset this effect to its defaults")
         reset.clicked.connect(lambda _=False, c=clip, e=entry, f=effect: self._reset_effect(c, e, f))
@@ -1027,7 +1298,18 @@ class EffectsPanel(QWidget):
         more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(more)
         last = len(clip.effects) - 1
-        menu.addAction("Remove").triggered.connect(lambda _=False, c=clip, k=key: self._remove_effect(c, k))
+        if key == "look":
+            menu.addAction("Remove look").triggered.connect(
+                lambda _=False, c=clip, e=entry: self._remove_look(c, e))
+            menu.addAction("Save stack as look\u2026").triggered.connect(
+                lambda _=False, c=clip: self._save_look(c))
+            look_id = (entry.get("params") or {}).get("look")
+            if LOOKS.get(look_id) is not None:
+                menu.addAction("Export look\u2026").triggered.connect(
+                    lambda _=False, look=look_id: self._export_look(look))
+        else:
+            menu.addAction("Remove").triggered.connect(
+                lambda _=False, c=clip, k=key: self._remove_effect(c, k))
         up = menu.addAction("Move up")
         up.setEnabled(index > 0)
         up.triggered.connect(lambda _=False, c=clip, k=key: self._move_effect(c, k, -1))
@@ -1095,6 +1377,7 @@ class EffectsPanel(QWidget):
         advanced_box = None
         advanced_form = None
         color_done = False
+        self._mix_row(form, clip, effect, entry)
         for spec in effect.param_specs():
             target = form
             if spec.advanced:
@@ -1149,6 +1432,30 @@ class EffectsPanel(QWidget):
                 edit.editingFinished.connect(lambda c=clip, e=entry, n=spec.name, w=edit, s=spec:
                                              self._commit_choice(c, e, n, w.text(), s))
                 target.addWidget(self._labelled(spec.label, edit, tip))
+
+    def _mix_row(self, form, clip, effect, entry):
+        """The Mix slider every effect card gets (animatable like any other parameter)."""
+        stored = entry.get("params", {}).get("mix", 100)
+        animated = isinstance(stored, AnimatedValue)
+        current = MIX_SPEC.clamp(parameter_value_at(stored, self._clip_frame(clip)))
+        field = SliderField(MIX_SPEC.label, current, MIX_SPEC.minimum, MIX_SPEC.maximum,
+                            default=MIX_SPEC.default, step=MIX_SPEC.step, unit=MIX_SPEC.unit,
+                            decimals=0, label_width=LABEL_W, box_width=56,
+                            soft_min=0, soft_max=100, tooltip=MIX_SPEC.help)
+        field.interaction_started.connect(self._begin_edit)
+        field.edited.connect(lambda value, c=clip, e=entry:
+                             self._set_param(c, e, MIX_SPEC.name, value, live=True))
+        field.committed.connect(lambda value, c=clip, e=entry:
+                                self._commit_param(c, e, MIX_SPEC.name, value))
+        stopwatch = self._stopwatch(clip, entry, MIX_SPEC.name, animated)
+        field.add_trailing(stopwatch)
+        cluster = self._key_cluster(clip, entry, MIX_SPEC.name)
+        cluster.setVisible(animated)
+        field.add_trailing(cluster)
+        self._rows.append({"kind": "param", "clip_id": clip.id, "entry": entry,
+                           "name": MIX_SPEC.name, "field": field, "stopwatch": stopwatch,
+                           "cluster": cluster, "effect": effect, "spec": MIX_SPEC})
+        form.addWidget(field)
 
     def _preset_badge(self, clip, effect, entry):
         """A small badge naming the active preset, so the choice is visible when collapsed."""
@@ -1525,6 +1832,8 @@ class EffectsPanel(QWidget):
 
     def _reset_effect(self, clip, entry, effect):
         defaults = {spec.name: spec.default for spec in effect.param_specs()}
+        # Reset leaves the card at full strength, like a freshly added effect.
+        defaults["mix"] = MIX_SPEC.default
 
         def reset(c):
             target = self._entry(c, entry["effect_id"])

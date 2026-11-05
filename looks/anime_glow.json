@@ -1,0 +1,34 @@
+{
+ "description": "Soft halo and clean bloom around the highlights",
+ "format": "mfxlook",
+ "id": "anime_glow",
+ "name": "Anime Glow",
+ "stack": [
+  {
+   "effect_id": "glow",
+   "params": {
+    "intensity": 170,
+    "radius": 34,
+    "softness": 70,
+    "threshold": 55
+   }
+  },
+  {
+   "effect_id": "bloom_streaks",
+   "params": {
+    "intensity": 65,
+    "length": 180,
+    "radius": 24,
+    "threshold": 58
+   }
+  },
+  {
+   "effect_id": "color_correct",
+   "params": {
+    "contrast": 8,
+    "saturation": 22
+   }
+  }
+ ],
+ "version": 1
+}

@@ -74,8 +74,25 @@ previous/next keys, Auto-Keyframe (on = key at playhead, off = shift the whole c
 Clip opacity, effect envelopes and audio gain animate too. Text has its own animation
 presets.
 
+**Animation presets** — a Presets tab beside Effects with 81 shipped presets in six
+categories (Text/Clip x In/Out/Loop), search, favourites and an animated hover preview.
+A preset is an instance on the clip (In anchored to the start, Out to the end, Loop over a
+range) with Duration, Intensity, Easing, Direction, Stagger, Unit and Seed knobs; several
+stack and compose on top of the clip's transform and keyframes instead of replacing them
+(position/rotation/blur/hue/light add, scale/opacity multiply). Text presets animate per
+letter, word or line with a staggered, directional delay around each unit's own centre,
+and fall back to the static kerning-exact layout at rest. Instances draw as coloured bars
+on the clip (drag the inner edge to retime, snapping like every other drag; right-click to
+bake or remove), appear in the Properties *Animation* card, bake to editable keyframes in
+one undo step, and live as plain JSON in `presets/` plus the user folder. *Save as preset*
+and Import/Export write versioned `.mfxpreset` files. Right-click > *Split Text* turns a
+text clip into one clip per letter/word/line at the same positions, one undo step.
+Measured on a 60-character title at 1920x1080 (median of 5 renders): 48 ms a frame at Full
+quality, 31 ms at 75 % and 15 ms at 50 %, with the glyph cache warm and the composite
+restricted to the text's own band.
+
 **Text** — a real text generator (fonts, fill, stroke, shadow, alignment) rendered through
-Pillow, animatable, split-able and saveable.
+Pillow, animatable per letter/word/line, split-able and saveable.
 
 **Audio** — per-clip gain and fades on the waveform, a mixer plan, live mastering meter,
 and export that matches the preview.
@@ -86,6 +103,25 @@ the sources are muxed (AAC) and inserted as a linked video+audio pair.
 
 **Export** — whole project or loop region to video/GIF/image sequences, Save Frame, NVENC
 with verification and a fallback writer, off-thread with progress and cancel.
+
+**Compositing** — 12 blend modes per clip (Normal, Add, Screen, Multiply, Overlay, Soft
+Light, Hard Light, Difference, Darken, Lighten, Color Dodge, Color Burn), one shared
+compositor for preview, export and thumbnails, alpha-correct by construction. *Add >
+Adjustment Layer* makes a picture-less clip on a video track whose effects run over
+everything composited below it, for exactly its time range, with its own opacity, fades,
+keyframes and blend mode. Every effect card has an animatable **Mix** slider (0-100 %, the
+engine blends the untouched layer with the result, alpha included).
+
+**Effects and looks** — the Glitch & Distortion pack (RGB Split, Glitch, Wave Warp,
+Bulge/Pinch, Twirl, Mirror/Kaleidoscope), Stylize (VHS/CRT, Film Grain, Halftone, Posterize,
+Edge Outline, Duotone, Invert, Vignette), Light (Flash/Strobe, Exposure Flicker, Light Leak,
+Bloom Streaks), Time (Posterize Time, Stutter, Echo/Trail) and a LUT effect that reads
+`.cube` tables (plus three built-in ones) with an intensity slider. Parameters follow the
+existing table (two or three visible, the rest under *Advanced*), pixel sizes scale with the
+preview quality, and randomness is seeded from the seed and the frame. Ten shipped
+**Looks** in `looks/` apply a tuned stack plus one Strength card; saving, importing and
+exporting use versioned `.mfxlook` JSON and a per-user folder. `.mfxpf` format 7 adds the
+blend/adjustment columns and migrates v1-6 projects.
 
 **Performance** — a dedicated render thread with an interactive (newest-wins) queue and a
 background prerender queue, a RAM+disk frame cache keyed by a timeline fingerprint,
@@ -142,6 +178,13 @@ The panel lives in the **Graph Editor** dock (`G`) and edits the selected clip's
 
 ## 6. Known limitations
 
+- Animation presets are a render layer: the Graph Editor shows nothing for them until
+  *Bake* turns an instance into ordinary keys, and per-unit (letter/word/line) instances
+  cannot be baked at all - *Split Text* is the way to get editable per-letter clips. A
+  per-unit blur/tint is applied per glyph (a layer-wide Gaussian would merge the glyphs).
+  *Split Text* keeps the words visible at the playhead; text keys that changed the string
+  earlier in the clip are not copied onto the pieces.
+
 - `build/`, `dist/` and `dist_new/` are **stale PyInstaller output** (built 2 November).
   Rebuild with `pyinstaller "meeniFX Studios.spec"`; they are excluded from git.
 - The Graph Editor does not auto-scroll horizontally during playback; when zoomed in past
@@ -149,6 +192,15 @@ The panel lives in the **Graph Editor** dock (`G`) and edits the selected clip's
 - OpenCL compositing measures slower than the CPU path on this machine, so *Auto* keeps
   the CPU; hardware **decode** is unavailable in this OpenCV build (the app reports what
   the driver says). NVENC encoding is used after a verified probe encode.
+- Heavy effect stacks are CPU work: three of the heaviest at 1920x1080 measure 136-354 ms
+  per frame at 75 % preview quality (see `tests/effects_bench.py`), so 30 fps is not
+  reached there; at 50 % they are 64-161 ms. The preview quality slider, proxy media and
+  the frame cache are the practical answer. LUTs are quantised to a 7-bit lookup grid for
+  speed (one gather per pixel instead of eight trilinear gathers) - visually identical to
+  the exact interpolation and identical at every render scale, but a hidden 7-bit table
+  cannot represent a cube's tiniest sub-step.
+- A user look stores effect values only: keyframes on the saved stack become their current
+  base value, because a look is a readable recipe rather than an animation.
 - The recorder is Windows-only (WASAPI). Screen recording is written by the bundled
   ffmpeg (gdigrab) rather than by Qt, because DXGI desktop duplication - what Qt uses -
   delivers a pointer-free image and QScreenCapture has no cursor option. gdigrab draws the
@@ -165,7 +217,12 @@ python -m pytest tests --ignore=tests/test_project_app.py --ignore=tests/test_pr
 ```
 
 Four scripts build a real window and call `os._exit`, so they are excluded from collection
-and run directly (`python tests\test_project_app.py` and friends). The Graph Editor work
-above is pinned by `tests/test_graph_editor.py`, `tests/test_graph_editor_perf.py` and
+and run directly (`python tests\test_project_app.py` and friends). The new effects and compositing are pinned by
+`tests/test_effect_parameters.py` (every parameter at its extremes, animated, defaults),
+`tests/test_effects_new.py` (determinism, seeds, temporal holds, quality scaling, LUT
+files), `tests/test_compositing.py` (blend modes against known pixels, alpha, adjustment
+layer isolation and range, Mix, save/load) and `tests/test_looks.py` (shipped looks,
+Strength, `.mfxlook` round trips). The Graph Editor work above is pinned by
+`tests/test_graph_editor.py`, `tests/test_graph_editor_perf.py` and
 `tests/test_graph_editor_robustness.py` (real mouse and wheel events, live-drag and
 playhead-follow regressions, and a guard against the paint crashes).

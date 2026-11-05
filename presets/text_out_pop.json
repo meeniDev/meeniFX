@@ -1,0 +1,17 @@
+{
+ "args": {
+  "from": 0.2
+ },
+ "category": "text_out",
+ "format": "mfxpreset",
+ "id": "text_out_pop",
+ "keywords": [],
+ "knobs": {
+  "easing": "Back In",
+  "stagger": 0.55,
+  "unit": "letter"
+ },
+ "name": "Pop Out",
+ "program": "pop",
+ "version": 1
+}

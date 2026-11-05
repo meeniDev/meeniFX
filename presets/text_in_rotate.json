@@ -1,0 +1,18 @@
+{
+ "args": {
+  "deg": 35
+ },
+ "category": "text_in",
+ "format": "mfxpreset",
+ "id": "text_in_rotate",
+ "keywords": [],
+ "knobs": {
+  "easing": "Back Out",
+  "intensity": 1.0,
+  "stagger": 0.4,
+  "unit": "letter"
+ },
+ "name": "Rotate In",
+ "program": "rotate",
+ "version": 1
+}

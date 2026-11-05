@@ -39,11 +39,30 @@ CHOICE_CASES = _specs("choice")
 # tests/test_effects_extended.py instead (hue turns the colour wheel, angle turns the
 # smear).
 SYMMETRIC_EXTREMES = {("color_correct", "hue"), ("directional_blur", "angle"),
-                      ("motion_blur", "angle")}
+                      ("motion_blur", "angle"),
+                      # A duotone tint at -180° and +180° is the same hue; the tint
+                      # wheel is covered directionally in tests/test_effects_new.py.
+                      ("duotone", "shadow_hue"), ("duotone", "highlight_hue")}
 
 # Switches that only mean something with the right input: keeping edges sharp needs a
 # transparent layer, and following the animation needs a moving clip. Both have
 # dedicated tests in tests/test_effects_extended.py.
+# Effects whose parameters describe *time* rather than a single frame: the response
+# time of a flash, the frame rate of a held picture, the spacing of echoes. One still
+# frame cannot show them, so they are tested across frames in tests/test_effects_new.py.
+TEMPORAL_CASES = {
+    ("wave_warp", "speed"), ("exposure_flicker", "speed"),
+    ("flash", "duration"), ("flash", "interval"), ("flash", "envelope"),
+    ("posterize_time", "step"), ("posterize_time", "offset"),
+    ("stutter", "interval"), ("stutter", "hold"), ("stutter", "offset"),
+    ("echo", "count"), ("echo", "step"), ("echo", "decay"),
+    ("echo", "offset_x"), ("echo", "offset_y"), ("echo", "blend"),
+}
+
+# Group cards draw nothing on their own: the Look card's Strength scales its stack, which
+# is checked end-to-end in tests/test_looks.py.
+GROUP_CARDS = {("look", "strength")}
+
 CONTEXT_SWITCHES = {("gaussian_blur", "keep_edges"), ("motion_blur", "follow_motion"),
                     # Puppet Warp only deforms when the clip carries pins, and its mesh
                     # overlay is a preview drawing that is never exported.
@@ -102,6 +121,10 @@ def test_numeric_parameter_extremes_change_the_output(effect_id, spec, monkeypat
         pytest.skip("min and max are the same picture; covered by tests/test_effects_extended.py")
     if (effect_id, spec.name) in CONTEXT_SWITCHES:
         pytest.skip("needs pins, transparency or a moving clip; covered by tests/test_effects_extended.py")
+    if (effect_id, spec.name) in TEMPORAL_CASES:
+        pytest.skip("frame-rate parameter; covered by tests/test_effects_new.py")
+    if (effect_id, spec.name) in GROUP_CARDS:
+        pytest.skip("group card; covered by tests/test_looks.py")
     engine, clip = _engine_for(effect_id, monkeypatch)
     base = _prepared_base(effect_id, spec.name, _base_params(engine, effect_id))
     low = spec.minimum
@@ -119,6 +142,8 @@ def test_numeric_parameter_extremes_change_the_output(effect_id, spec, monkeypat
 def test_toggle_parameter_changes_the_output(effect_id, spec, monkeypatch):
     if (effect_id, spec.name) in CONTEXT_SWITCHES:
         pytest.skip("needs transparent input or a moving clip; covered by tests/test_effects_extended.py")
+    if (effect_id, spec.name) in TEMPORAL_CASES:
+        pytest.skip("frame-rate parameter; covered by tests/test_effects_new.py")
     engine, clip = _engine_for(effect_id, monkeypatch)
     base = _prepared_base(effect_id, spec.name, _base_params(engine, effect_id))
     off = render(engine, clip, effect_id, {**base, spec.name: False})
@@ -128,6 +153,8 @@ def test_toggle_parameter_changes_the_output(effect_id, spec, monkeypatch):
 
 @pytest.mark.parametrize("effect_id,spec", CHOICE_CASES, ids=[f"{k}.{s.name}" for k, s in CHOICE_CASES])
 def test_choice_parameter_changes_the_output(effect_id, spec, monkeypatch):
+    if (effect_id, spec.name) in TEMPORAL_CASES:
+        pytest.skip("frame-rate parameter; covered by tests/test_effects_new.py")
     engine, clip = _engine_for(effect_id, monkeypatch)
     base = _prepared_base(effect_id, spec.name, _base_params(engine, effect_id))
     images = [render(engine, clip, effect_id, {**base, spec.name: choice}) for choice in spec.choices]

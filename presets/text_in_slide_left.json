@@ -1,0 +1,18 @@
+{
+ "args": {
+  "dir": "left"
+ },
+ "category": "text_in",
+ "format": "mfxpreset",
+ "id": "text_in_slide_left",
+ "keywords": [],
+ "knobs": {
+  "easing": "Smooth",
+  "intensity": 1.0,
+  "stagger": 0.4,
+  "unit": "letter"
+ },
+ "name": "Slide In Left",
+ "program": "slide",
+ "version": 1
+}

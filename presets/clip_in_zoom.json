@@ -1,0 +1,16 @@
+{
+ "args": {
+  "from": 0.55
+ },
+ "category": "clip_in",
+ "format": "mfxpreset",
+ "id": "clip_in_zoom",
+ "keywords": [],
+ "knobs": {
+  "easing": "Smooth",
+  "intensity": 1.0
+ },
+ "name": "Zoom In",
+ "program": "zoom",
+ "version": 1
+}

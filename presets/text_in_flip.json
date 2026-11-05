@@ -1,0 +1,18 @@
+{
+ "args": {
+  "axis": "x"
+ },
+ "category": "text_in",
+ "format": "mfxpreset",
+ "id": "text_in_flip",
+ "keywords": [],
+ "knobs": {
+  "easing": "Smooth",
+  "intensity": 1.0,
+  "stagger": 0.4,
+  "unit": "letter"
+ },
+ "name": "Flip",
+ "program": "flip",
+ "version": 1
+}

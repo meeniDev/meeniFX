@@ -1,0 +1,16 @@
+{
+ "args": {
+  "deg": 180
+ },
+ "category": "clip_out",
+ "format": "mfxpreset",
+ "id": "clip_out_spin",
+ "keywords": [],
+ "knobs": {
+  "easing": "Cubic In",
+  "intensity": 1.0
+ },
+ "name": "Spin Out",
+ "program": "spin",
+ "version": 1
+}

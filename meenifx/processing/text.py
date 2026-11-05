@@ -118,9 +118,27 @@ def _wrap(draw, text, font, tracking, stroke, limit):
     return lines
 
 
-def render(spec, width, height, scale=1.0):
-    """A (height, width, 4) BGRA uint8 layer with the text drawn on transparency."""
+def render(spec, width, height, scale=1.0, poses=None):
+    """A (height, width, 4) BGRA uint8 layer with the text drawn on transparency.
+
+    `poses` is a preset layer's per-unit animation (``{"letter": [...], "word": [...],
+    "line": [...]}`` of pose objects, see :mod:`meenifx.processing.text_units`). Without
+    it the static path below runs exactly as before, which is what keeps a clip at rest
+    pixel-identical to what it renders with no presets at all.
+    """
     width, height = max(1, int(width)), max(1, int(height))
+    if poses:
+        # Only a pose that actually moves something takes the animated path: the last
+        # frame of a fade evaluates to the identity pose, and a clip at rest has to draw
+        # through the static (kerning-exact) code below.
+        moving = any(not pose.is_identity()
+                     for name in ("letter", "word", "line")
+                     for pose in (poses.get(name) or ()))
+        if moving:
+            from . import text_units
+            animated = text_units.render(spec, width, height, scale, poses)
+            if animated is not None:
+                return animated
     scale = max(0.05, float(scale))
     picture = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     text = str(spec.get("text", ""))
@@ -201,13 +219,21 @@ def render(spec, width, height, scale=1.0):
         layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         draw_text(layer, _colour(spec.get("shadow_color"), int(255 * float(shadow_alpha))),
                   stroke, _colour(spec.get("shadow_color"), int(255 * float(shadow_alpha))))
-        if blur > 0.01:
-            layer = layer.filter(ImageFilter.GaussianBlur(blur / 2.0))
-        if abs(dx) > 0.01 or abs(dy) > 0.01:
-            shifted = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-            shifted.paste(layer, (int(round(dx)), int(round(dy))))
-            layer = shifted
-        picture = Image.alpha_composite(picture, layer)
+        # The shadow is a thin band of a title frame; blurring the whole 1080p canvas was
+        # the most expensive thing in a text render, so the blur runs on its own bounds.
+        box = layer.getbbox()
+        if box is not None:
+            pad = int(round(blur)) + 2
+            bx0, by0 = max(0, box[0] - pad), max(0, box[1] - pad)
+            bx1, by1 = min(width, box[2] + pad), min(height, box[3] + pad)
+            small = layer.crop((bx0, by0, bx1, by1))
+            if blur > 0.01:
+                small = small.filter(ImageFilter.GaussianBlur(blur / 2.0))
+            if abs(dx) > 0.01 or abs(dy) > 0.01:
+                shifted = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+                shifted.paste(small, (int(round(bx0 + dx)), int(round(by0 + dy))))
+                small = shifted
+            picture.paste(small, (0, 0) if small.size == picture.size else (bx0, by0), small)
 
     # Fill opacity multiplies the glyph fill only: the stroke, the shadow and the
     # background plate keep their own, separately labelled opacity values.
@@ -219,5 +245,11 @@ def render(spec, width, height, scale=1.0):
     blur = float(spec.get("blur", 0.0)) * scale
     if blur > 0.01:
         picture = picture.filter(ImageFilter.GaussianBlur(blur / 2.0))
-    array = np.asarray(picture, dtype=np.uint8)
-    return np.ascontiguousarray(array[:, :, [2, 1, 0, 3]])
+    # Only the drawn band needs converting: a full-canvas BGRA copy was three passes over
+    # 8 MB for sixty characters.
+    frame = np.zeros((height, width, 4), dtype=np.uint8)
+    box = picture.getbbox()
+    if box is not None:
+        rgba = np.asarray(picture.crop(box), dtype=np.uint8)
+        frame[box[1]:box[3], box[0]:box[2]] = rgba[:, :, [2, 1, 0, 3]]
+    return frame

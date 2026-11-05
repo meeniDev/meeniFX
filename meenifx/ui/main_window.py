@@ -12,6 +12,7 @@ from PyQt6.QtGui import QAction, QActionGroup, QKeySequence
 from PyQt6.QtWidgets import (QAbstractSpinBox, QDockWidget, QLineEdit, QMainWindow,
                              QMessageBox, QProgressDialog, QPlainTextEdit, QStyle, QTextEdit,
                              QToolBar)
+from PyQt6.QtWidgets import QTabWidget
 
 from ..audio.demo import ensure_demo_audio
 from ..audio.engine import AudioEngine
@@ -205,6 +206,15 @@ class MainWindow(QMainWindow):
         self._build_actions(); self._build_toolbar()
         self.preview_panel=PreviewPanel(lambda:self.preview_scale()*100.0)
         self.effects_panel=EffectsPanel(self.engine)
+        # Presets sit beside Effects in the same dock: one inspector, two browsers.
+        from .presets_panel import PresetsPanel
+        self.presets_panel=PresetsPanel(self.engine)
+        self.presets_panel.applied.connect(self._refresh_panels)
+        self.presets_panel.properties_requested.connect(self._raise_properties)
+        self.inspector_tabs=QTabWidget()
+        self.inspector_tabs.setDocumentMode(True)
+        self.inspector_tabs.addTab(self.effects_panel,"Effects")
+        self.inspector_tabs.addTab(self.presets_panel,"Presets")
         self.timeline_panel=TimelinePanel(self.engine,self.waveforms); self.docks={}
         from .graph_editor import GraphEditorPanel
         # The Graph Editor is a real dock: it can float, be hidden or be tabbed.
@@ -219,7 +229,7 @@ class MainWindow(QMainWindow):
         # The inspector is its own dock, so "Effects" and "Properties" can be moved,
         # hidden and tabbed separately and each gets a labelled View entry.
         for key,widget in (("project",self.project_panel),("preview",self.preview_panel),
-                           ("effects",self.effects_panel),
+                           ("effects",self.inspector_tabs),
                            ("properties",self.effects_panel.props_scroll),
                            ("timeline",self.timeline_panel),("graph",self.graph_editor)):
             self._add_dock(key,widget)
@@ -372,6 +382,8 @@ class MainWindow(QMainWindow):
         self.double_click_graph_action=self._add_check_action(
             keyframes_menu,"Double-click Keyframe Opens Graph Editor",None,True,
             lambda on:self.engine.session.set_double_click_opens_graph(on))
+        add_menu=bar.addMenu("Add")
+        self._add_action(add_menu,"Adjustment Layer",None,self.add_adjustment_layer)
         text_menu=bar.addMenu("Text")
         self._add_action(text_menu,"Add Text Clip","Ctrl+T",self.add_text_clip)
         self._add_action(text_menu,"Add or Remove Text Keyframe at Playhead","Ctrl+Shift+T",
@@ -1722,6 +1734,9 @@ class MainWindow(QMainWindow):
     def set_perf_overlay_visible(self, on):
         on=bool(on)
         self.playback_settings.show_overlay=on
+        # The overlay paints from this flag; the menu, the shortcut and the saved
+        # preference all changed while the picture stayed exactly as it was before.
+        self.perf_overlay.visible=on
         action=getattr(self,"perf_overlay_action",None)
         if action is not None and action.isChecked()!=on:
             action.blockSignals(True); action.setChecked(on); action.blockSignals(False)
@@ -1807,6 +1822,15 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ transform tools
     # ------------------------------------------------------------------- text clips
+    def add_adjustment_layer(self):
+        """Add an adjustment layer above the picture and select it."""
+        clip_id = self.engine.session.add_adjustment_clip()
+        if clip_id is None:
+            return None
+        self._refresh_panels()
+        self._request_preview()
+        return clip_id
+
     def add_text_clip(self):
         """Add a generated text clip at the playhead and select it for editing."""
         from ..model import text as TXT
@@ -1924,10 +1948,9 @@ class MainWindow(QMainWindow):
             self.graph_button.blockSignals(True); self.graph_button.setChecked(visible); self.graph_button.blockSignals(False)
 
     def _clip_media_size(self,clip):
-        entry=self.engine.media._entries.get(clip.source_path) if clip.source_path else None
-        if entry is not None and getattr(entry,"frames",None):
-            height,width=entry.frames[0].shape[:2]
-            return int(width),int(height)
+        size=self.engine.media.source_size(clip.source_path) if clip.source_path else None
+        if size:
+            return size
         return (self.engine.project_size() or (1920,1080))
 
     def closeEvent(self,event):

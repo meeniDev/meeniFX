@@ -1,0 +1,35 @@
+{
+ "description": "Punchy monochrome with crisp edges",
+ "format": "mfxlook",
+ "id": "hard_contrast_bw",
+ "name": "Hard Contrast B/W",
+ "stack": [
+  {
+   "effect_id": "color_correct",
+   "params": {
+    "contrast": 42,
+    "highlights": -12,
+    "preset": "black_white",
+    "shadows": -8
+   }
+  },
+  {
+   "effect_id": "edge_outline",
+   "params": {
+    "mode": "edges",
+    "strength": 28,
+    "thickness": 1,
+    "threshold": 45
+   }
+  },
+  {
+   "effect_id": "vignette",
+   "params": {
+    "amount": 30,
+    "radius": 60,
+    "softness": 55
+   }
+  }
+ ],
+ "version": 1
+}

@@ -31,7 +31,7 @@ The application resolves bundled tile images, the demo clip, and default output 
 - No status bar and no instruction text in the panels: state lives on the buttons, one-line hints live in tooltips, an empty timeline shows a faint "Drop files here", and the few messages that matter (failed import, finished export, missing audio device) appear as a small fading toast at the bottom of the window.
 - One global dark theme for the whole application, including tooltips (dark #1b2230 tooltip, ~450 ms delay, shortcuts in the text), menus, context menus, combo drop-downs, message boxes and the non-native file dialogs.
 - Preview fit and percentage zoom, cursor-centered wheel zoom, pan, guides, and resize handling. The preview keeps two sizes: the logical project frame (which drives fit, zoom, pan and every crop decision) and the render size (project size x quality, drawn into the logical rectangle). Pixel-based effect parameters (mosaic tiles, ASCII cell size, tracker line thickness, minimum face size, blob areas, blur radius) are project pixels scaled by the quality factor, so lowering the quality only softens the image - it never changes the framing, and a 35% preview is the same picture as the export.
-- Per-clip Mosaic, ASCII Art, Face Tracker, Hand Tracker, and Blob Tracker effects; editable clip speed/reverse/loop. Every effect declares the media types it can process (`MEDIA_TYPES` on the effect class), and the browser, the timeline drop target and the engine all read that one declaration: on an audio clip the visual effects are listed greyed as *"(video only)"* and cannot be added, a drag or double-click is refused with a status message, and an effect loaded from an older project onto the wrong media type is switched off (kept, with an explanation in its card) instead of crashing or rendering. Each effect publishes a parameter table (range, unit, default, pixel-based or not) that the properties panel and the parameter audit test both build from, so a control can never write a value the effect does not read.
+- Mosaic, ASCII Art, Face Tracker, Hand Tracker and Blob Tracker plus the new Glitch, Stylize, Light, Time and LUT packs and one-click **Looks** (see *Compositing, effects and looks*); per-clip **blend modes**, **adjustment layers** and a **Mix** slider on every effect card. Every effect declares the media types it can process (`MEDIA_TYPES` on the effect class), and the browser, the timeline drop target and the engine all read that one declaration: on an audio clip the visual effects are listed greyed as *"(video only)"* and cannot be added, a drag or double-click is refused with a status message, and an effect loaded from an older project onto the wrong media type is switched off (kept, with an explanation in its card) instead of crashing or rendering. Each effect publishes a parameter table (range, unit, default, pixel-based or not) that the properties panel and the parameter audit test both build from, so a control can never write a value the effect does not read.
 - Keyframes on every numeric effect parameter: the stopwatch turns animation on and is accent-coloured while active, the slider and number follow the playhead, the diamond is filled exactly on a keyframe and hollow between, and the previous/next buttons jump between them (the cluster only appears for animated parameters). On the timeline a clip with keyframes shows a small diamond and an expand arrow that opens one animation row per parameter; its diamonds can be selected, dragged in time (snapping to the playhead) and deleted, all as single undo steps. See *Keyframe workflow* below for the full timeline keyframe editing, the envelopes, clip opacity and the text animation presets.
 - One numeric widget everywhere (`SliderField`: fixed label column, slider, typed number box, optional stopwatch): effect parameters, preview quality, playback FPS, speed, master volume, clip speed, fades, timeline zoom, track height and the export dialog. The number box selects all on focus, accepts both `,` and `.` and values like `50%`, applies on Enter, cancels on Esc, steps on Up/Down (Shift x10, Ctrl x0.1), and double-clicking the label resets the default. A drag is one undo step, a typed edit is one step.
 - Whole-project or loop-region video/GIF/image export (the chosen range is written from frame 0) and Save Frame; frame processing and export run off the UI thread with progress and cancellation.
@@ -123,6 +123,11 @@ The application resolves bundled tile images, the demo clip, and default output 
   a preset keeps the picture where it is on screen (the position is compensated) unless
   *Keep picture in place* is switched off; the anchor is draggable in the preview,
   keyframeable and undoable like any other channel.
+- **Animation presets**: a Presets tab beside Effects with 81 shipped In/Out/Loop presets, a
+  search box, favourites and a hover preview; instances stack on top of the clip's own
+  transform and keyframes, animate text per letter/word/line, show as bars on the timeline,
+  bake to keyframes, and can be saved, imported and exported as `.mfxpreset`. See
+  *Animation presets* below.
 - **Text animation presets** in the Text card: Fade In/Out, Slide In/Out Left/Right/Up/Down,
   Scale In/Out, Pop In, Typewriter, Blur In/Out, Rotation In/Out and Bounce In, applied to
   an **In** or **Out** slot with a duration, easing and delay. *Preview* sets the loop range
@@ -133,8 +138,9 @@ The application resolves bundled tile images, the demo clip, and default output 
   the text layer, and both export like any other channel. Applying a preset replaces only
   the keys the previous one wrote, *Clear* restores the resting values, and the preset,
   slot and generated key times are stored in the project file.
-- **Format 5**: `.mfxpf` v5 adds the per-clip `gain` column and the text animation block;
-  version 1-4 projects migrate on load with no change in appearance or sound.
+- **Format 5/6**: `.mfxpf` v5 adds the per-clip `gain` column and the text animation block;
+  v6 adds the per-clip preset instances. Version 1-5 projects migrate on load with no
+  change in appearance or sound. See *Animation presets* for the instance model.
 - Limits: the marquee needs empty lane space or an expanded row band, so a Ctrl+drag over
   clip bodies still extends the clip selection. The envelope line is grabbed within 3 px
   (a wider band would steal the press that drags the clip, because a 0 dB gain line runs
@@ -143,6 +149,123 @@ The application resolves bundled tile images, the demo clip, and default output 
   automation is sampled with the audio block (~15 times a second), so a gain ramp shorter
   than that is piecewise linear rather than sample-exact, and gain is per clip (a linked
   pair is adjusted one clip at a time).
+
+## Animation presets (In / Out / Loop, on any clip)
+
+- The **Presets** tab beside Effects ships **81 presets** in six categories: Text In, Text
+  Out, Text Loop, Clip In, Clip Out and Clip Loop - Fade, Typewriter, Pop, Bounce, Slide in
+  all four directions, Scale Up Overshoot, Blur, Rotate, Drop, Wave, Flip, Spiral, Tracking,
+  Scramble/Decode, Glitch Reveal, Mask Wipe, Kinetic Punch and Vertical Slide, the matching
+  exits, and the loops (Wave, Float, Pulse, Shake, Jitter, Wiggle, Flicker, Glitch Stutter,
+  Colour Cycle, Swing, Camera Shake, Heartbeat, Strobe, Sway, Zoom Breath, Punch Zoom).
+  Search by name or keyword, star favourites, and hover a preset to watch it move in the
+  preview strip under the list. Apply with a double-click or by dragging it onto a clip.
+- A preset is an **instance on the clip**, not a replacement for its animation. Each has a
+  category (In, Out, Loop), a window, and the knobs Duration, Intensity, Easing, Direction,
+  Stagger, Unit and Seed. A clip can carry several (In + Loop + Out) and they compose as a
+  layer **on top of** the clip's own transform and keyframes: position, rotation, blur, hue
+  and light add, scale and opacity multiply. So a hand-animated move keeps playing while a
+  shake rides on it, and nothing you keyed is overwritten. In is anchored to the clip start,
+  Out to the clip end, and a Loop covers its range (the whole clip unless you shorten it).
+- Everything is deterministic: noise-based loops (shake, wiggle, jitter, flicker) are
+  functions of the Seed, and the instances are part of the render-cache fingerprint, so the
+  preview, the cache, baked keys and the export produce identical frames.
+- **Text per unit**: the Unit dropdown (Letter, Word, Line, Whole) makes a text preset
+  animate each unit separately with a staggered delay, in a direction (left to right, right
+  to left, from centre, edges in, random by seed); Direction/Stagger shape the timing, and
+  each unit gets its own offset, scale, rotation, opacity, blur and colour shift around its
+  own centre. At rest - before, between and after its window - the text draws through the
+  static, kerning-exact path, so the layout never shifts by a pixel. Glyph bitmaps are
+  rendered once and cached, and a title's pixels only cover a band of the frame, so a
+  60-character title with per-letter motion costs about as much as the video under it:
+  measured at 1920x1080, 48 ms a frame at Full quality, 31 ms at 75 % and 15 ms at 50 %
+  (median of 5 renders) - 32 fps and better at the two preview scales, while the same
+  title drawn statically with its default shadow took 67 / 40 / 18 ms before the text
+  buffer was trimmed to its content.
+- The **Animation card** in Properties lists the instances on the selected clip with their
+  knobs (the shared slider fields), **Bake** and remove. Baking samples the instance into
+  ordinary keyframes on the existing channels in one undo step, so the Graph Editor can then
+  edit every value; per-unit instances are not bakeable there (their motion lives in the
+  text layout) - use Split text instead.
+- **Split text**: right-click a text clip > *Split Text* > *Into Letters / Into Words / Into
+  Lines* turns it into one text clip per unit, each at exactly the position it had, keeping
+  the picture's transform, effects, fades, timing and presets (a per-unit instance becomes a
+  whole-clip instance on every piece). One undo step.
+- **On the timeline** each instance is a thin coloured bar on its clip: green at the start
+  for In, orange at the end for Out, blue across the range for Loop. Drag the inner edge to
+  change the duration (snapping to the playhead, markers, clip edges and other keys, Shift
+  to switch snapping off); right-click a bar to bake or remove it. A whole drag is one undo
+  step.
+- **Library and sharing**: shipped presets are plain JSON files in `presets/`; a user
+  folder (the platform config directory, `%APPDATA%\meeniFX\presets` on Windows) is merged
+  on top, so your own presets survive upgrades and override shipped ones with the same id.
+  *Save as preset* stores the selected clip's current animation, and Import/Export write
+  `.mfxpreset` files - versioned JSON (`format: "mfxpreset"`, `version: 1`) that can be
+  shared; a file from a newer version is refused rather than half-read.
+- **Format 6**: `.mfxpf` v6 adds the per-clip `presets` column; v1-5 projects open with no
+  presets and no change in appearance.
+- Limits: presets are a layer, so until you bake, the Graph Editor shows nothing for them;
+  per-unit blur and tint are per glyph (a layer-wide Gaussian would smear the letters
+  together); and *Split text* keeps the words visible at the playhead - text keys that
+  changed the string earlier in the clip are not carried onto the pieces.
+
+## Compositing, effects and looks
+
+- **Blend modes per clip**: Normal, Add, Screen, Multiply, Overlay, Soft Light, Hard Light,
+  Difference, Darken, Lighten, Color Dodge and Color Burn in the clip card. One
+  implementation (`processing/blend.py`) is used by the preview, the export and the
+  thumbnails, and the blended colour is mixed by the layer's own alpha, so a rotated clip,
+  text or a PNG character blends by its real coverage instead of its bounding box.
+- **Adjustment layers**: *Add > Adjustment Layer* creates a clip with no picture on a video
+  track. Its effects run over everything already composited below it, and only while the
+  clip plays; it trims, fades, keyframes its opacity and takes a blend mode like any clip.
+- **Mix on every effect card**: 0-100 %, animatable like any parameter, blending the
+  untouched layer with the effect's result (colour and alpha). At 0 % the effect is skipped
+  entirely; Bake and Reset leave it at 100 %.
+- **New effects**, grouped by category with two or three main sliders and the rest under
+  *Advanced*; pixel parameters scale with the preview quality and every random pattern is
+  seeded from the seed plus the frame, so a preview is the exported picture:
+  - *Glitch & Distortion*: RGB Split (linear/radial with edge falloff), Glitch (slices,
+    blocks, channel tears, per-frame seed), Wave Warp, Bulge / Pinch, Twirl, Mirror /
+    Kaleidoscope.
+  - *Stylize*: VHS / CRT (scanlines, tape noise, chroma bleed, grain, curvature, wobble,
+    vignette), Film Grain, Halftone, Posterize, Edge Outline (cartoon), Duotone, Invert,
+    Vignette.
+  - *Blur & Sharpen*: the existing Gaussian, Box, Directional, Radial, Zoom and Motion
+    blurs cover the blur pack; their radii are project pixels at every quality.
+  - *Light*: Flash / Strobe with a flash, fade or pulse envelope, Exposure Flicker,
+    procedural Light Leak, Bloom Streaks.
+  - *Time*: Posterize Time (hold each picture for N frames), Stutter (hold, then jump) and
+    Echo / Trail (blend the clip's own earlier frames). The frame timing is decided once in
+    `EditorEngine.held_frame`, so picture, effects and transform freeze together.
+  - *Color*: LUT with a `.cube` loader, an intensity slider and three built-in tables; the
+    lookup runs through a cached 7-bit table, one gather per pixel, and the colour depends
+    only on the pixel, so every render scale matches exactly.
+- **Looks**: a *Looks* category with ten shipped bundles (VHS Tape, CRT Monitor, Anime
+  Glow, Cyber Glitch, Dreamy Bloom, Retro Film, Comic Halftone, Neon Night, Faded Memory,
+  Hard Contrast B/W). Applying one inserts a normal editable effect stack plus a single
+  *Look* card whose Strength scales the whole stack. There is a *...* menu beside the
+  effect search to save the current stack as a user look, import one, or export a
+  `.mfxlook` file - versioned JSON (`format: "mfxlook"`, `version: 1`) in `looks/`, with a
+  per-user folder merged on top; a file from a newer version is refused rather than
+  half-read.
+- **Format 7**: `.mfxpf` v7 adds the per-clip `blend` and `adjust` columns; v1-6 projects
+  migrate on load, blending normally and carrying no adjustment layer.
+- **Performance** (`tests/effects_bench.py`, 1920x1080, median of five renders):
+
+  | stack | 100% | 75% | 50% |
+  |---|---|---|---|
+  | composite only | 22 ms | 16 ms | 7 ms |
+  | VHS/CRT + Film Grain + Bloom Streaks | 583 ms | 354 ms | 161 ms |
+  | Glitch + RGB Split + Light Leak | 242 ms | 136 ms | 64 ms |
+  | Halftone + Edge Outline + Glow | 556 ms | 304 ms | 130 ms |
+  | LUT + Duotone + Vignette | 232 ms | 133 ms | 58 ms |
+
+  Three heavy effects stacked are *not* a 30 fps CPU preview at 1080p; the preview quality
+  slider (75 % by default, 50 % for heavy grades), proxy media and the RAM/disk frame cache
+  are what keep playback usable. The LUT path was made 5.6x faster, bloom 2x, light leaks
+  2.4x and glow 1.3x by computing smooth fields on a bounded grid and using a lookup table
+  instead of eight per-pixel gathers.
 
 ## Warp effects
 

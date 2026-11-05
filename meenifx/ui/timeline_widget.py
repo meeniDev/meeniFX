@@ -16,10 +16,11 @@ from PyQt6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLa
 from .. import tokens
 from ..audio import processed_waveform
 from ..audio.waveform import envelope
-from ..constants import EFFECT_MIME, MEDIA_MIME
+from ..constants import EFFECT_MIME, MEDIA_MIME, PRESET_MIME
 from ..icons import icon
 from ..model import animation as ANIM
 from ..model import channels as CH
+from ..model import presets as PM
 from ..model.keyframes import AnimatedValue, Keyframe, clip_animations, clip_keyframe_frames
 from ..model.timeline import FADE_CURVES, MARKER_COLORS, fade_curve_name, fade_gain
 from ..theme import COLORS
@@ -188,6 +189,7 @@ class TimelineCanvas(QWidget):
         self._marker_drag = None        # {"ids", "anchor", "orig", "snapshot", "frame", "moved"}
         self._marker_marquee = None     # {"start", "end", "base"} while Shift-dragging the ruler
         self._fade_drag = None          # {"clip_id", "edge", "snapshot", ...} while dragging a fade
+        self._preset_drag = None        # the same, for a preset bar's inner edge
         self._expanded_clips = set()    # clips whose animation rows are open
         # The keyframe selection itself lives in the session, shared with the Graph
         # Editor: this canvas only ever reads and asks it to change.
@@ -753,11 +755,145 @@ class TimelineCanvas(QWidget):
             self._paint_missing_warning(p, rect)
         if clip.link_id and not missing:
             self._paint_link_badge(p, clip, content)
+        self._paint_presets(p, clip, content)
         self._paint_fade_handles(p, clip, content)
         self._paint_fade_chip(p, clip, content)
         self._paint_envelope(p, clip, content)
         if rows:
             self._paint_keyframe_controls(p, clip, rect, content, shown_rows, expanded)
+
+    # ------------------------------------------------------------------ presets
+    PRESET_COLORS = {"in": "#4fbf87", "out": "#e0913f", "loop": "#6aa9ff"}
+    PRESET_BAR_H = 4.0
+    PRESET_GRIP = 4          # pixels around an inner edge that start a drag
+
+    def preset_bar_rects(self, clip):
+        """[(index, instance, QRectF bar, left_qrect, right_qrect)] for the clip's presets."""
+        rows = PM.instances(clip)
+        if not rows:
+            return []
+        content = self._clip_rect(clip)
+        width = max(2.0, content.width() - 8.0)
+        x0 = content.left() + 4.0
+        bars = []
+        base = content.bottom() - 4.0
+        for index, instance in enumerate(rows):
+            start, length = PM.window(instance, clip.duration)
+            left = x0 + width * (start / max(1, clip.duration))
+            right = x0 + width * ((start + length) / max(1, clip.duration))
+            top = base - (index + 1) * (self.PRESET_BAR_H + 2.0)
+            if top < content.top() + 1:
+                # Too many presets for the lane: the extras share the top bar.
+                top = content.top() + 1
+            bar = QRectF(left, top, max(3.0, right - left), self.PRESET_BAR_H)
+            grip = self.PRESET_GRIP
+            bars.append((index, instance, bar, QRectF(bar.left() - grip, bar.top() - 2,
+                                                      2 * grip, bar.height() + 4),
+                         QRectF(bar.right() - grip, bar.top() - 2, 2 * grip, bar.height() + 4)))
+        return bars
+
+    def _paint_presets(self, p, clip, content):
+        """Thin coloured bars: In at the start, Out at the end, Loop over its range."""
+        if content.height() < 14:
+            return
+        for _index, instance, bar, _left, _right in self.preset_bar_rects(clip):
+            colour = QColor(self.PRESET_COLORS.get(instance.get("category"), "#8a8f9a"))
+            p.save()
+            p.setPen(Qt.PenStyle.NoPen)
+            fill = QColor(colour)
+            fill.setAlpha(215)
+            p.setBrush(fill)
+            p.drawRoundedRect(bar, 1.5, 1.5)
+            # The draggable inner edge gets a lighter notch so it can be found.
+            p.setBrush(QColor(255, 255, 255, 170))
+            if instance.get("category") == "out":
+                p.drawRect(QRectF(bar.left(), bar.top(), 1.5, bar.height()))
+            elif instance.get("category") == "in":
+                p.drawRect(QRectF(bar.right() - 1.5, bar.top(), 1.5, bar.height()))
+            else:
+                p.drawRect(QRectF(bar.left(), bar.top(), 1.5, bar.height()))
+                p.drawRect(QRectF(bar.right() - 1.5, bar.top(), 1.5, bar.height()))
+            p.restore()
+
+    def _preset_hit(self, x, y):
+        """(clip, index, edge) under the pointer; edge is 'start'/'end' or None."""
+        for track in self.timeline.tracks:
+            if track.type != "video":
+                continue
+            for clip in track.clips:
+                for index, _instance, bar, left_grip, right_grip in self.preset_bar_rects(clip):
+                    if not bar.adjusted(-2, -3, 2, 3).contains(x, y):
+                        continue
+                    if right_grip.contains(x, y):
+                        return clip, index, "end"
+                    if left_grip.contains(x, y):
+                        return clip, index, "start"
+                    return clip, index, None
+        return None, None, None
+
+    def _begin_preset_drag(self, clip, index, edge, x, y):
+        instance = PM.instances(clip)[index]
+        self._preset_drag = {
+            "clip_id": clip.id, "index": index, "edge": edge,
+            "snapshot": self.timeline.snapshot(), "start_x": x,
+            "start": int(instance.get("start", 0)),
+            "duration": int(instance.get("duration", 1)), "moved": False,
+        }
+        self._release_snap(animate=False)
+        self.setCursor(Qt.CursorShape.SizeHorCursor)
+
+    def _preset_move(self, x, y, modifiers):
+        drag = self._preset_drag
+        clip = self.timeline.find_clip(drag["clip_id"]) if drag else None
+        if clip is None or not 0 <= drag["index"] < len(PM.instances(clip)):
+            return
+        instance = PM.instances(clip)[drag["index"]]
+        start, length = PM.window(instance, clip.duration)
+        boundary = self._fade_boundary_frame(clip, x)
+        if self.snap_enabled and not (modifiers & Qt.KeyboardModifier.ShiftModifier):
+            boundary = self._snap_frame(boundary, exclude=(clip.id,), modifiers=modifiers)
+        else:
+            self._release_snap(animate=False)
+        local = int(boundary) - int(clip.timeline_start)
+        category = instance.get("category", "in")
+        if category == "out":
+            length = max(1, clip.duration - local)
+            start = clip.duration - length
+            PM.set_range(instance, start, length, clip)
+        elif category == "in":
+            PM.set_range(instance, 0, max(1, local), clip)
+        else:
+            if drag["edge"] == "start":
+                new_start = max(0, min(local, start + length - 1))
+                PM.set_range(instance, new_start, start + length - new_start, clip)
+            else:
+                PM.set_range(instance, start, max(1, local - start), clip)
+        drag["moved"] = True
+        self.session.changed.emit()
+        self.update()
+
+    def _preset_release(self):
+        drag, self._preset_drag = self._preset_drag, None
+        self.unsetCursor()
+        self._release_snap()
+        if drag is None:
+            return
+        if drag.get("moved"):
+            self.session.stack.commit("Preset timing", drag["snapshot"])
+        self.session.changed.emit()
+        self.update()
+
+    def _preset_menu(self, clip, index, point):
+        instance = PM.instances(clip)[index]
+        menu = QMenu(self)
+        title = menu.addAction(PM.summary(instance))
+        title.setEnabled(False)
+        menu.addSeparator()
+        bake = menu.addAction("Bake to Keyframes")
+        bake.setEnabled(PM.bakeable(instance, clip))
+        bake.triggered.connect(lambda: self.session.bake_preset(clip.id, index))
+        menu.addAction("Remove Preset", lambda: self.session.remove_preset(clip.id, index))
+        menu.exec(point)
 
     def _paint_missing_warning(self, p, rect):
         """Amber warning triangle: the clip's media file cannot be found."""
@@ -2481,6 +2617,11 @@ class TimelineCanvas(QWidget):
             if x < self.HEADER_W and self.track_at(y) is not None:
                 self._track_menu(self.track_at(y), event.globalPosition().toPoint())
                 return
+            preset_clip, preset_index, _preset_edge = self._preset_hit(x, y)
+            if preset_clip is not None:
+                self.session.set_selection({preset_clip.id})
+                self._preset_menu(preset_clip, preset_index, event.globalPosition().toPoint())
+                return
             fade_clip, fade_edge = self._fade_hit(x, y)
             if fade_clip is not None:
                 self.session.set_selection({fade_clip.id})
@@ -2542,6 +2683,13 @@ class TimelineCanvas(QWidget):
             if self.session.marker_selected:
                 self.session.clear_marker_selection()
             self._begin_keyframe_drag(kf_clip, kf_row, kf_time, event.modifiers())
+            return
+        preset_clip, preset_index, preset_edge = self._preset_hit(x, y)
+        if preset_clip is not None and preset_edge is not None:
+            self._header_selected = None
+            if preset_clip.id not in self.session.selected:
+                self.session.set_selection({preset_clip.id})
+            self._begin_preset_drag(preset_clip, preset_index, preset_edge, x, y)
             return
         fade_clip, fade_edge = self._fade_hit(x, y)
         if fade_clip is not None:
@@ -2942,6 +3090,9 @@ class TimelineCanvas(QWidget):
             self._envelope_move(x, y)
             return
         if self._fade_drag:
+            if self._preset_drag is not None:
+                self._preset_move(x, y, event.modifiers())
+                return
             self._fade_move(x, y, event.modifiers())
             return
         if self._marker_drag:
@@ -3091,6 +3242,9 @@ class TimelineCanvas(QWidget):
             self._select_keyframes_in_band()
             return
         if self._fade_drag:
+            if self._preset_drag is not None:
+                self._preset_release()
+                return
             self._fade_release()
             return
         if self._marker_drag:
@@ -3324,6 +3478,12 @@ class TimelineCanvas(QWidget):
             self.update()
             return
         if key == Qt.Key.Key_Escape and self._fade_drag:
+            if self._preset_drag is not None:
+                drag, self._preset_drag = self._preset_drag, None
+                self.unsetCursor()
+                self.timeline.restore(drag["snapshot"])
+                self.session.changed.emit()
+                return
             self._cancel_fade_drag()
             return
         if key == Qt.Key.Key_Escape and self._marker_drag:
@@ -3374,6 +3534,13 @@ class TimelineCanvas(QWidget):
         menu.addAction("Add Audio Track", lambda: self.session.add_track("audio"))
         menu.addSeparator()
         menu.addAction("Split at Playhead", self.session.split_at_playhead)
+        if clip.is_text:
+            split_menu = menu.addMenu("Split Text")
+            for mode, label in (("letter", "Into Letters"), ("word", "Into Words"),
+                                ("line", "Into Lines")):
+                action = split_menu.addAction(label)
+                action.triggered.connect(
+                    lambda _checked=False, c=clip, m=mode: self.split_text(c, m))
         menu.addAction("Add Freeze Frame", self.session.add_freeze_at_playhead)
         menu.addSeparator()
         keys = menu.addMenu("Keyframes")
@@ -3416,6 +3583,26 @@ class TimelineCanvas(QWidget):
         menu.addAction("Delete", self.session.delete_selected)
         menu.addAction("Ripple Delete", lambda: self.session.delete_selected(True))
         menu.exec(point)
+
+    def split_text(self, clip, mode="letter"):
+        """Split a text clip into one clip per unit, keeping every piece where it was.
+
+        The layout lives in the renderer (font metrics), so it produces the offsets and
+        the session performs the model edit as one undo step.
+        """
+        from ..model import text as TXT
+        from ..processing import text_units
+
+        width, height = self.engine.project_size()
+        spec = TXT.resolve(clip, 0)
+        units = text_units.layout_units(spec, width, height, 1.0).get(mode) or []
+        if len(units) < 2:
+            self.session.status.emit("This text has nothing to split at that unit")
+            return []
+        centre_x, centre_y = width / 2.0, height / 2.0
+        pieces = [(str(unit[2]), float(unit[0]) - centre_x, float(unit[1]) - centre_y)
+                  for unit in units]
+        return self.session.split_text_clip(clip.id, pieces, mode)
 
     def _track_menu(self, track, point):
         self._header_selected = track.id
@@ -3508,7 +3695,7 @@ class TimelineCanvas(QWidget):
             self._update_media_drop(event)
             event.acceptProposedAction()
             return
-        if mime.hasFormat(EFFECT_MIME) or mime.hasUrls():
+        if mime.hasFormat(EFFECT_MIME) or mime.hasFormat(PRESET_MIME) or mime.hasUrls():
             self._drop_highlight = True
             self.update()
             event.acceptProposedAction()
@@ -3521,7 +3708,7 @@ class TimelineCanvas(QWidget):
             self._update_media_drop(event)
             event.acceptProposedAction()
             return
-        if mime.hasFormat(EFFECT_MIME):
+        if mime.hasFormat(EFFECT_MIME) or mime.hasFormat(PRESET_MIME):
             self._fx_drop_highlight = self._clip_at(event.position().x(), event.position().y())[1]
             self.update()
             event.acceptProposedAction()
@@ -3553,7 +3740,16 @@ class TimelineCanvas(QWidget):
             self.media_dropped.emit(media_ids, frame, track)
             event.acceptProposedAction()
             return
-        if mime.hasFormat(EFFECT_MIME):
+        if mime.hasFormat(PRESET_MIME):
+            payload = bytes(mime.data(PRESET_MIME)).decode("utf-8")
+            preset_id, _sep, unit = payload.partition("|")
+            _track, clip = self._clip_at(event.position().x(), event.position().y())
+            if clip is not None:
+                from ..model import preset_library as LIB
+                preset = LIB.load().get(preset_id)
+                if preset is not None:
+                    self.session.apply_preset(preset, unit or "whole", ids=[clip.id])
+        elif mime.hasFormat(EFFECT_MIME):
             key = bytes(mime.data(EFFECT_MIME)).decode("utf-8")
             _track, clip = self._clip_at(event.position().x(), event.position().y())
             if clip is not None:
@@ -3567,6 +3763,10 @@ class TimelineCanvas(QWidget):
         self.update()
 
     def _add_effect_to_clip(self, clip, key):
+        if str(key).startswith("look:"):
+            self.session.apply_look(str(key).split(":", 1)[1], ids=[clip.id])
+            self.session.set_selection({clip.id})
+            return
         effect = next((item for item in self.engine.effects if item.key == key), None)
         if effect is None:
             return

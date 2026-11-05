@@ -1,0 +1,17 @@
+{
+ "args": {
+  "px": 22
+ },
+ "category": "text_out",
+ "format": "mfxpreset",
+ "id": "text_out_blur",
+ "keywords": [],
+ "knobs": {
+  "easing": "Smooth",
+  "stagger": 0.45,
+  "unit": "letter"
+ },
+ "name": "Blur Out",
+ "program": "blur",
+ "version": 1
+}

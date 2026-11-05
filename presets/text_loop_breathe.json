@@ -1,0 +1,17 @@
+{
+ "args": {
+  "amp": 0.035
+ },
+ "category": "text_loop",
+ "format": "mfxpreset",
+ "id": "text_loop_breathe",
+ "keywords": [],
+ "knobs": {
+  "easing": "Linear",
+  "stagger": 0.0,
+  "unit": "word"
+ },
+ "name": "Breathe",
+ "program": "zoom_breath",
+ "version": 1
+}

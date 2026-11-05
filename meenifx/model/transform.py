@@ -319,10 +319,8 @@ def content_corners(state, project_size, image_size):
 
 def frame_size(clip, media_entry):
     """(width, height) of a clip's own picture, for the fit rectangle."""
-    if media_entry is not None and getattr(media_entry, "frames", None):
-        height, width = media_entry.frames[0].shape[:2]
-        return int(width), int(height)
-    return 1920, 1080
+    from ..media.cache import entry_size
+    return entry_size(media_entry) or (1920, 1080)
 
 
 def reset_transform(clip):

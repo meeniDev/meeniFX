@@ -77,6 +77,12 @@ def _text(clip):
     return text_keys + "|" + settings
 
 
+def _presets(clip):
+    """The preset instances are part of the picture, so they are part of the digest."""
+    from ..model import presets as preset_model
+    return preset_model.cache_key(clip)
+
+
 def clip_digest(clip):
     """One string that changes exactly when this clip's rendered contribution changes."""
     if clip is None:
@@ -101,6 +107,10 @@ def clip_digest(clip):
         _transform(clip),
         _effects(clip),
         _text(clip),
+        _presets(clip),
+        # How the layer is composited changes the picture just as much as its effects.
+        str(getattr(clip, "blend", "normal")),
+        str(bool(getattr(clip, "adjustment", False))),
     ))
     return hashlib.blake2b(raw.encode("utf-8", "replace"), digest_size=12).hexdigest()
 

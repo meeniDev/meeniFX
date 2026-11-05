@@ -1,0 +1,16 @@
+{
+ "args": {},
+ "category": "clip_in",
+ "format": "mfxpreset",
+ "id": "clip_in_fade",
+ "keywords": [
+  "opacity"
+ ],
+ "knobs": {
+  "easing": "Smooth",
+  "intensity": 1.0
+ },
+ "name": "Fade In",
+ "program": "fade",
+ "version": 1
+}

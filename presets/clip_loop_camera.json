@@ -1,0 +1,20 @@
+{
+ "args": {
+  "amp": 0.008,
+  "zoom": 0.012
+ },
+ "category": "clip_loop",
+ "format": "mfxpreset",
+ "id": "clip_loop_camera",
+ "keywords": [
+  "handheld",
+  "documentary"
+ ],
+ "knobs": {
+  "easing": "Smooth",
+  "intensity": 1.0
+ },
+ "name": "Camera Shake",
+ "program": "camera_shake",
+ "version": 1
+}

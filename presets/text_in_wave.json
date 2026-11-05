@@ -1,0 +1,18 @@
+{
+ "args": {
+  "amp": 0.03
+ },
+ "category": "text_in",
+ "format": "mfxpreset",
+ "id": "text_in_wave",
+ "keywords": [],
+ "knobs": {
+  "easing": "Smooth",
+  "intensity": 1.0,
+  "stagger": 0.6,
+  "unit": "letter"
+ },
+ "name": "Wave",
+ "program": "wave_in",
+ "version": 1
+}

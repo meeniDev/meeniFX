@@ -1,0 +1,18 @@
+{
+ "args": {},
+ "category": "text_loop",
+ "format": "mfxpreset",
+ "id": "text_loop_color",
+ "keywords": [
+  "hue",
+  "rainbow"
+ ],
+ "knobs": {
+  "easing": "Linear",
+  "stagger": 0.0,
+  "unit": "word"
+ },
+ "name": "Color Cycle",
+ "program": "color_cycle",
+ "version": 1
+}
