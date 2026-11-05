@@ -134,6 +134,39 @@ def test_phrase_grouping_breaks_at_pauses_and_punctuation():
     assert len(capped) >= 2, "max words per caption is respected"
 
 
+def test_linked_selection_keeps_the_clicked_audio_clip_as_the_caption_source():
+    engine, video = build_engine(frames=90, duration=90)
+    audio_track = engine.timeline.add_track("audio")
+    audio = engine.timeline.new_clip("voice", "voice.wav", audio_track, 15, 45,
+                                     source_out=45, source_fps=30, stream="audio")
+    engine.timeline.assign_link([video.id, audio.id])
+    session = engine.session
+    session.set_linked_selection(True)
+
+    session.set_selection({audio.id})
+    assert session.primary_clip() is audio, "the clicked member must stay primary"
+    start, end, ids = session.caption_source_range("clip")
+    assert (start, end) == (audio.timeline_start, audio.end)
+    assert ids == [audio.id]
+
+    # Clicking the silent linked picture analyses its sound instead of failing on the
+    # video member, and the range follows the audio (not the longer picture).
+    session.set_selection({video.id})
+    assert session.primary_clip() is video
+    start, end, ids = session.caption_source_range("clip")
+    assert (start, end) == (audio.timeline_start, audio.end)
+    assert ids == [audio.id]
+
+
+def test_an_embedded_audio_video_is_its_own_caption_source():
+    engine, video = build_engine(frames=60, duration=60)
+    video.stream = "both"
+    engine.session.set_selection({video.id})
+    start, end, ids = engine.session.caption_source_range("clip")
+    assert (start, end) == (video.timeline_start, video.end)
+    assert ids == [video.id]
+
+
 def test_style_presets_are_editable_text_values():
     engine, _clip = build_engine()
     width, height = 1920, 1080

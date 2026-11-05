@@ -2,6 +2,44 @@
 
 ## Unreleased (2026-11-05)
 
+### Reliability and performance
+
+- **Auto Captions on linked clips:** linked-selection expansion no longer loses the clip
+  that was clicked, and the caption range resolves a silent linked video to its audio (or
+  uses an embedded audio stream). A longer picture no longer widens the analysed range into
+  silence.
+- **Bounce baking:** fixed `position_at()` dropping an animated Y when X was static. Baking
+  Bounce now writes visible vertical motion as well as opacity, with a regression test
+  comparing every sampled frame.
+- **Auto preview quality:** fixed the climb-back branch, which compared the current scale
+  against 1.0 and could never recover, so a slow frame permanently lowered preview quality.
+- **Tracker cards:** icon-only effects (Face Tracker, Hand Tracker and audio/time effects)
+  now show a readable label instead of an empty tile; no fake detection is drawn.
+- **Timeline toolbar:** removed the redundant Linked Selection chain button. The same
+  selection behaviour remains in Edit as a checkable command with Ctrl+Shift+K; explicit
+  Link/Unlink commands and shortcuts are unchanged.
+
+### Recording
+
+- Added Performance / Balanced / High Quality recorder presets. They change bitrate
+  headroom and encoder effort only; capture timing, timestamps and audio/video sync are
+  unchanged.
+- Screen recording uses a verified NVENC encoder when one works for gdigrab, reports the
+  chosen encoder in Recorder settings, and falls back to software libx264 when hardware
+  produces no data instead of leaving an empty take.
+
+### Project organization
+
+- Renamed the Project panel's bin terminology to **New Folder**, with nested virtual
+  folders, breadcrumbs, drag and drop, multi-item moves and search across all folders.
+  Folder organization is saved in `.mfxpf`; old flat bin lists still load.
+- Folder deletion offers **Move Contents to Parent**, **Remove Folder and Media from
+  Project**, or Cancel. It never deletes a source file, and timeline clips are removed
+  only after an explicit warning.
+- Split **Remove from Project** from **Delete File from Computer...**. The destructive
+  action lists exact paths, warns about timeline use, delegates only to the operating
+  system's Recycle Bin and refuses to proceed when no safe trash mechanism exists.
+
 ### Linking
 
 - Added explicit **Link Selected Clips** (Ctrl+L, Edit menu and clip right-click menu) and

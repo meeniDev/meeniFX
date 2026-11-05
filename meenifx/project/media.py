@@ -54,7 +54,8 @@ class MediaItem:
 class MediaLibrary:
     def __init__(self):
         self.items = {}   # id -> MediaItem, insertion ordered
-        self.bins = {}    # id -> name
+        self.bins = {}    # id -> name ("" is the project root, not a real bin)
+        self.bin_parents = {}  # id -> parent id; absent/"" means the root
         self._next_item = 1
         self._next_bin = 1
         self._by_path = {}
@@ -100,17 +101,70 @@ class MediaLibrary:
             self._by_path.pop(norm_path(item.path), None)
         return item
 
-    def add_bin(self, name):
+    def add_bin(self, name, parent=""):
         bid = f"b{self._next_bin}"
         self._next_bin += 1
-        self.bins[bid] = name or "Bin"
+        self.bins[bid] = name or "Folder"
+        self.bin_parents[bid] = parent if parent in self.bins else ""
         return bid
 
-    def remove_bin(self, bin_id):
-        self.bins.pop(bin_id, None)
-        for item in self.items.values():
-            if item.bin == bin_id:
-                item.bin = ""
+    def bin_parent(self, bin_id):
+        """Parent folder id, or "" for a top-level folder/root."""
+        parent = self.bin_parents.get(bin_id, "")
+        return parent if parent in self.bins and parent != bin_id else ""
+
+    def child_bins(self, parent=""):
+        """Folders directly inside `parent` ("" is the project root), in insertion order."""
+        parent = parent if parent in self.bins else ""
+        return [bid for bid in self.bins if self.bin_parent(bid) == parent]
+
+    def bin_chain(self, bin_id):
+        """Folder ids from the root to `bin_id`, for breadcrumbs and safe deletion."""
+        chain, seen = [], set()
+        while bin_id in self.bins and bin_id not in seen:
+            seen.add(bin_id)
+            chain.append(bin_id)
+            bin_id = self.bin_parent(bin_id)
+        return list(reversed(chain))
+
+    def bin_contains(self, ancestor, bin_id):
+        """True when `bin_id` is `ancestor` or one of its descendants."""
+        return ancestor in self.bin_chain(bin_id)
+
+    def _bin_subtree(self, bin_id):
+        found, pending = [], [bin_id]
+        while pending:
+            current = pending.pop(0)
+            if current not in self.bins or current in found:
+                continue
+            found.append(current)
+            pending.extend(self.child_bins(current))
+        return found
+
+    def remove_bin(self, bin_id, remove_items=False):
+        """Delete a folder and its descendants.
+
+        `remove_items=False` moves every contained media item to the deleted folder's parent
+        (the project root for a top-level folder); `remove_items=True` removes those media
+        references too. No file on disk is ever touched here. Returns the removed item ids.
+        """
+        if bin_id not in self.bins:
+            return []
+        subtree = set(self._bin_subtree(bin_id))
+        destination = self.bin_parent(bin_id)
+        removed = []
+        for item in list(self.items.values()):
+            if item.bin not in subtree:
+                continue
+            if remove_items:
+                self.remove(item.id)
+                removed.append(item.id)
+            else:
+                item.bin = destination
+        for bid in subtree:
+            self.bins.pop(bid, None)
+            self.bin_parents.pop(bid, None)
+        return removed
 
     def move_to_bin(self, item_ids, bin_id):
         bin_id = bin_id if bin_id in self.bins else ""
@@ -124,14 +178,31 @@ class MediaLibrary:
             d = item.to_dict()
             d["rel_path"] = (relative_to(item.path, project_dir) or "") if project_dir and item.path else ""
             items.append(d)
-        return {"items": items, "bins": [{"id": k, "name": v} for k, v in self.bins.items()]}
+        return {"items": items,
+                "bins": [{"id": k, "name": v, "parent": self.bin_parent(k)}
+                         for k, v in self.bins.items()]}
 
     @classmethod
     def from_dict(cls, data, project_dir=None):
         """Rebuild the library. The relative path wins when it exists, else the absolute fallback is kept."""
         lib = cls()
+        raw_parents = {}
         for b in data.get("bins", []):
-            lib.bins[str(b["id"])] = str(b.get("name", "Bin"))
+            bid = str(b["id"])
+            lib.bins[bid] = str(b.get("name", "Folder"))
+            raw_parents[bid] = str(b.get("parent", "") or "")
+        for bid, parent in raw_parents.items():
+            lib.bin_parents[bid] = parent if parent in lib.bins and parent != bid else ""
+        # Old projects and hand-edited files may contain a parent cycle. Break it rather
+        # than letting breadcrumbs and recursive deletion loop forever.
+        for bid in list(lib.bins):
+            seen, current = {bid}, lib.bin_parent(bid)
+            while current:
+                if current in seen:
+                    lib.bin_parents[bid] = ""
+                    break
+                seen.add(current)
+                current = lib.bin_parent(current)
         for d in data.get("items", []):
             item = MediaItem.from_dict(d)
             if project_dir and item.rel_path:

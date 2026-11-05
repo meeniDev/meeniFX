@@ -331,7 +331,7 @@ class AudioCapture(QObject):
         """Compatibility with the video captures (0..1 volume)."""
         self.set_gain(volume)
 
-    def configure(self, bitrate_mbps=0):
+    def configure(self, bitrate_mbps=0, quality="balanced"):
         """Audio has no bitrate setting here; the recorder calls this on every capture."""
 
     # ------------------------------------------------------------------ levels

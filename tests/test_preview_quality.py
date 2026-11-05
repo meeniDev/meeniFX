@@ -81,6 +81,28 @@ def test_panning_stays_in_logical_coordinates(view):
         assert view.frame_rect() == rect_before
 
 
+def test_auto_quality_recovers_after_fast_frames():
+    """Auto used to degrade forever: its climb-back branch compared against 1.0."""
+    from types import SimpleNamespace
+
+    from meenifx.model.values import Value
+    from meenifx.ui.main_window import MainWindow
+
+    window = SimpleNamespace(
+        _quality_label="Auto", _auto_scale=0.125, _interacting=lambda: False,
+        engine=SimpleNamespace(playback_fps=Value(30)),
+        _show_quality_hint=lambda message: None,
+    )
+    window.preview_scale = lambda: window._auto_scale
+    adapt = MainWindow._adapt_preview_quality
+    adapt(window, 1.0)
+    assert window._auto_scale == 0.25
+    adapt(window, 1.0)
+    assert window._auto_scale == 0.5
+    adapt(window, 1000.0)
+    assert window._auto_scale == 0.25
+
+
 def test_engine_render_size_follows_quality():
     from conftest import build_engine
     engine, _clip = build_engine(frame=synthetic_frame())

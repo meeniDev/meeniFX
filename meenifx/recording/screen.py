@@ -21,8 +21,10 @@ import time
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
 from ..audio.export_mix import ffmpeg_exe
+from ..media import hardware
 from .capture import SourceCapture
 from .disk import friendly_error
+from .settings import QUALITY_PRESETS
 
 FPS = 30
 # How long ffmpeg gets to close the file after being asked to quit before it is killed.
@@ -49,10 +51,13 @@ class ScreenRecorder(QObject):
         self.size = (0, 0)                 # physical pixels, screen mode
         self.origin = (0, 0)               # physical top-left of that screen
         self.bitrate_mbps = 0
+        self.quality_preset = "balanced"
+        self.encoder = ""
         self._process = None
         self._path = ""
         self._stopping = False
         self._deadline = 0.0
+        self._started_at = 0.0
         self._poll = QTimer(self)
         self._poll.setInterval(100)
         self._poll.timeout.connect(self._check)
@@ -104,13 +109,28 @@ class ScreenRecorder(QObject):
         self.target = None
 
     # ------------------------------------------------------------- recording
-    def configure(self, bitrate_mbps=0):
+    def configure(self, bitrate_mbps=0, quality="balanced"):
         self.bitrate_mbps = max(0, int(bitrate_mbps or 0))
+        self.quality_preset = (quality if quality in QUALITY_PRESETS else "balanced")
+
+    def diagnostics(self):
+        """What the next segment will run: honest encoder/quality/bitrate information."""
+        preset = QUALITY_PRESETS[self.quality_preset]
+        width, height = self.size
+        bits = (self.bitrate_mbps * 1_000_000 if self.bitrate_mbps
+                else int((width or 1920) * (height or 1080) * FPS * preset["screen"]))
+        return {"quality": preset["label"], "encoder": self.encoder or "software (libx264)",
+                "fps": FPS, "bitrate_mbps": round(bits / 1_000_000, 2)}
 
     def begin(self, path):
         self._path = path
         self._stopping = False
-        command = self.command(path)
+        self._started_at = time.monotonic()
+        self._fallback_attempted = False
+        self._start_process(path)
+
+    def _start_process(self, path, force_software=False):
+        command = self.command(path, force_software=force_software)
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
             self._process = subprocess.Popen(command, stdin=subprocess.PIPE,
@@ -119,8 +139,9 @@ class ScreenRecorder(QObject):
         except OSError as exc:
             self._process = None
             self.failed.emit(self.kind, f"The screen recorder could not start: {exc}")
-            return
+            return False
         self._poll.start()
+        return True
 
     def end(self):
         """Ask ffmpeg to quit: it closes the file itself, which is what makes it playable."""
@@ -142,7 +163,7 @@ class ScreenRecorder(QObject):
         return self._process is not None and self._process.poll() is None
 
     # ---------------------------------------------------------------- ffmpeg
-    def command(self, path):
+    def command(self, path, force_software=False):
         width, height = self.size
         command = [ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-y"]
         if self.mode == "window" and self.target is not None:
@@ -156,14 +177,23 @@ class ScreenRecorder(QObject):
                         "-framerate", str(FPS), "-offset_x", str(x), "-offset_y", str(y),
                         "-video_size", size, "-i", "desktop"]
         # A screen needs more bits than a camera for the same area: text and UI edges.
+        preset = QUALITY_PRESETS[self.quality_preset]
         bits = (self.bitrate_mbps * 1_000_000 if self.bitrate_mbps
-                else int((width or 1920) * (height or 1080) * FPS * 0.20))
-        # Packets are flushed and the encoder does not look ahead, so a crash leaves a
-        # playable segment behind instead of an empty file - the same promise the Qt
-        # path made by using Matroska.
-        command += ["-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
-                    "-flush_packets", "1", "-pix_fmt", "yuv420p",
-                    "-g", str(FPS * 2), "-b:v", str(bits), path]
+                else int((width or 1920) * (height or 1080) * FPS * preset["screen"]))
+        # Use verified hardware H.264 when the machine really supports it; otherwise the
+        # software path is the same. Timestamps still come from gdigrab's wall clock, and
+        # packets are flushed so a crash leaves a playable segment behind.
+        use_nvenc = (not force_software) and hardware.nvenc_available()
+        self.encoder = "NVIDIA NVENC" if use_nvenc else "software (libx264)"
+        if use_nvenc:
+            command += ["-c:v", "h264_nvenc", "-preset", preset["nvenc"],
+                        "-rc", "vbr", "-b:v", str(bits), "-maxrate", str(int(bits * 1.5)),
+                        "-bufsize", str(int(bits * 2)), "-pix_fmt", "yuv420p",
+                        "-g", str(FPS * 2), path]
+        else:
+            command += ["-c:v", "libx264", "-preset", preset["x264"], "-tune", "zerolatency",
+                        "-flush_packets", "1", "-pix_fmt", "yuv420p",
+                        "-g", str(FPS * 2), "-b:v", str(bits), path]
         return command
 
     # ------------------------------------------------------------------ state
@@ -192,6 +222,22 @@ class ScreenRecorder(QObject):
         if process.poll() is None:
             if self._stopping and time.monotonic() > self._deadline:
                 process.kill()
+            # A hardware encoder can start without ever producing a packet (driver
+            # refusal for this capture size is only reported on exit). Do not let the
+            # whole take sit there empty: switch to software while it is still early.
+            if (self.encoder == "NVIDIA NVENC" and not self._fallback_attempted
+                    and not self._stopping
+                    and time.monotonic() - self._started_at > 1.5
+                    and not (os.path.isfile(self._path) and os.path.getsize(self._path) > 0)):
+                self._fallback_attempted = True
+                self._poll.stop()
+                self._process = None
+                try:
+                    process.kill()
+                    process.wait(timeout=1.0)
+                except (OSError, subprocess.SubprocessError):
+                    pass
+                self._start_process(self._path, force_software=True)
             return
         self._poll.stop()
         self._process = None
@@ -209,6 +255,14 @@ class ScreenRecorder(QObject):
             self._stopping = False
             self.stopped.emit(self.kind)
             return
+        if (self.encoder == "NVIDIA NVENC" and not self._fallback_attempted
+                and not self._stopping):
+            # A verified probe can still fail under driver load or an unsupported capture
+            # size. Retry the same segment with software once instead of losing the take.
+            self._fallback_attempted = True
+            self._stopping = False
+            if self._start_process(self._path, force_software=True):
+                return
         self._stopping = False
         message = friendly_error(self.kind, error) if error else ""
         self.failed.emit(self.kind, message or "The screen recording could not be written.")

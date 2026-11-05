@@ -103,13 +103,20 @@ class TimelineSession:
     # ---------------------------------------------------------------- selection
     def set_selection(self, ids, expand=True):
         """Select clips; with Linked Selection on, a linked partner joins automatically."""
-        ids = set(ids)
+        requested = {int(i) for i in ids}
+        ids = set(requested)
         if expand:
             ids = self.with_links(ids)
+        added = ids - self.selected
+        # A click that expands to its linked partner adds two ids, so "exactly one new
+        # id" alone cannot identify what the user clicked. A single requested clip is
+        # always the primary one (even when it was already selected); otherwise the
+        # newest addition wins.
+        if len(requested) == 1 and next(iter(requested)) in ids:
+            self._primary = next(iter(requested))
+        elif len(added) == 1:
+            self._primary = next(iter(added))
         if ids != self.selected:
-            added = ids - self.selected
-            if len(added) == 1:
-                self._primary = next(iter(added))
             self.selected = ids
             self.clip_selected.emit(sorted(ids))
         self.request_redraw()
@@ -2150,7 +2157,19 @@ class TimelineSession:
         if source == "clip":
             if primary is None:
                 return None
-            return primary.timeline_start, primary.end, [primary.id]
+            # A linked picture and sound are one editable subject. Analyse the audible
+            # members of the clicked clip's group, not the picture: a video member is
+            # silent (its linked audio carries the sound), and with Linked Selection on
+            # the video often joins the selection first. Embedded-audio videos stay in
+            # because carries_audio is true for them.
+            group = (timeline.link_group(primary.link_id)
+                     if primary.link_id else [primary])
+            audible = [clip for clip in group
+                       if clip.carries_audio and clip.source_path]
+            members = audible or [primary]
+            return (min(clip.timeline_start for clip in members),
+                    max(clip.end for clip in members),
+                    [clip.id for clip in members])
         if source == "track":
             track = primary.track if primary is not None else None
             if track is None or not track.clips:

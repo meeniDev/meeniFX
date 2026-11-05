@@ -62,6 +62,13 @@ def test_looks_are_styles_and_no_longer_a_category(panel_and_clip):
     assert not any(card.item["id"] == "look" for card in browser._cards)
 
 
+def test_tracker_cards_are_labelled_instead_of_blank(panel_and_clip):
+    panel, _engine, _clip = panel_and_clip
+    card = cards(panel)["face_tracker"]
+    assert card.thumb.text().replace("\n", " ") == "FACE TRACKER"
+    assert "no face or hand" in card.toolTip()
+
+
 def test_animation_cards_carry_a_real_preview(panel_and_clip):
     panel, engine, _clip = panel_and_clip
     browser = panel.browser

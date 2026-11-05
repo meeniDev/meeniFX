@@ -16,7 +16,7 @@ from ..recording.capture import SourceCapture
 from ..recording.disk import CAMERA_BLOCKED, MIC_BLOCKED
 from ..recording.hotkey import parse_hotkey
 from ..recording.screen import ScreenRecorder
-from ..recording.settings import RecorderSettings
+from ..recording.settings import QUALITY_KEYS, QUALITY_PRESETS, RecorderSettings
 from .filedialogs import choose_folder
 
 C = tokens.COLORS
@@ -156,6 +156,15 @@ class RecorderSettingsDialog(QDialog):
         self.bitrate.setValue(settings.video_bitrate_mbps)
         self.bitrate.setToolTip("Video bitrate (0 = automatic)")
         form.addRow("Bitrate", self.bitrate)
+        self.quality = QComboBox()
+        for key in QUALITY_KEYS:
+            self.quality.addItem(QUALITY_PRESETS[key]["label"], key)
+        self.quality.setCurrentIndex(max(0, self.quality.findData(settings.quality_preset)))
+        self.quality.setToolTip(
+            "Performance lowers encoder load (smaller files, more headroom for playback);\n"
+            "High Quality spends more bits and CPU. Capture timing and audio sync are the\n"
+            "same in every preset.")
+        form.addRow("Quality preset", self.quality)
         self.rate = QComboBox()
         for value in audiocap.RATES:
             self.rate.addItem(f"{value} Hz", value)
@@ -181,9 +190,12 @@ class RecorderSettingsDialog(QDialog):
         self.minimize = QCheckBox("Minimize editor while recording")
         self.minimize.setChecked(settings.minimize_while_recording)
         form.addRow(self.minimize)
-        self.encoder = QLabel("Automatic (hardware when available)")
-        self.encoder.setToolTip("Chosen by the system's Media Foundation H.264 encoder")
+        self.encoder = QLabel("Checking encoder…")
+        self.encoder.setToolTip("A verified NVENC encode is used when available; otherwise "
+                                "the recording uses software libx264")
         form.addRow("Encoder", self.encoder)
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(0, self._refresh_encoder)
         self.error = QLabel()
         self.error.setStyleSheet(f"color:{C['warning']};")
         form.addRow(self.error)
@@ -196,6 +208,15 @@ class RecorderSettingsDialog(QDialog):
         buttons.addWidget(cancel)
         buttons.addWidget(ok)
         form.addRow(buttons)
+
+    def _refresh_encoder(self):
+        try:
+            from ..media import hardware
+            available = hardware.nvenc_available()
+        except Exception:
+            available = False
+        self.encoder.setText("NVIDIA NVENC (hardware)" if available
+                             else "Software (libx264)")
 
     def _browse(self):
         folder = choose_folder(self, "Recordings folder", self.folder.text() or "")
@@ -213,6 +234,7 @@ class RecorderSettingsDialog(QDialog):
         s = self.settings
         s.folder = self.folder.text().strip()
         s.video_bitrate_mbps = self.bitrate.value()
+        s.quality_preset = str(self.quality.currentData() or "balanced")
         s.hotkey_stop = self.stop_key.text().strip()
         s.hotkey_pause = self.pause_key.text().strip()
         s.minimize_while_recording = self.minimize.isChecked()

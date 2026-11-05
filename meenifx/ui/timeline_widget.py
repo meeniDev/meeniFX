@@ -3873,15 +3873,8 @@ class TimelinePanel(QWidget):
         self.loop = self._tool_button("Loop", "Loop playback over the loop region", checkable=True,
                                       shortcut="Q", icon_name="loop")
         self.loop.toggled.connect(self._set_loop)
-        # Selecting a video clip also selects its linked audio (and the other way round).
-        # Turning this off never removes a link; it only stops the selection from following it.
-        self.linked = self._tool_button("Linked Selection",
-                                        "Select, move, trim and split already-linked clips together "
-                                        "(selection only; use Link Selected Clips, Ctrl+L, to link)",
-                                        checkable=True, icon_name="link")
-        self.linked.setChecked(self.canvas.session.linked_selection_enabled)
-        self.linked.toggled.connect(self._set_linked_selection)
-        self.canvas.session.linked_selection_changed.connect(self._sync_linked_button)
+        # Linked Selection lives in Edit as a checkable command now; the timeline no longer
+        # carries a second chain button next to the explicit Link/Unlink commands.
         # Simple keyframe workflow: one toggle for the diamonds, one button that keys the
         # animated properties at the playhead. Nothing here is a second animation model.
         self.keyframes = self._tool_button("Keyframes", "Show or hide keyframes on clips",
@@ -3961,13 +3954,12 @@ class TimelinePanel(QWidget):
         self._sync_tool_buttons(self.canvas.tool)
         self._sync_snap_button(self.canvas.snap_enabled)
         self._sync_loop_button()
-        self._sync_linked_button(self.canvas.session.linked_selection_enabled)
         self.canvas.session.changed.connect(self._maybe_autofit)
         row = QHBoxLayout()
         row.setContentsMargins(tokens.SP2, tokens.SP1, tokens.SP2, tokens.SP1)
         row.setSpacing(tokens.SP1)
         for cluster in ((self.select, self.razor), (self.split,), (self.keyframes, self.add_key),
-                        (self.snap, self.loop, self.linked), (self.add_track,)):
+                        (self.snap, self.loop), (self.add_track,)):
             for widget in cluster:
                 row.addWidget(widget)
             row.addSpacing(tokens.SP1)
@@ -4056,18 +4048,6 @@ class TimelinePanel(QWidget):
         self.snap.setChecked(bool(on))
         self._restyle(self.snap)
         self._tip(self.snap, f"Snap: {'on' if on else 'off'}")
-
-    def _set_linked_selection(self, on):
-        """Toolbar toggle: follows the model, which also drives menu checkmarks."""
-        self.canvas.session.set_linked_selection(on)
-
-    def _sync_linked_button(self, on=None):
-        on = self.canvas.session.linked_selection_enabled if on is None else bool(on)
-        if self.linked.isChecked() != on:
-            self.linked.setChecked(on)
-        self._restyle(self.linked)
-        self._tip(self.linked, f"Linked Selection: {'on' if on else 'off'} — selection behaviour only; "
-                               "use Link Selected Clips (Ctrl+L) to create links")
 
     def _sync_loop_button(self):
         on = bool(self.canvas.timeline.loop_enabled)

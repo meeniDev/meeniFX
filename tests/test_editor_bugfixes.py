@@ -82,6 +82,10 @@ def editor(qapp, tmp_path, monkeypatch):
                               stream="audio")
     timeline.assign_link([video.id, audio.id])
     window.engine.session.set_selection({video.id})
+    # The saved dock layout may be shorter than four tracks; make the test independent of
+    # whatever window state a previous run left behind before aiming at a lower lane.
+    from PyQt6.QtCore import Qt
+    window.resizeDocks([window.docks["timeline"]], [520], Qt.Orientation.Vertical)
     window.timeline_panel.canvas.update()
     pump(qapp, 0.15)
     window._test = {"video": video.id, "audio": audio.id, "lane": video_lane.id,
@@ -111,7 +115,9 @@ def inside(clip, canvas, edge=None):
         x = rect.left() + 3
     else:
         x = rect.center().x()
-    y = min(rect.top() + 20.0, max(rect.top() + 6.0, rect.center().y()))
+    # Stay clear of the horizontal gain/opacity envelope near the middle as well as the
+    # fade grips at the edges; either would start a different drag gesture.
+    y = rect.top() + 30.0
     return (float(x), float(y))
 
 

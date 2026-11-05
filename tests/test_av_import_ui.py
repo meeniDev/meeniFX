@@ -377,9 +377,9 @@ def test_linked_selection_toggle_switches_group_selection(editor, av_file):
 
     session.set_selection({video.id})
     assert session.selected == {video.id, audio.id}
-    assert window.timeline_panel.linked.isChecked()
+    assert window.linked_selection_action.isChecked()
 
-    window.timeline_panel.linked.setChecked(False)
+    window.linked_selection_action.setChecked(False)
     assert session.linked_selection_enabled is False
     session.set_selection({video.id})
     assert session.selected == {video.id}

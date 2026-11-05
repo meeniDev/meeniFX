@@ -161,14 +161,18 @@ def test_ctrl_l_and_ctrl_shift_l_are_wired_to_link_and_unlink(editor):
     assert video.link_id == audio.link_id == 0
 
 
-def test_the_linked_selection_toolbar_tooltip_separates_the_two_concepts(editor):
+def test_the_linked_selection_menu_option_separates_the_two_concepts(editor):
     window = editor
     make_pair(window)
-    window.timeline_panel._sync_linked_button(True)
-    tooltip = window.timeline_panel.linked.toolTip()
-    assert "selection behaviour only" in tooltip
-    assert "Ctrl+L" in tooltip
-    assert "already-linked" in tooltip
+    window._sync_linked_selection_action(True)
+    action = window.linked_selection_action
+    assert action.isChecked()
+    assert action.shortcut().toString() == "Ctrl+Shift+K"
+    assert "selection behaviour only" in action.toolTip()
+    assert "Ctrl+L" in action.toolTip()
+    assert "already-linked" in action.toolTip()
+    # The old toolbar chain button is gone, but the behaviour is still reachable.
+    assert not hasattr(window.timeline_panel, "linked")
 
 
 def test_silence_dialog_scope_includes_linked_or_matching_clips(editor):

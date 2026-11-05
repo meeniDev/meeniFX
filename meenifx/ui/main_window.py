@@ -336,6 +336,16 @@ class MainWindow(QMainWindow):
                                            lambda:self.engine.session.link_selected())
         self.unlink_action = self._add_action(edit,"Unlink Selected Clips","Ctrl+Shift+L",
                                              lambda:self.engine.session.unlink_selected())
+        # The timeline toolbar no longer carries a chain button: linking is the explicit
+        # command above, while this checkable option (and its shortcut) preserves the
+        # separate "follow linked partners when selecting" behaviour.
+        self.linked_selection_action = self._add_check_action(
+            edit, "Linked Selection", "Ctrl+Shift+K",
+            self.engine.session.linked_selection_enabled, self._set_linked_selection)
+        self.linked_selection_action.setToolTip(
+            "Select, move, trim and split already-linked clips together "
+            "(selection behaviour only; use Link Selected Clips, Ctrl+L, to create links)")
+        self.engine.session.linked_selection_changed.connect(self._sync_linked_selection_action)
         self.engine.session.clip_selected.connect(lambda _ids:self._refresh_link_actions())
         self.engine.session.changed.connect(self._refresh_link_actions)
         self._refresh_link_actions()
@@ -1179,9 +1189,13 @@ class MainWindow(QMainWindow):
             nxt=max(step for step in limits if step<current-1e-6)
             self._auto_scale=nxt
             self._show_quality_hint(f"Preview quality reduced to {int(nxt*100)}% (auto)")
-        elif elapsed_ms<target_ms*0.55 and current<limits[0]:
-            nxt=min(step for step in limits if step>current+1e-6)
-            self._auto_scale=nxt
+        elif elapsed_ms<target_ms*0.55:
+            # Climb back towards full quality. This used to test current<limits[0],
+            # which is never true (limits[0] is 1.0), so Auto could only degrade and
+            # stayed blurry for the rest of the session.
+            larger=[step for step in limits if step>current+1e-6]
+            if larger:
+                self._auto_scale=min(larger)
 
     def _show_quality_hint(self, message):
         now=time.monotonic()
@@ -1965,6 +1979,21 @@ class MainWindow(QMainWindow):
         """Open Remove Dead Silence for the selection, or for a clip a menu pointed at."""
         from .audio_tools import SilenceDialog
         SilenceDialog(self, clip_id=clip_id).exec()
+
+    def _set_linked_selection(self, on):
+        """Edit > Linked Selection: follows links; it never creates or removes one."""
+        self.engine.session.set_linked_selection(bool(on))
+
+    def _sync_linked_selection_action(self, on=None):
+        """Keep the menu checkmark in step with shortcuts and any other caller."""
+        action = getattr(self, "linked_selection_action", None)
+        if action is None:
+            return
+        on = self.engine.session.linked_selection_enabled if on is None else bool(on)
+        if action.isChecked() != on:
+            action.blockSignals(True)
+            action.setChecked(on)
+            action.blockSignals(False)
 
     def _refresh_link_actions(self, *_args):
         """Enable the Edit > Link/Unlink commands only when they can do something."""

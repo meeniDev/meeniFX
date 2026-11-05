@@ -146,6 +146,19 @@ class BrowserCard(QFrame):
         else:
             self.thumb.setFixedSize(*LIST_THUMB)
         self._placeholder()
+        if item.get("kind") == "effect" and item["id"] in THUMBS.ICON_ONLY:
+            # Some effects have no meaningful still preview (audio, time effects, and
+            # trackers whose subject is not in the reference picture). The card used to
+            # leave an empty tile; a readable, effect-specific label is the fallback the
+            # browser promises. It never pretends a detection happened.
+            words = str(item.get("name") or item["id"]).split()
+            self.thumb.setText("\n".join(words[:2]).upper())
+            self.thumb.setWordWrap(True)
+            self.thumb.setStyleSheet(
+                f"color:{tokens.COLORS['muted']};font-size:10px;font-weight:600;")
+            if item["id"] in ("face_tracker", "hand_tracker"):
+                self.setToolTip(item["name"] + " (live tracking; the reference still has "
+                                "no face or hand to detect)")
 
         self.name = QLabel(item["name"], self)
         self.name.setStyleSheet("font-weight: 600;")

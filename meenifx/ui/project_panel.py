@@ -265,8 +265,8 @@ class ProjectPanel(QWidget):
         self.import_button = QPushButton("Import")
         self.import_button.setToolTip("Add files to the project (Ctrl+click a file in the list to insert it)")
         self.bin_button = QToolButton()
-        self.bin_button.setText("New Bin")
-        self.bin_button.setToolTip("Create a folder to organise media")
+        self.bin_button.setText("New Folder")
+        self.bin_button.setToolTip("Create a folder inside the current project folder")
         self.view_button = QToolButton()
         self.view_button.setText("List")
         self.view_button.setToolTip("Switch between grid and list view")
@@ -275,6 +275,10 @@ class ProjectPanel(QWidget):
         bar.addStretch(1)
         bar.addWidget(self.view_button)
         layout.addLayout(bar)
+        self.crumb = QLabel("Project")
+        self.crumb.setStyleSheet("color: #8a8f9a;")
+        self.crumb.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        layout.addWidget(self.crumb)
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search media")
         self.search.setClearButtonEnabled(True)
@@ -303,7 +307,7 @@ class ProjectPanel(QWidget):
         self._apply_view_mode()
 
         self.import_button.clicked.connect(self.import_dialog)
-        self.bin_button.clicked.connect(self.new_bin)
+        self.bin_button.clicked.connect(self.new_folder)
         self.view_button.clicked.connect(self.toggle_view)
         self.search.textChanged.connect(lambda _t: self.rebuild(force=True))
         self.kind_filter.currentIndexChanged.connect(lambda _i: self.rebuild(force=True))
@@ -368,21 +372,32 @@ class ProjectPanel(QWidget):
         needle = self.search.text().strip().lower()
         signature = (self._current_bin, needle, self._grid, tuple(sorted(used)), len(self._thumbs),
                      tuple((i.id, i.name, i.bin, i.duration, i.width, i.path) for i in library.items.values()),
-                     tuple(library.bins.items()), len(self.engine.missing_paths))
+                     tuple((k, v, library.bin_parent(k)) for k, v in library.bins.items()),
+                     len(self.engine.missing_paths))
         if signature == self._signature and not force:
             return
         self._signature = signature
         selected = {self._key(i) for i in self.list.selectedItems()}
         self.list.setUpdatesEnabled(False)
         self.list.clear()
+        chain = library.bin_chain(self._current_bin) if self._current_bin else []
+        if self._current_bin and self._current_bin not in library.bins:
+            # The current folder was deleted elsewhere; never leave the panel stranded.
+            self._current_bin = ""
+            chain = []
+        self.crumb.setText("Project" + "".join(
+            f"  /  {library.bins.get(bid, 'Folder')}" for bid in chain))
+        self.crumb.setToolTip(self.crumb.text())
         if self._current_bin and not needle:
             up = QListWidgetItem("Back")
             up.setData(Qt.ItemDataRole.UserRole, ("up", "", ""))
             up.setIcon(self._glyph_icon("<"))
-            up.setToolTip("Back to the project root (drop items here to move them out of this bin)")
+            parent = library.bin_parent(self._current_bin)
+            up.setToolTip("Back to " + (library.bins.get(parent, "the project root")))
             self.list.addItem(up)
-        if not self._current_bin and not needle:
-            for bin_id, name in library.bins.items():
+        if not needle:
+            for bin_id in library.child_bins(self._current_bin):
+                name = library.bins.get(bin_id, "Folder")
                 count = sum(1 for i in library.items.values() if i.bin == bin_id)
                 entry = QListWidgetItem(f"{name}\n{count} item{'s' if count != 1 else ''}" if self._grid
                                         else f"{name}   ({count})")
@@ -594,14 +609,19 @@ class ProjectPanel(QWidget):
         self.rebuild(force=True)
 
     # ---- actions ---------------------------------------------------------------
-    def new_bin(self):
+    def new_folder(self):
+        """Create a virtual project folder inside the folder currently open."""
         if self.project is None:
             return
-        name, ok = QInputDialog.getText(self, "New Bin", "Name:", text="Bin")
+        parent = self._current_bin if self._current_bin in self.project.library.bins else ""
+        name, ok = QInputDialog.getText(self, "New Folder", "Name:", text="New Folder")
         if ok and name.strip():
-            self.project.library.add_bin(name.strip())
+            self.project.library.add_bin(name.strip(), parent)
             self.w.projects.mark_dirty()
             self.rebuild(force=True)
+
+    # Kept as an alias for callers/tests written before the bin terminology change.
+    new_bin = new_folder
 
     def _selected_media(self):
         out = []
@@ -629,7 +649,8 @@ class ProjectPanel(QWidget):
             self._current_bin = key
             self.rebuild(force=True)
         elif kind == "up":
-            self._current_bin = ""
+            library = self.project.library
+            self._current_bin = library.bin_parent(self._current_bin)
             self.rebuild(force=True)
         elif key in self.project.library.items:
             self.insert_at_playhead([self.project.library.items[key]])
@@ -641,14 +662,14 @@ class ProjectPanel(QWidget):
         menu = QMenu(self)
         if item is None:
             menu.addAction("Import...", self.import_dialog)
-            menu.addAction("New Bin", self.new_bin)
+            menu.addAction("New Folder", self.new_folder)
             menu.exec(self.list.viewport().mapToGlobal(pos))
             return
         kind, key, _path = item.data(Qt.ItemDataRole.UserRole)
         if kind == "bin":
             menu.addAction("Open", lambda: self._double_clicked(item))
             menu.addAction("Rename...", lambda: self._rename_bin(key))
-            menu.addAction("Delete bin", lambda: self._delete_bin(key))
+            menu.addAction("Delete Folder...", lambda: self._delete_bin(key))
         elif kind == "item":
             if not item.isSelected():
                 self.list.clearSelection()
@@ -662,13 +683,18 @@ class ProjectPanel(QWidget):
             menu.addAction("Rename...", lambda: self._rename(first)).setEnabled(len(media) == 1)
             if any(self._is_missing(m) for m in media):
                 menu.addAction("Relink...", lambda: self._relink(next(m for m in media if self._is_missing(m))))
-            if self.project.library.bins:
-                move = menu.addMenu("Move to bin")
-                move.addAction("Project root", lambda: self._move([m.id for m in media], ""))
-                for bin_id, name in self.project.library.bins.items():
-                    move.addAction(name, lambda _c=False, b=bin_id: self._move([m.id for m in media], b))
+            library = self.project.library
+            if library.bins:
+                move = menu.addMenu("Move to Folder")
+                move.addAction("Project Root", lambda: self._move([m.id for m in media], ""))
+                for bin_id, _name in library.bins.items():
+                    chain = library.bin_chain(bin_id)
+                    label = "    " * (len(chain) - 1) + library.bins.get(bin_id, "Folder")
+                    move.addAction(label, lambda _c=False, b=bin_id:
+                                   self._move([m.id for m in media], b))
             menu.addSeparator()
-            menu.addAction("Remove", lambda: self.remove(media))
+            menu.addAction("Remove from Project", lambda: self.remove(media))
+            menu.addAction("Delete File from Computer...", lambda: self.delete_files(media))
         else:
             return
         menu.exec(self.list.viewport().mapToGlobal(pos))
@@ -699,16 +725,98 @@ class ProjectPanel(QWidget):
 
     def _rename_bin(self, bin_id):
         library = self.project.library
-        name, ok = QInputDialog.getText(self, "Rename bin", "Name:", text=library.bins.get(bin_id, ""))
+        name, ok = QInputDialog.getText(self, "Rename Folder", "Name:", text=library.bins.get(bin_id, ""))
         if ok and name.strip():
             library.bins[bin_id] = name.strip()
             self.w.projects.mark_dirty()
             self.rebuild(force=True)
 
     def _delete_bin(self, bin_id):
-        self.project.library.remove_bin(bin_id)
+        """Delete a folder without ever deleting a file from disk.
+
+        Empty folders disappear immediately. A non-empty folder asks whether its contents
+        move to the parent folder or leave the project with it; Cancel keeps everything.
+        """
+        library = self.project.library
+        if bin_id not in library.bins:
+            return
+        subtree = set(library._bin_subtree(bin_id))
+        media = [item for item in library.items.values() if item.bin in subtree]
+        if media or any(bid != bin_id for bid in subtree):
+            box = QMessageBox(self)
+            box.setWindowTitle("Delete Folder")
+            box.setIcon(QMessageBox.Icon.Question)
+            box.setText(f"Delete “{library.bins.get(bin_id, 'Folder')}” and "
+                        f"{len(library._bin_subtree(bin_id)) - 1} subfolder(s)?")
+            box.setInformativeText(
+                f"It contains {len(media)} media item(s). Source files on disk are never "
+                "deleted by this action.")
+            keep = box.addButton("Move Contents to Parent",
+                                 QMessageBox.ButtonRole.AcceptRole)
+            discard = box.addButton("Remove Folder and Media from Project",
+                                    QMessageBox.ButtonRole.DestructiveRole)
+            box.addButton(QMessageBox.StandardButton.Cancel)
+            box.exec()
+            if box.clickedButton() is keep:
+                library.remove_bin(bin_id, remove_items=False)
+            elif box.clickedButton() is discard:
+                used = self._used_paths()
+                used_media = [item for item in media if norm_path(item.path) in used]
+                if used_media:
+                    answer = QMessageBox.question(
+                        self, "Media Used on Timeline",
+                        f"{len(used_media)} of these items are used by clips on the timeline.\n"
+                        "Those clips will be removed too (undoable). Continue?")
+                    if answer != QMessageBox.StandardButton.Yes:
+                        return
+                if media:
+                    self.remove(media)
+                library.remove_bin(bin_id, remove_items=True)
+            else:
+                return
+        else:
+            library.remove_bin(bin_id)
+        if self._current_bin and self._current_bin not in library.bins:
+            self._current_bin = ""
         self.w.projects.mark_dirty()
         self.rebuild(force=True)
+
+    def delete_files(self, media_items):
+        """Move selected source files to the OS Recycle Bin after explicit confirmation."""
+        from ..project.storage import trash_path
+        items = [item for item in media_items or () if item.path and os.path.isfile(item.path)]
+        if not items:
+            self.w.toast_message("Those items have no file on disk to delete", kind="error")
+            return False
+        used = self._used_paths()
+        used_count = sum(1 for item in items if norm_path(item.path) in used)
+        paths = "\n".join(item.path for item in items[:8])
+        if len(items) > 8:
+            paths += f"\n… and {len(items) - 8} more"
+        warning = (f"\n\nWarning: {used_count} item(s) are used by timeline clips." if used_count else "")
+        answer = QMessageBox.warning(
+            self, "Delete File from Computer?",
+            "This moves the actual source file(s) to the Recycle Bin, not the editor's "
+            "Undo history:\n\n" + paths + warning +
+            "\n\nContinue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel)
+        if answer != QMessageBox.StandardButton.Yes:
+            return False
+        deleted, failed = [], []
+        for item in items:
+            ok, message = trash_path(item.path)
+            if ok:
+                deleted.append(item)
+            else:
+                failed.append(f"{item.name}: {message}")
+        if failed:
+            QMessageBox.warning(self, "Some Files Were Not Deleted", "\n".join(failed[:6]))
+        if deleted:
+            # Only remove references for files that actually moved to the Bin.
+            self.remove(deleted)
+            self.w.toast_message(f"Moved {len(deleted)} file(s) to the Recycle Bin")
+        return bool(deleted)
 
     def _relink(self, media):
         path = open_file(self, f"Locate {media.name}", os.path.dirname(media.path), "All files (*)")

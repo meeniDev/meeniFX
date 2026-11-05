@@ -142,7 +142,7 @@ class SourceCapture(QObject):
         self.active = False
 
     # ---------------------------------------------------------- recording
-    def configure(self, bitrate_mbps=0):
+    def configure(self, bitrate_mbps=0, quality="balanced"):
         fmt = QMediaFormat()
         # Qt's FFmpeg backend cannot mux H.264 into Matroska, and an interrupted mp4 is unreadable
         # (tested), so Matroska + MPEG-4 part 2 is used: crash-safe, but needs a higher bitrate.
@@ -155,10 +155,12 @@ class SourceCapture(QObject):
         w, h = self.size
         if w and h:
             self.recorder.setVideoResolution(w, h)
+        from .settings import QUALITY_PRESETS
+        preset = QUALITY_PRESETS.get(quality, QUALITY_PRESETS["balanced"])
         if bitrate_mbps > 0:
             bits = bitrate_mbps * 1_000_000
         else:
-            per_pixel = 0.20 if self.kind == "screen" else 0.12   # screen text needs more bits
+            per_pixel = preset["screen"] if self.kind == "screen" else preset["camera"]
             bits = int((w or 1920) * (h or 1080) * fps * per_pixel)
         self.recorder.setVideoBitRate(bits)
         self.recorder.setQuality(QMediaRecorder.Quality.HighQuality)
@@ -244,10 +246,10 @@ class RecordingSession(QObject):
             return self._recorded_before + (time.monotonic() - self._segment_started)
         return self._recorded_before
 
-    def start(self, bitrate_mbps=0):
+    def start(self, bitrate_mbps=0, quality="balanced"):
         os.makedirs(self.folder, exist_ok=True)
         for cap in self.captures.values():
-            cap.configure(bitrate_mbps)
+            cap.configure(bitrate_mbps, quality)
         self._begin_segment()
         self._timer.start()
         self._set_state("recording")

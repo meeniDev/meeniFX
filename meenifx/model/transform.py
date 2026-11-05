@@ -181,9 +181,11 @@ def position_at(clip, frame):
     x_value = transform.get("position_x")
     y_value = transform.get("position_y")
     if not isinstance(x_value, AnimatedValue) or not x_value.keyframes:
-        x = _number(x_value, 0.0)
-        y = _number(y_value, 0.0)
-        return x, y
+        # One axis can be animated while the other stays static (a vertical bounce, for
+        # example, keys position_y only). Reading the animated axis with _number()
+        # returned 0 and silently flattened baked vertical motion; both axes must go
+        # through _axis_at so a static X never hides an animated Y.
+        return _axis_at(x_value, frame), _axis_at(y_value, frame)
     x_keys = x_value.keyframes
     frame = float(frame)
     if frame <= x_keys[0].time or frame >= x_keys[-1].time:

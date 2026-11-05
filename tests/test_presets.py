@@ -159,6 +159,30 @@ def test_bake_writes_keyframes_and_removes_the_instance():
         assert abs(float(x) - before[frame][0]) < 0.01, f"baked frame {frame} must match"
 
 
+def test_baking_bounce_keeps_the_vertical_motion():
+    """Regression: Bounce bakes position_y even though position_x stays static.
+
+    position_at() used to read a static X and then return a raw Y, so the freshly baked
+    Y curve evaluated as 0 and the subject stayed vertically centred after Bake.
+    """
+    engine, clip = clip_engine(duration=60)
+    instance = P.add(clip, "bounce", "in", program="bounce", args={"px": 1.0},
+                     knobs={"unit": "whole"}, duration=30, name="Bounce")
+    before = [P.evaluate(clip, frame, project_size=(640, 360)).pose
+              for frame in range(0, 31)]
+    written = P.bake(clip, instance, project_size=(640, 360))
+    assert "transform.position_y" in written
+    assert "transform.opacity" in written
+    assert not P.instances(clip)
+    for frame, pose in enumerate(before):
+        y = float(CH.value_at(clip, "transform.position_y", frame))
+        opacity = float(CH.value_at(clip, "transform.opacity", frame))
+        assert abs(y - pose.dy) < 0.01, f"baked Y at frame {frame} must match Bounce"
+        assert abs(opacity - pose.opacity * 100.0) < 0.01
+    assert T.position_at(clip, 0)[1] < T.position_at(clip, 30)[1] - 20.0, \
+        "the first frame must visibly sit above the resting frame"
+
+
 def test_bake_is_one_undo_step():
     engine, clip = clip_engine(duration=60)
     instance = P.add(clip, "fade", "in", program="fade", duration=15)

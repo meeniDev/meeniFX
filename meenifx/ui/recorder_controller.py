@@ -138,7 +138,7 @@ class RecorderController:
         if settings.minimize_while_recording and not voice and settings.floating_bar:
             self.w.showMinimized()
             self._minimized = True
-        self.session.start(settings.video_bitrate_mbps)
+        self.session.start(settings.video_bitrate_mbps, settings.quality_preset)
         if voice:
             self._voice_started_playback = not self.w._playing and bool(self.w._begin_playback(self._start_frame))
 

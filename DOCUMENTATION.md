@@ -62,10 +62,12 @@ end", "3 clip edges aligned"), overlap modes, clipboard, full undo/redo.
 persistent group id; **Unlink Selected Clips** (Ctrl+Shift+L) removes only the selected
 members. Clips do not need to come from the same file, so separately recorded video and
 audio can be linked. Linking never moves, trims or retimes anything; a split gives the left
-pair the original id and every new pair its own. The **Linked Selection** toolbar toggle is
-only about selection: with it on, selecting/moving/trimming/splitting one member also acts on
-its partners; with it off they are edited independently while the link metadata stays, so
-turning it back on restores group behaviour. Linked clips carry a small badge on the clip.
+pair the original id and every new pair its own. **Linked Selection** (Edit menu, or
+Ctrl+Shift+K) is only about selection: with it on, selecting/moving/trimming/splitting one
+member also acts on its partners; with it off they are edited independently while the link
+metadata stays, so turning it back on restores group behaviour. It is deliberately no longer
+a second chain button on the timeline, where it looked like the way to create a link.
+Linked clips carry a small badge on the clip.
 
 **Smart Paste** — Ctrl+V imports clipboard pictures and files: pixels are written as real
 PNGs in the project's `Media` folder (alpha preserved), Explorer files are linked, text and
@@ -82,8 +84,12 @@ on a `Captions` track** carrying their style, word timings and animation in
 burned-in render all use the existing paths. Eight styles are plain text-model values scaled
 by project height; entrance animations are the shipped text presets. A transcript editor
 edits times and words (one undo step), a range can be regenerated without touching captions
-outside it, and SRT import plus SRT/ASS export are supported. Karaoke colouring *inside* a
-phrase is not implemented; word-by-word grouping gives per-word timing instead.
+outside it, and SRT import plus SRT/ASS export are supported. When the selected clip is
+linked, the picture and its sound are treated as one subject: a silent video member resolves
+to the linked audio for analysis, while a video with embedded sound can be transcribed
+directly. The captured range follows the audible members, so a longer picture does not add
+silence around the words. Karaoke colouring *inside* a phrase is not implemented;
+word-by-word grouping gives per-word timing instead.
 
 **Remove Dead Silence and Normalize** — `meenifx/audio/silence.py` finds quiet regions from
 short-window RMS levels (threshold in dBFS, minimum silence/speech, padding before/after,
@@ -122,7 +128,9 @@ the properties panel builds itself from.
 **Keyframes and the Graph Editor** — every numeric parameter animates: stopwatch, diamond,
 previous/next keys, Auto-Keyframe (on = key at playhead, off = shift the whole curve).
 Clip opacity, effect envelopes and audio gain animate too. Text has its own animation
-presets.
+presets. Bake samples every channel the preset actually moves, including a vertical-only
+motion such as **Bounce** (its Y curve remains visible after baking), then removes the
+procedural instance so preview and export do not apply the motion twice.
 
 **Animation presets** — an Animations tab with the 81 shipped presets folded into 22
 families (one card per behaviour, with a Mode In/Out/Loop/Both and a Direction selector
@@ -154,7 +162,22 @@ and export that matches the preview.
 
 **Recorder** — webcam, screen, microphone and system audio in any combination; countdown,
 always-on-top bar, global hotkeys, per-source gain and meters, pause as segments. On stop
-the sources are muxed (AAC) and inserted as a linked video+audio pair.
+the sources are muxed (AAC) and inserted as a linked video+audio pair. Recorder settings
+carry Performance / Balanced / High Quality presets, which change bitrate headroom and
+encoder effort without changing capture timing; the screen path uses a verified NVENC
+encoder when available and switches to software libx264 if it produces no data, so a
+driver refusal does not lose the take. The settings dialog reports the encoder it will use.
+
+**Project folders** — the Project panel is organised with virtual folders (New Folder,
+rename, nested folders, drag and drop, multi-item moves, breadcrumbs and search across the
+whole project). Moving an item changes only its project metadata: the file on disk and the
+stable media id do not move. Deleting a non-empty folder asks whether to move its contents
+to the parent, remove the folder and its media references, or cancel; files on disk are
+never deleted by that action. **Remove from Project** only removes references, while
+**Delete File from Computer...** shows the exact paths, warns about timeline use and moves
+the selected files to the operating system's Recycle Bin after confirmation. Physical
+deletion is outside the editor's Undo history and is refused when no safe trash mechanism
+exists.
 
 **Export** — whole project or loop region to video/GIF/image sequences, Save Frame, NVENC
 with verification and a fallback writer, off-thread with progress and cancel.
@@ -170,7 +193,9 @@ every other number; the engine blends the untouched layer with the result, alpha
 **Effects browser** — one browser with three tabs (Effects, Animations, Styles). Each tile is
 a real render of the reference picture through the same compositor the export uses, cached
 by effect/parameters/picture/quality and produced on background workers, so scrolling never
-blocks the UI. The reference is `figure_cafe.png` beside `main.py`; Preferences > Appearance
+blocks the UI. Effects with no meaningful still result (audio, time effects, and trackers
+without a face/hand in the reference) show a readable effect-specific label rather than an
+empty tile; no detection is faked. The reference is `figure_cafe.png` beside `main.py`; Preferences > Appearance
 > Effect Previews replaces it with a custom image and sets the background and preview
 quality (global, never stored in a project). Double-click applies, double-clicking an
 applied effect removes it, and a Style opens in Properties as one collapsible group whose
@@ -284,7 +309,10 @@ The panel lives in the **Graph Editor** dock (`G`) and edits the selected clip's
   ffmpeg (gdigrab) rather than by Qt, because DXGI desktop duplication - what Qt uses -
   delivers a pointer-free image and QScreenCapture has no cursor option. gdigrab draws the
   pointer, so the "Show mouse cursor" switch controls it; the Qt capture keeps running for
-  the preview only. There is still no region select.
+  the preview only. There is still no region select. NVENC is used only after a verified
+  encode probe; a screen take that produces no data switches to libx264 within the first
+  two seconds instead of failing. Webcam recording still uses Qt's Media Foundation path,
+  so its encoder choice is reported by Qt rather than selected here.
 - Projects (`*.mfxpf`) and their `Cache/` and `Recordings/` folders live outside this
   repository; nothing but source, assets and test fixtures is committed.
 

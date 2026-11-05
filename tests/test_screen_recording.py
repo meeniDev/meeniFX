@@ -24,9 +24,9 @@ def recorder(qapp):
     recorder.release()
 
 
-def command_for(recorder, show_cursor=True, bitrate=0):
+def command_for(recorder, show_cursor=True, bitrate=0, quality="balanced"):
     recorder.show_cursor = show_cursor
-    recorder.configure(bitrate)
+    recorder.configure(bitrate, quality)
     return recorder.command("out.mkv")
 
 
@@ -50,6 +50,29 @@ def test_the_pointer_can_be_switched_off(recorder):
 def test_a_manual_bitrate_is_used(recorder):
     command = command_for(recorder, bitrate=7)
     assert command[command.index("-b:v") + 1] == str(7_000_000)
+
+
+def test_quality_presets_change_the_encoder_effort_and_bitrate(recorder, monkeypatch):
+    monkeypatch.setattr(screen_module.hardware, "nvenc_available", lambda: False)
+    fastest = command_for(recorder, quality="performance")
+    balanced = command_for(recorder, quality="balanced")
+    best = command_for(recorder, quality="high")
+    assert fastest[fastest.index("-preset") + 1] == "ultrafast"
+    assert balanced[balanced.index("-preset") + 1] == "veryfast"
+    assert best[best.index("-preset") + 1] == "medium"
+    fastest_bits = int(fastest[fastest.index("-b:v") + 1])
+    balanced_bits = int(balanced[balanced.index("-b:v") + 1])
+    best_bits = int(best[best.index("-b:v") + 1])
+    assert fastest_bits < balanced_bits < best_bits
+    assert recorder.diagnostics()["quality"] == "High Quality"
+
+
+def test_verified_nvenc_is_used_with_its_own_preset(recorder, monkeypatch):
+    monkeypatch.setattr(screen_module.hardware, "nvenc_available", lambda: True)
+    command = command_for(recorder, quality="performance")
+    assert command[command.index("-c:v") + 1] == "h264_nvenc"
+    assert command[command.index("-preset") + 1] == "p1"
+    assert recorder.diagnostics()["encoder"] == "NVIDIA NVENC"
 
 
 def wait_until(condition, seconds=6.0):

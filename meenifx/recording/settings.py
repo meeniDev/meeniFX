@@ -6,6 +6,19 @@ from PyQt6.QtCore import QSettings
 
 GROUP = "recorder"
 
+# One setting drives bitrate headroom, x264 speed and the equivalent NVENC preset. The
+# factors are relative to width*height*fps; "balanced" keeps the previous 0.20 screen
+# default, while performance halves the encoder work and high quality spends more bits.
+QUALITY_PRESETS = {
+    "performance": {"label": "Performance", "screen": 0.10, "camera": 0.08,
+                    "x264": "ultrafast", "nvenc": "p1"},
+    "balanced": {"label": "Balanced", "screen": 0.20, "camera": 0.12,
+                 "x264": "veryfast", "nvenc": "p4"},
+    "high": {"label": "High Quality", "screen": 0.30, "camera": 0.18,
+             "x264": "medium", "nvenc": "p6"},
+}
+QUALITY_KEYS = tuple(QUALITY_PRESETS)
+
 
 def _store():
     return QSettings(QSettings.Format.IniFormat, QSettings.Scope.UserScope, "meeniFX", "Studios")
@@ -39,12 +52,17 @@ class RecorderSettings:
     voice_over: bool = False
     folder: str = ""                 # empty: the project's Recordings folder
     video_bitrate_mbps: int = 0      # 0 = automatic
+    quality_preset: str = "balanced"  # performance | balanced | high
     hotkey_stop: str = "Ctrl+Shift+R"
     hotkey_pause: str = "Ctrl+Shift+P"
     minimize_while_recording: bool = True
     # Off by default: the window itself shows the recording time and the stop control, so
     # no always-on-top window sits over other applications unless the user asks for one.
     floating_bar: bool = False
+
+    def __post_init__(self):
+        if self.quality_preset not in QUALITY_PRESETS:
+            self.quality_preset = "balanced"
 
     @classmethod
     def load(cls, store=None):
@@ -69,6 +87,8 @@ class RecorderSettings:
                 setattr(out, f.name, value)
         finally:
             store.endGroup()
+        if out.quality_preset not in QUALITY_PRESETS:
+            out.quality_preset = "balanced"
         return out
 
     def save(self, store=None):
