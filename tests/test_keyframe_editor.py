@@ -7,6 +7,7 @@ from PyQt6.QtCore import Qt
 
 from test_keyframe_ui import editor, pump  # noqa: F401  (shared real-window fixture)
 
+from meenifx import crashlog
 from meenifx.model import channels as CH
 from meenifx.model import presets as P
 from meenifx.model.keyframes import AnimatedValue
@@ -256,3 +257,29 @@ def test_dragging_a_keyframe_rebuilds_values_from_the_drag_snapshot(editor, qapp
     assert _times(editor, channel) == [12, 20]
     panel.end_key_drag()
     assert _times(editor, channel) == [12, 20]
+
+
+def test_painting_every_editor_surface_raises_nothing(editor, qapp, monkeypatch):
+    """Regression: paint handlers are wrapped by ``crashlog.guard``, so a NameError inside
+    ``paintEvent`` is logged and swallowed instead of failing a test. Paint every surface
+    explicitly and assert nothing was recorded - this is how the missing ``QPointF`` import
+    in the ruler and the lane diamonds reached a release."""
+    channel = _effect_channel(editor)
+    _set_keys(editor, channel, [(0, 100), (20, 50)])
+    _open(editor)
+    panel = editor.keyframe_editor
+    panel.fit()
+    pump(qapp, 0.05)
+
+    problems = []
+    monkeypatch.setattr(crashlog, "record", lambda *args, **kwargs: problems.append(args))
+    crashlog.reset()
+
+    assert panel.ruler.grab().width() > 0
+    for lane in panel.lanes:
+        assert lane.grab().width() > 0
+        lane._hover = lane._records()[0][0] if lane._records() else None
+        assert lane.grab().width() > 0
+    lane._hover = None
+
+    assert not problems, problems
