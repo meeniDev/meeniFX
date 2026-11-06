@@ -10,6 +10,7 @@ from PyQt6.QtCore import QMimeData, QPoint, QPointF, QSettings, Qt
 from PyQt6.QtGui import QDragLeaveEvent, QDragMoveEvent, QDropEvent
 from PyQt6.QtWidgets import QInputDialog
 
+from meenifx import tokens
 from meenifx.project.media import norm_path
 
 from conftest import synthetic_frame
@@ -119,8 +120,8 @@ def test_folders_are_real_drop_targets_and_survive_save_and_reopen(panel_window,
     assert not folder_item.icon().isNull()
     assert "Folder" in folder_item.toolTip()
     assert "Rushes" in folder_item.text()
-    assert "item:hover" in panel.list.styleSheet()
-    assert "item:selected" in panel.list.styleSheet()
+    # Hover and selection are painted by the card delegate, not a stylesheet.
+    assert panel.list.itemDelegate() is not None
 
     # Drag both selected assets onto the folder.  This is the same drop event Qt sends
     # to the list, including the target lookup and the drop highlight.
@@ -134,7 +135,7 @@ def test_folders_are_real_drop_targets_and_survive_save_and_reopen(panel_window,
     drag_move = QDragMoveEvent(QPoint(folder_pos), Qt.DropAction.CopyAction, mime,
                                Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
     panel.list.dragMoveEvent(drag_move)
-    assert folder_item.background().color().name() == "#2f5f8f"
+    assert folder_item.background().color().name() == tokens.COLORS["accent_soft"].lower()
     panel.list.dragLeaveEvent(QDragLeaveEvent())
     assert folder_item.background().style() == Qt.BrushStyle.NoBrush
     _drop(panel, mime, folder_item)

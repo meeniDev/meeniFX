@@ -269,6 +269,33 @@ def _draw(name, p, color):
                            9.6, 12.6, 8.3, 8.5, 4.2, 7.2, 8.3, 5.9))
         p.drawPolygon(_pts(4.0, 9.6, 4.8, 11.4, 6.6, 12.2, 4.8, 13.0,
                            4.0, 14.8, 3.2, 13.0, 1.4, 12.2, 3.2, 11.4))
+    elif name in ("folder", "folder_new"):
+        p.drawPolyline(_pts(2.2, 12.8, 2.2, 4.4, 6.2, 4.4, 7.6, 6.0, 13.8, 6.0, 13.8, 12.8, 2.2, 12.8))
+        if name == "folder_new":
+            p.drawLine(QPointF(8, 8.2), QPointF(8, 11.4))
+            p.drawLine(QPointF(6.4, 9.8), QPointF(9.6, 9.8))
+    elif name == "import":
+        p.drawLine(QPointF(8, 2.6), QPointF(8, 9.8))
+        p.drawPolyline(_pts(5, 7, 8, 10, 11, 7))
+        p.drawPolyline(_pts(2.8, 11, 2.8, 13.2, 13.2, 13.2, 13.2, 11))
+    elif name == "up":
+        p.drawPolyline(_pts(3.2, 8.6, 6.4, 5.4, 3.2, 8.6, 6.4, 11.8))
+        p.drawPolyline(_pts(3.6, 8.6, 10.4, 8.6, 13, 6, 13, 4))
+    elif name == "film":
+        p.drawRoundedRect(QRectF(2.4, 3.2, 11.2, 9.6), 2, 2)
+        p.drawLine(QPointF(5.4, 3.4), QPointF(5.4, 12.6))
+        p.drawLine(QPointF(10.6, 3.4), QPointF(10.6, 12.6))
+    elif name == "music":
+        p.drawLine(QPointF(10.6, 3.2), QPointF(10.6, 10.6))
+        p.drawLine(QPointF(10.6, 3.2), QPointF(13.2, 4.2))
+        p.drawEllipse(QPointF(8.4, 11), 2.2, 1.8)
+    elif name == "image":
+        p.drawRoundedRect(QRectF(2.4, 3.2, 11.2, 9.6), 2, 2)
+        p.drawPolyline(_pts(3.2, 11.2, 6.4, 7.6, 8.8, 10, 10.4, 8.6, 12.8, 11.2))
+    elif name == "trash":
+        p.drawLine(QPointF(3, 4.8), QPointF(13, 4.8))
+        p.drawPolyline(_pts(6.2, 4.6, 6.2, 3, 9.8, 3, 9.8, 4.6))
+        p.drawPolyline(_pts(4.2, 4.8, 4.8, 13, 11.2, 13, 11.8, 4.8))
 
 
 def paint(painter, name, rect, color):
@@ -281,14 +308,19 @@ def paint(painter, name, rect, color):
     painter.restore()
 
 
+def clear_icon_cache():
+    """Forget every rendered icon (a theme switch changes their colours)."""
+    _CACHE.clear()
+
+
 def icon(name, color=None, size=16):
     """Icon in `color` (default: the normal text colour); a dimmed twin is used when disabled."""
-    key = (name, color, size)
+    key = (name, color, size, COLORS["text"])
     if key in _CACHE:
         return _CACHE[key]
     result = QIcon()
     states = ((QIcon.Mode.Normal, color or COLORS["text"]), (QIcon.Mode.Disabled, COLORS["disabled"]),
-              (QIcon.Mode.Active, "#ffffff"))
+              (QIcon.Mode.Active, color or COLORS["text"]))
     for mode, value in states:
         for scale in _ICON_SCALES:
             result.addPixmap(_render(name, value, size, scale), mode)

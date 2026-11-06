@@ -3,22 +3,30 @@ import hashlib
 import os
 
 import cv2
-from PyQt6.QtCore import (QEvent, QMimeData, QObject, QPoint, QRunnable, QSize, Qt, QThreadPool,
+from PyQt6.QtCore import (QEvent, QMimeData, QObject, QPoint, QRectF, QRunnable, QSize, Qt, QThreadPool,
                           QTimer, QUrl, pyqtSignal)
-from PyQt6.QtGui import (QBrush, QColor, QDrag, QFontMetrics, QIcon, QImage, QPainter, QPen,
-                         QPixmap, QPolygonF)
-from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QHBoxLayout, QInputDialog,
-                             QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox,
-                             QPushButton, QToolButton, QVBoxLayout, QWidget)
+from PyQt6.QtGui import (QBrush, QColor, QDrag, QFontMetrics, QIcon, QImage, QPainter, QPainterPath,
+                         QPen, QPixmap)
+from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QHBoxLayout, QInputDialog,
+                             QLabel, QListWidget, QListWidgetItem, QMenu, QMessageBox,
+                             QStackedLayout, QToolButton, QVBoxLayout, QWidget)
 
+from .. import tokens
 from ..constants import AUDIO_EXT, IMAGE_EXT, MEDIA_MIME, VIDEO_EXT
+from ..icons import icon as glyph, paint as paint_glyph
 from ..project import io as project_io
 from ..project.media import media_type_for, norm_path
+from .cards import CardDelegate, mix
+from .components import Button, Dropdown, EmptyState, IconButton, SearchField
 from .filedialogs import open_file, open_files
+from .themed import bind_theme
 
 ROOT_BIN = "<root>"
 GRID_ICON = QSize(96, 54)
 LIST_ICON = QSize(48, 28)
+GRID_CELL_MIN = 104     # narrowest grid cell; the grid widens cells to fill the row
+GRID_CELL_H = 100
+ICON_SCALE = 2          # media pictures are drawn at 2x so cards stay sharp on high-DPI screens
 ALL_EXT = tuple(VIDEO_EXT) + tuple(IMAGE_EXT) + tuple(AUDIO_EXT)
 THUMB_W = 192
 
@@ -132,9 +140,7 @@ class _MediaList(QListWidget):
         self.setDefaultDropAction(Qt.DropAction.CopyAction)
         self.setDropIndicatorShown(True)
         self.setMouseTracking(True)
-        self.setStyleSheet(
-            "QListWidget::item:hover { background: rgba(92, 112, 142, 120); }"
-            "QListWidget::item:selected { background: #335f8f; color: #ffffff; }")
+        self.setItemDelegate(CardDelegate(self, grid=True))
         self._drag_press = None
         self._drop_item = None
         self.current_bin = ""
@@ -147,6 +153,19 @@ class _MediaList(QListWidget):
 
     def supportedDragActions(self):
         return Qt.DropAction.CopyAction
+
+    def grid_cell(self):
+        """Cells share the row width evenly, so cards fill the panel instead of leaving a ragged gap."""
+        available = max(GRID_CELL_MIN, self.viewport().width() - 2 * self.spacing() - 2)
+        columns = max(1, available // (GRID_CELL_MIN + 2 * self.spacing()))
+        return QSize(available // columns - 1, GRID_CELL_H + 20)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self.viewMode() == QListWidget.ViewMode.IconMode:
+            cell = self.grid_cell()
+            if cell != self.gridSize():
+                self.setGridSize(cell)
 
     def eventFilter(self, watched, event):
         """Route platform drag events from the viewport to this list's handlers.
@@ -234,7 +253,7 @@ class _MediaList(QListWidget):
         pixmap = items[0].icon().pixmap(size)
         if pixmap.isNull() or pixmap.width() == 0:
             pixmap = QPixmap(size)
-            pixmap.fill(QColor("#20242d"))
+            pixmap.fill(QColor(tokens.COLORS["neutral_stage"]))
         canvas = QPixmap(pixmap.size())
         canvas.fill(Qt.GlobalColor.transparent)
         painter = QPainter(canvas)
@@ -295,7 +314,7 @@ class _MediaList(QListWidget):
                 pass
         self._drop_item = item
         if item is not None:
-            item.setBackground(QColor("#2f5f8f"))
+            item.setBackground(QColor(tokens.COLORS["accent_soft"]))
         self.viewport().update()
 
     def _clear_drop_item(self):
@@ -355,21 +374,25 @@ class ProjectPanel(QWidget):
         self._grid = True
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
-        layout.setSpacing(6)
+        layout.setContentsMargins(tokens.SP2, tokens.SP2, tokens.SP2, tokens.SP2)
+        layout.setSpacing(tokens.SP2)
         bar = QHBoxLayout()
-        self.import_button = QPushButton("Import")
-        self.import_button.setToolTip("Add files to the project (Ctrl+click a file in the list to insert it)")
-        self.bin_button = QToolButton()
-        self.bin_button.setText("New Folder")
-        self.bin_button.setToolTip("Create a folder inside the current project folder")
+        bar.setSpacing(tokens.SP1)
+        self.import_button = Button("Import", "primary", None,
+                                    "Add files to the project (Ctrl+click a file in the list to insert it)")
+        bind_theme(self.import_button, lambda b: b.setIcon(glyph("import", tokens.COLORS["on_accent"])))
+        self.bin_button = IconButton("folder_new", "Create a folder inside the current project folder")
+        self.bin_button.setText("")
+        self.bin_button.setAccessibleName("New Folder")
         self.back_button = QToolButton()
+        self.back_button.setProperty("role", "tool")
         self.back_button.setText("Back")
+        self.back_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        bind_theme(self.back_button, lambda b: b.setIcon(glyph("up")))
         self.back_button.setToolTip("Go up one project folder")
+        self.back_button.setMinimumHeight(tokens.CONTROL_H)
         self.back_button.setVisible(False)
-        self.view_button = QToolButton()
-        self.view_button.setText("List")
-        self.view_button.setToolTip("Switch between grid and list view")
+        self.view_button = IconButton("list", "Switch between grid and list view")
         bar.addWidget(self.import_button)
         bar.addWidget(self.bin_button)
         bar.addWidget(self.back_button)
@@ -377,34 +400,32 @@ class ProjectPanel(QWidget):
         bar.addWidget(self.view_button)
         layout.addLayout(bar)
         self.crumb = QLabel("Project")
-        self.crumb.setStyleSheet("color: #8a8f9a;")
+        self.crumb.setProperty("quiet", True)
         self.crumb.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         layout.addWidget(self.crumb)
-        self.search = QLineEdit()
-        self.search.setPlaceholderText("Search media")
-        self.search.setClearButtonEnabled(True)
+        self.search = SearchField("Search media")
         layout.addWidget(self.search)
         tools = QHBoxLayout()
-        tools.setSpacing(4)
-        self.kind_filter = QComboBox()
-        for label, value in (("All media", ""), ("Video", "video"), ("Audio", "audio"),
-                             ("Images", "image")):
-            self.kind_filter.addItem(label, value)
+        tools.setSpacing(tokens.SP1)
+        self.kind_filter = Dropdown((("All media", ""), ("Video", "video"), ("Audio", "audio"),
+                                     ("Images", "image")))
         self.kind_filter.setToolTip("Show only one kind of media")
-        self.sort_box = QComboBox()
-        for label, value in (("Name", "name"), ("Type", "type"), ("Newest file", "date"),
-                             ("Longest", "duration")):
-            self.sort_box.addItem(label, value)
+        self.sort_box = Dropdown((("Name", "name"), ("Type", "type"), ("Newest file", "date"),
+                                  ("Longest", "duration")))
         self.sort_box.setToolTip("Media order")
         tools.addWidget(self.kind_filter, 1)
         tools.addWidget(self.sort_box, 1)
         layout.addLayout(tools)
         self.list = _MediaList()
-        layout.addWidget(self.list, 1)
-        self.hint = QLabel("Drop files here or press Import")
-        self.hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.hint.setStyleSheet("color: #8a8f9a;")
-        layout.addWidget(self.hint)
+        self.hint = EmptyState("Your project is empty", "Drop videos, pictures or music here, "
+                               "or press Import.", "folder")
+        self.stack = QStackedLayout()
+        self.stack.setStackingMode(QStackedLayout.StackingMode.StackAll)
+        self.stack.addWidget(self.list)
+        self.stack.addWidget(self.hint)
+        self.hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.hint.hide()
+        layout.addLayout(self.stack, 1)
         self._apply_view_mode()
 
         self.import_button.clicked.connect(self.import_dialog)
@@ -426,7 +447,14 @@ class ProjectPanel(QWidget):
         window.bridge.changed.connect(self.schedule)
         window.projects.project_changed.connect(self._project_changed)
         window.waveforms.library.loaded.connect(lambda _p: self.schedule())
+        bind_theme(self, lambda panel: panel._theme_changed())
 
+    def _theme_changed(self):
+        """Card pictures are pre-rendered in theme colours, so a switch rebuilds them."""
+        self._signature = None
+        if self.project is not None:
+            self.rebuild(force=True)
+        self.list.viewport().update()
     # ---- helpers ---------------------------------------------------------
     @property
     def project(self):
@@ -465,7 +493,7 @@ class ProjectPanel(QWidget):
         project = self.project
         if project is None:
             self.list.clear()
-            self.hint.setVisible(False)
+            self.hint.hide()
             self._signature = None
             return
         self._sync_library()
@@ -496,7 +524,7 @@ class ProjectPanel(QWidget):
             parent = library.bin_parent(self._current_bin)
             up = QListWidgetItem("Back")
             up.setData(Qt.ItemDataRole.UserRole, ("up", parent, ""))
-            up.setIcon(self._glyph_icon("<"))
+            up.setIcon(self._glyph_icon("up"))
             up.setToolTip("Back to " + (library.bins.get(parent, "the project root")))
             up.setFlags(up.flags() | Qt.ItemFlag.ItemIsDropEnabled)
             self.list.addItem(up)
@@ -527,11 +555,29 @@ class ProjectPanel(QWidget):
             if self._key(self.list.item(index)) in selected:
                 self.list.item(index).setSelected(True)
         self.list.setUpdatesEnabled(True)
-        self.hint.setVisible(not len(library) and not library.bins)
+        self._show_empty_state(library, needle, shown)
 
     @staticmethod
     def _key(item):
         return item.data(Qt.ItemDataRole.UserRole)[:2]
+
+    def _show_empty_state(self, library, needle, shown):
+        """A friendly message instead of a blank list; drops still land on the panel."""
+        folders = sum(1 for i in range(self.list.count())
+                      if self.list.item(i).data(Qt.ItemDataRole.UserRole)[0] == "bin")
+        if shown or folders:
+            self.hint.hide()
+            return
+        if not len(library) and not library.bins:
+            self.hint.set_text("Your project is empty", "Drop videos, pictures or music here, "
+                                                        "or press Import.")
+        elif needle or self.kind_filter.currentData():
+            self.hint.set_text("Nothing matches", "Try another name, or show all kinds of media.")
+        elif self._current_bin:
+            self.hint.set_text("This folder is empty", "Drop media here, or drag it in from another folder.")
+        else:
+            self.hint.set_text("Nothing here yet", "Press Import to add media.")
+        self.hint.show()
 
     @staticmethod
     def _arrange(items, kind="", order="name"):
@@ -576,88 +622,89 @@ class ProjectPanel(QWidget):
                         ("\nFile not found" if missing else "") +
                         ("\nUsed in the timeline" if used else ""))
         if missing:
-            item.setForeground(QColor("#ffb020"))
+            item.setForeground(QColor(tokens.COLORS["warning"]))
         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsDragEnabled)
         return item
 
     def _icon_size(self):
         return GRID_ICON if self._grid else LIST_ICON
 
-    def _glyph_icon(self, glyph):
+    def _canvas(self, size, fill=None):
+        """A transparent (or filled) pixmap drawn at ICON_SCALE for sharp high-DPI cards."""
+        canvas = QPixmap(size * ICON_SCALE)
+        canvas.setDevicePixelRatio(ICON_SCALE)
+        canvas.fill(fill if fill is not None else Qt.GlobalColor.transparent)
+        return canvas
+
+    def _glyph_icon(self, name):
+        """A card picture for navigation items (the Back card)."""
         size = self._icon_size()
-        canvas = QPixmap(size)
-        canvas.fill(QColor(38, 41, 49))
+        canvas = self._canvas(size)
         painter = QPainter(canvas)
-        painter.setPen(QColor("#b8bdc9"))
-        font = painter.font()
-        font.setPixelSize(max(12, size.height() // 2))
-        painter.setFont(font)
-        painter.drawText(canvas.rect(), Qt.AlignmentFlag.AlignCenter, glyph)
+        side = min(size.width(), size.height()) * 0.55
+        paint_glyph(painter, name, QRectF((size.width() - side) / 2, (size.height() - side) / 2, side, side),
+                    tokens.COLORS["muted"])
         painter.end()
         return QIcon(canvas)
 
     def _folder_icon(self):
-        """A real folder silhouette, sized like every media thumbnail in the current view."""
+        """A soft butter-yellow folder, sized like every media thumbnail in the current view."""
         size = self._icon_size()
-        canvas = QPixmap(size)
-        canvas.fill(Qt.GlobalColor.transparent)
+        canvas = self._canvas(size)
         painter = QPainter(canvas)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        w, h = size.width(), size.height()
-        left, top = max(2, int(w * 0.10)), max(2, int(h * 0.20))
-        width, height = w - left * 2, h - top - max(2, int(h * 0.12))
-        tab_w, tab_h = max(10, int(width * 0.36)), max(4, int(height * 0.22))
-        body = QPolygonF([self._pt(left, top + tab_h // 2), self._pt(left + tab_w, top + tab_h // 2),
-                          self._pt(left + tab_w + 4, top), self._pt(left + tab_w + 10, top),
-                          self._pt(left + tab_w + 14, top + tab_h // 2), self._pt(left + width, top + tab_h // 2),
-                          self._pt(left + width, top + height), self._pt(left, top + height)])
-        painter.setPen(QPen(QColor("#d8ad52"), max(1, w // 80)))
-        painter.setBrush(QColor("#d8ad52"))
-        painter.drawPolygon(body)
-        painter.setPen(QPen(QColor("#f6d98b"), max(1, w // 90)))
-        painter.drawLine(left + 2, top + tab_h + 2, left + width - 2, top + tab_h + 2)
+        colors = tokens.COLORS
+        w, h = float(size.width()), float(size.height())
+        fw = min(w * 0.62, h * 1.25)
+        fh = fw * 0.72
+        left, top = (w - fw) / 2, (h - fh) / 2 + h * 0.03
+        line = QColor("#CFC6BA" if tokens.is_dark() else "#6B625A")
+        painter.setPen(QPen(line, max(1.0, h / 40)))
+        painter.setBrush(QColor(colors["butter"]).darker(112))
+        back = QPainterPath()
+        back.addRoundedRect(QRectF(left, top, fw, fh), fh * 0.14, fh * 0.14)
+        painter.drawPath(back)
+        painter.setBrush(QColor(colors["butter"]).darker(112))
+        painter.drawRoundedRect(QRectF(left, top - fh * 0.12, fw * 0.42, fh * 0.3), fh * 0.1, fh * 0.1)
+        painter.setBrush(QColor(colors["butter"]))
+        painter.drawRoundedRect(QRectF(left - fw * 0.02, top + fh * 0.2, fw * 1.04, fh * 0.8), fh * 0.14, fh * 0.14)
         painter.end()
         return QIcon(canvas)
 
     def _media_icon(self, media, used, missing):
         size = self._icon_size()
-        canvas = QPixmap(size)
-        canvas.fill(QColor(24, 26, 31))
+        canvas = self._canvas(size, QColor(tokens.COLORS["neutral_stage"]))
         painter = QPainter(canvas)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         image = self._thumbs.get(norm_path(media.path))
         if image is not None and not image.isNull():
-            pix = QPixmap.fromImage(image).scaled(size, Qt.AspectRatioMode.KeepAspectRatio,
+            pix = QPixmap.fromImage(image).scaled(size * ICON_SCALE, Qt.AspectRatioMode.KeepAspectRatio,
                                                   Qt.TransformationMode.SmoothTransformation)
             painter.setOpacity(0.4 if missing else 1.0)
-            painter.drawPixmap((size.width() - pix.width()) // 2, (size.height() - pix.height()) // 2, pix)
+            painter.drawPixmap(int((size.width() - pix.width() / ICON_SCALE) / 2),
+                               int((size.height() - pix.height() / ICON_SCALE) / 2),
+                               pix.width() // ICON_SCALE, pix.height() // ICON_SCALE, pix)
             painter.setOpacity(1.0)
         else:
-            glyph = {"audio": "\u266a", "image": "\u25a3"}.get(media.type, "\u25b6")
-            painter.setPen(QColor("#7d8493"))
-            font = painter.font()
-            font.setPixelSize(max(12, size.height() // 2))
-            painter.setFont(font)
-            painter.drawText(canvas.rect(), Qt.AlignmentFlag.AlignCenter, glyph)
+            name = {"audio": "music", "image": "image"}.get(media.type, "film")
+            side = min(size.width(), size.height()) * 0.5
+            paint_glyph(painter, name, QRectF((size.width() - side) / 2, (size.height() - side) / 2, side, side),
+                        "#A9B0AD")
             if image is None and media.type != "audio" and not missing:
                 self._request_thumb(media)
-        badge = max(4, size.height() // 5)
-        painter.setPen(Qt.PenStyle.NoPen)
+        badge = max(10.0, size.height() / 4.2)
         if used:
-            painter.setBrush(QColor("#3ddc84"))
-            painter.drawEllipse(size.width() - badge - 3, 3, badge, badge)
+            # Green dot with a tick: "used" is readable without the colour.
+            painter.setPen(QPen(QColor("#FFFFFF"), 1.2))
+            painter.setBrush(QColor(tokens.COLORS["success"]))
+            dot = QRectF(size.width() - badge - 3, 3, badge, badge)
+            painter.drawEllipse(dot)
+            paint_glyph(painter, "check", dot.adjusted(1.5, 1.5, -1.5, -1.5), "#FFFFFF")
         if missing:
-            painter.setBrush(QColor("#ffb020"))
-            painter.setPen(QPen(QColor("#3a2a00"), 1))
-            painter.drawPolygon(QPolygonF([self._pt(3 + badge / 2, size.height() - badge - 3),
-                                           self._pt(3 + badge, size.height() - 3),
-                                           self._pt(3, size.height() - 3)]))
+            paint_glyph(painter, "warning", QRectF(3, size.height() - badge - 3, badge, badge),
+                        tokens.COLORS["warning"] if tokens.is_dark() else "#F0B65A")
         painter.end()
         return QIcon(canvas)
-
-    @staticmethod
-    def _pt(x, y):
-        from PyQt6.QtCore import QPointF
-        return QPointF(float(x), float(y))
 
     # ---- thumbnails ------------------------------------------------------
     def _request_thumb(self, media):
@@ -690,15 +737,18 @@ class ProjectPanel(QWidget):
         if self._grid:
             self.list.setViewMode(QListWidget.ViewMode.IconMode)
             self.list.setIconSize(GRID_ICON)
-            self.list.setGridSize(QSize(GRID_ICON.width() + 24, GRID_ICON.height() + 52))
+            self.list.setGridSize(self.list.grid_cell())
             self.list.setSpacing(4)
-            self.view_button.setText("List")
+            self.view_button.set_icon_name("list")
+            self.view_button.setToolTip("Switch to list view")
         else:
             self.list.setViewMode(QListWidget.ViewMode.ListMode)
             self.list.setIconSize(LIST_ICON)
             self.list.setGridSize(QSize())
             self.list.setSpacing(2)
-            self.view_button.setText("Grid")
+            self.view_button.set_icon_name("grid")
+            self.view_button.setToolTip("Switch to grid view")
+        self.list.itemDelegate().grid = self._grid
         # Newlines still make the two-line tile; word wrapping must not add a third line.
         self.list.setWordWrap(False)
         self.list.setTextElideMode(Qt.TextElideMode.ElideMiddle)
