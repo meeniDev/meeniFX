@@ -616,19 +616,21 @@ class EffectsPanel(QWidget):
         # It is keyframeable like every other channel and is never a text/effect opacity.
         self._channel_row(form, clip, CH.transform_channel("opacity"))
 
-        # Keyboard gestures and inspector switches are the same thing: Shift = keep the
-        # aspect ratio, Alt = scale from the centre, Shift while rotating = 15 degree
-        # steps. Each has a switch here so nothing depends on remembering a modifier.
+        # Keyboard gestures and inspector switches are the same thing: Ctrl = keep the
+        # aspect ratio while resizing (the switch does the same for typed/scrubbed
+        # scale), Shift or Alt = resize from the centre, Shift while rotating = 15
+        # degree steps. Each has a switch here so nothing depends on remembering a key.
         switches = QWidget()
         switch_column = QVBoxLayout(switches)
         switch_column.setContentsMargins(0, 0, 0, 0)
         switch_column.setSpacing(2)
         for label, flag, tip in (
                 ("Lock Scale X/Y", "uniform",
-                 "Scrubbing or typing one scale axis moves the other by the same factor; "
-                 "corner handles keep the picture's proportions too - hold Shift while dragging"),
+                 "Typing or scrubbing one scale axis moves the other by the same factor. "
+                 "Handle drags stay free: hold Ctrl while resizing to keep the proportions"),
                 ("Scale from center", "scale_from_center",
-                 "Scale around the middle of the picture - hold Alt while dragging"),
+                 "Resize around the middle of the picture instead of the opposite handle - "
+                 "hold Shift or Alt while dragging"),
                 ("Snap rotation", "snap_rotation",
                  f"Rotation lands on {int(ROTATE_STEP)} degree steps - hold Shift while rotating")):
             box = QCheckBox(label)

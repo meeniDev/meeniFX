@@ -197,7 +197,7 @@ def test_dragging_the_clip_in_the_preview_moves_it_as_one_undo_step(editor):
     pump(0.05)
 
 
-def test_corner_handle_scales_and_shift_keeps_the_aspect(editor):
+def test_corner_handle_scales_and_ctrl_keeps_the_aspect(editor):
     window = editor
     clip = window.engine.timeline.all_clips()[0]
     view = window.preview_panel.view
@@ -206,11 +206,11 @@ def test_corner_handle_scales_and_shift_keeps_the_aspect(editor):
     corners = window.overlay.handle_points(clip)
     corner = preview_point(window, *corners["se"])
     target = QPointF(corner.x() - 40, corner.y() - 18)
-    drag(view, corner, target, modifiers=Qt.KeyboardModifier.ShiftModifier)
+    drag(view, corner, target, modifiers=Qt.KeyboardModifier.ControlModifier)
     pump(0.1)
     state = T.evaluate(window.engine.timeline.find_clip(clip.id), 0)
     assert state.scale_x < 100.0
-    assert abs(state.scale_x - state.scale_y) < 0.01, "Shift must keep the aspect ratio"
+    assert abs(state.scale_x - state.scale_y) < 0.01, "Ctrl must keep the aspect ratio"
 
 
 def test_rotation_handle_rotates_the_clip(editor):

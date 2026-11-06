@@ -32,6 +32,7 @@ KNOB_SLIDE = 22.0     # step used to slide a pinned knob off a scale handle
 HIT = 9.0             # grab radius, widget px
 SNAP_PX = 7.0         # snapping distance on screen, widget px
 ROTATE_SNAP_DEGREES = 15.0      # Shift snaps rotation to this step
+MIN_CONTENT_PX = 3.0  # a resize never shrinks a picture below this on either axis
 
 # Pin keyframes copied with Ctrl+C live here, so they survive a clip or panel change.
 _PIN_CLIPBOARD = {"rows": [], "start": 0, "pins": 0}
@@ -775,20 +776,35 @@ class PreviewOverlay:
 
     def _begin_transform(self, clip, handle, pos, modifiers):
         state = self.state(clip)
-        self.session.begin_gesture()
         anchor = self.anchor_point(clip)
         ensure = T.ensure_transform(clip)
+        kind = ("rotate" if handle == "rotate"
+                else ("anchor" if handle == "anchor" else "scale"))
+        project = self.to_project(pos)
+        # Behaviour switches are read once per gesture: flipping a checkbox in the
+        # inspector in the middle of a drag must not change the drag under the mouse.
+        flags = {"scale_from_center": bool(ensure.get("scale_from_center", False)),
+                 "snap_rotation": bool(ensure.get("snap_rotation", True))}
+        base = None
+        if kind == "scale":
+            if project is None:
+                return False
+            from_centre = bool(modifiers & (Qt.KeyboardModifier.ShiftModifier
+                                            | Qt.KeyboardModifier.AltModifier)) \
+                or flags["scale_from_center"]
+            base = self._scale_geometry(clip, state, handle, from_centre)
+            if base is None:
+                return False
+            base["mods"] = (bool(modifiers & Qt.KeyboardModifier.ControlModifier), from_centre)
+            base["pointer"] = project
+        self.session.begin_gesture()
         self._drag = {
-            "kind": "rotate" if handle == "rotate" else ("anchor" if handle == "anchor" else "scale"),
-            "clip": clip, "handle": handle, "state": state, "modifiers": modifiers,
-            "anchor": anchor, "origin": self.to_project(pos),
-            "angle": self._angle(pos, anchor),
-            # Behaviour switches are read once per gesture: flipping a checkbox in the
-            # inspector in the middle of a drag must not change the drag under the mouse.
-            "flags": {"scale_from_center": bool(ensure.get("scale_from_center", False)),
-                      "snap_rotation": bool(ensure.get("snap_rotation", True)),
-                      "uniform": bool(ensure.get("uniform", True))},
+            "kind": kind, "clip": clip, "handle": handle, "state": state,
+            "modifiers": modifiers, "anchor": anchor, "origin": project,
+            "angle": self._angle(pos, anchor), "flags": flags,
         }
+        if base is not None:
+            self._drag["base"] = base
         self._notify()
         return True
 
@@ -811,11 +827,13 @@ class PreviewOverlay:
             self.widget.setCursor(self._cursor_for(self._hover))
             return False
         kind = drag["kind"]
-        # The modifier contract, identical for every transform gesture:
-        #   Shift - constrain (one axis when moving, aspect when scaling, 15 deg when
-        #           rotating);
-        #   Alt   - act from the centre (scale/crop around the anchor);
-        #   Ctrl  - precision: snapping is skipped and movement is 1:1 with the pointer.
+        # Modifier contract. Moving and rotating keep their long-standing keys:
+        #   move    - Shift constrains to one axis, Ctrl skips snapping;
+        #   rotate  - Shift snaps to 15 degrees, Ctrl is a fine 1:10 ratio;
+        #   scale   - Ctrl locks the aspect ratio, Shift resizes from the centre,
+        #             Ctrl+Shift does both (Alt also resizes from the centre).
+        # The scale keys are the free-transform convention, so Ctrl can never mean
+        # "precision" there: a corner drag is already 1:1 with the pointer.
         shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
         alt = bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
         precise = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
@@ -883,7 +901,7 @@ class PreviewOverlay:
             self._notify()
             return True
         if kind == "scale":
-            self._scale_drag(drag, pos, shift, alt)
+            self._scale_drag(drag, pos, ctrl=precise, shift=shift, alt=alt)
             self._notify()
             return True
         if kind == "pin":
@@ -917,60 +935,132 @@ class PreviewOverlay:
         auto = bool(self.session.auto_keyframe.get())
         T.set_position(clip, x, y, frame, auto)
 
-    def _scale_drag(self, drag, pos, shift, alt=False):
-        """Scale from the anchor, or from the picture's centre while Alt is held.
+    def _scale_geometry(self, clip, state, handle, from_centre):
+        """The fixed point, local axes and handle offsets a scale gesture works from.
 
-        Both modes share one mapping: the pointer is expressed in the clip's untransformed
-        layer space and a ratio is taken against a pivot. ``anchor`` is the normal pivot;
-        with Alt the pivot becomes the layer centre, so opposite edges move outward (or
-        inward) together and the picture grows around its middle.
+        Everything is measured in composition space on the transform captured at
+        mouse-down. ``u`` and ``v`` are the picture's own axes after rotation and scale,
+        so a corner drag is resolved in local space even when the clip is rotated, and a
+        non-square picture does not skew the ratios. The fixed point is the opposite
+        corner/edge (or the centre when asked), never the anchor: the anchor only affects
+        where the scale grows from, and the translation below cancels that out.
         """
-        clip, handle, state = drag["clip"], drag["handle"], drag["state"]
+        project_size = self.project_size()
+        image_size = self.image_size(clip)
+        width, height = float(max(1, image_size[0])), float(max(1, image_size[1]))
+        tl, tr, _br, bl = T.content_corners(state, project_size, image_size)
+        u = (tr[0] - tl[0], tr[1] - tl[1])
+        v = (bl[0] - tl[0], bl[1] - tl[1])
+        uu = u[0] * u[0] + u[1] * u[1]
+        vv = v[0] * v[0] + v[1] * v[1]
+        if uu <= 1e-9 or vv <= 1e-9:
+            return None
+        source = {"nw": (0.0, 0.0), "n": (width / 2.0, 0.0), "ne": (width, 0.0),
+                  "e": (width, height / 2.0), "se": (width, height),
+                  "s": (width / 2.0, height), "sw": (0.0, height),
+                  "w": (0.0, height / 2.0)}
+        opposite = {"nw": (width, height), "n": (width / 2.0, height),
+                    "ne": (0.0, height), "e": (0.0, height / 2.0),
+                    "se": (0.0, 0.0), "s": (width / 2.0, 0.0),
+                    "sw": (width, 0.0), "w": (width, height / 2.0)}
+        handle_src = source[handle]
+        fixed_src = ((width / 2.0, height / 2.0) if from_centre else opposite[handle])
+        fixed = T.forward(fixed_src, state, project_size, image_size)
+        grabbed = T.forward(handle_src, state, project_size, image_size)
+
+        def fractions(point):
+            dx, dy = point[0] - fixed[0], point[1] - fixed[1]
+            return ((dx * u[0] + dy * u[1]) / uu, (dx * v[0] + dy * v[1]) / vv)
+
+        hu, hv = fractions(grabbed)
+        return {"state": state, "u": u, "v": v, "uu": uu, "vv": vv,
+                "fixed": fixed, "fixed_src": fixed_src, "handle_src": handle_src,
+                "grabbed": grabbed, "hu": hu, "hv": hv,
+                "pointer": None, "mods": None}
+
+    @staticmethod
+    def _state_with_scale(state, scale_x, scale_y):
+        """A copy of ``state`` with new scales, for asking where a point would land."""
+        values = {name: getattr(state, name) for name in T.TransformState.__slots__}
+        values["scale_x"], values["scale_y"] = scale_x, scale_y
+        return T.TransformState(**values)
+
+    def _min_ratio(self, axis_scale, axis_length):
+        """Smallest factor that keeps at least MIN_CONTENT_PX of picture on one axis."""
+        current = abs(float(axis_scale)) / 100.0 * max(1.0, float(axis_length))
+        if current < 0.5:
+            return 1.0
+        return MIN_CONTENT_PX / current
+
+    def _scale_drag(self, drag, pos, ctrl=False, shift=False, alt=False):
+        """Resize from the dragged handle with the opposite corner or edge pinned.
+
+        The term of the drag is the pointer delta from the mouse-down, applied to the
+        geometry captured at mouse-down, so the result never accumulates error and never
+        depends on the path the pointer took. A corner drag is non-uniform by default;
+        Ctrl locks the aspect ratio the picture had when the gesture (or the current
+        modifier state) began, Shift resizes around the centre, Ctrl+Shift does both.
+        Switching modifiers rebases on the picture as it is now, which cannot jump, and
+        the pinned point is translated back into place afterwards so it stays put.
+        """
+        clip, handle = drag["clip"], drag["handle"]
         project = self.to_project(pos)
         if project is None:
             return
-        width, height = self.image_size(clip)
-        _x0, _y0, nw, nh = T.fit_rect(self.project_size(), (width, height))
-        center = ((self.project_size()[0] - 1) / 2.0, (self.project_size()[1] - 1) / 2.0)
-        # Pointer in the clip's untransformed fit space.
-        rotation = math.radians(-state.rotation)
-        dx = project[0] - (center[0] + state.position_x)
-        dy = project[1] - (center[1] + state.position_y)
-        local_x = (dx * math.cos(rotation) - dy * math.sin(rotation))
-        local_y = (dx * math.sin(rotation) + dy * math.cos(rotation))
-        local_x /= (state.scale_x / 100.0 or 1e-6)
-        local_y /= (state.scale_y / 100.0 or 1e-6)
-        local_x += state.anchor_x
-        local_y += state.anchor_y
-        sign_x = -1.0 if state.flip_h else 1.0
-        sign_y = -1.0 if state.flip_v else 1.0
-        half_w, half_h = nw / 2.0, nh / 2.0
-        corners = {"nw": (-half_w, -half_h), "n": (0.0, -half_h), "ne": (half_w, -half_h),
-                   "e": (half_w, 0.0), "se": (half_w, half_h), "s": (0.0, half_h),
-                   "sw": (-half_w, half_h), "w": (-half_w, 0.0)}
-        corner_x, corner_y = corners[handle]
-        pivot_x = nw / 2.0 if alt else state.anchor_x
-        pivot_y = nh / 2.0 if alt else state.anchor_y
-        ratio_x = ratio_y = None
-        if handle not in ("n", "s"):
-            denominator = corner_x - pivot_x
-            if abs(denominator) > 1e-6:
-                ratio_x = (local_x - pivot_x) / denominator
-        if handle not in ("e", "w"):
-            denominator = corner_y - pivot_y
-            if abs(denominator) > 1e-6:
-                ratio_y = (local_y - pivot_y) / denominator
-        uniform = bool(shift or drag.get("flags", {}).get("uniform", True))
-        if uniform and ratio_x is not None and ratio_y is not None:
+        from_centre = bool(shift or alt)
+        mods = (bool(ctrl), from_centre)
+        base = drag.get("base")
+        if base is None or base.get("mods") != mods:
+            state = self.state(clip)
+            base = self._scale_geometry(clip, state, handle, from_centre)
+            if base is None:
+                return
+            base["mods"] = mods
+            base["pointer"] = project
+            drag["base"] = base
+        state = base["state"]
+        u, v, uu, vv = base["u"], base["v"], base["uu"], base["vv"]
+        # Work from the handle's real position plus the pointer delta, not from the raw
+        # pointer: under an aspect lock the handle is not under the cursor, and a rebase
+        # must continue from where the gesture actually is.
+        px = base["grabbed"][0] + (project[0] - base["pointer"][0])
+        py = base["grabbed"][1] + (project[1] - base["pointer"][1])
+        dx, dy = px - base["fixed"][0], py - base["fixed"][1]
+        along_x = (dx * u[0] + dy * u[1]) / uu
+        along_y = (dx * v[0] + dy * v[1]) / vv
+        # A side handle sits on the opposite edge's axis, so that ratio is undefined and
+        # the axis is left exactly as it was.
+        ratio_x = along_x / base["hu"] if abs(base["hu"]) > 1e-6 else None
+        ratio_y = along_y / base["hv"] if abs(base["hv"]) > 1e-6 else None
+        if ratio_x is None and ratio_y is None:
+            return
+        if ctrl and ratio_x is not None and ratio_y is not None:
             ratio = max(abs(ratio_x), abs(ratio_y))
-            ratio_x = ratio * (1 if ratio_x >= 0 else -1)
-            ratio_y = ratio * (1 if ratio_y >= 0 else -1)
+            ratio_x = ratio_y = ratio
+        _x0, _y0, fit_w, fit_h = T.fit_rect(self.project_size(), self.image_size(clip))
+        # Positive ratios only: a resize clamps at a small minimum instead of flipping.
+        # Flipping stays an explicit inspector operation (flip H/V).
         if ratio_x is not None:
-            CH.set_value(clip, "transform.scale_x", state.scale_x * ratio_x,
-                         self.local_frame(clip), bool(self.session.auto_keyframe.get()))
+            ratio_x = max(ratio_x, self._min_ratio(state.scale_x, fit_w))
         if ratio_y is not None:
-            CH.set_value(clip, "transform.scale_y", state.scale_y * ratio_y,
-                         self.local_frame(clip), bool(self.session.auto_keyframe.get()))
+            ratio_y = max(ratio_y, self._min_ratio(state.scale_y, fit_h))
+        scale_x = state.scale_x * (1.0 if ratio_x is None else ratio_x)
+        scale_y = state.scale_y * (1.0 if ratio_y is None else ratio_y)
+        # Scaling happens around the anchor, so ask where the pinned point lands and move
+        # the picture by the difference. Translation is uniform, so the pinned corner/edge
+        # ends up exactly where it started in composition space.
+        moved = self._state_with_scale(state, scale_x, scale_y)
+        landed = T.forward(base["fixed_src"], moved, self.project_size(), self.image_size(clip))
+        offset_x = base["fixed"][0] - landed[0]
+        offset_y = base["fixed"][1] - landed[1]
+        frame = self.local_frame(clip)
+        auto = bool(self.session.auto_keyframe.get())
+        if ratio_x is not None:
+            CH.set_value(clip, "transform.scale_x", scale_x, frame, auto)
+        if ratio_y is not None:
+            CH.set_value(clip, "transform.scale_y", scale_y, frame, auto)
+        T.set_position(clip, state.position_x + offset_x, state.position_y + offset_y,
+                       frame, auto)
 
     def _pin_drag(self, drag, pos):
         """Move every selected pin by the same amount: a group keeps its shape."""

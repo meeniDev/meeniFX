@@ -115,8 +115,14 @@ recording bar now opt-in under Preferences.
 
 **Preview and transform** — fit/percentage zoom, cursor-centred wheel zoom, pan, guides.
 A bounding box with eight scale handles, rotation knob, visible anchor, motion path and
-warp pins; Shift constrains, arrows nudge by a project pixel, every drag is one undo step.
-The overlay is editing-only and never reaches exported frames.
+warp pins. A corner drag is a free transform: the dragged corner follows the pointer on
+both axes while the opposite corner stays fixed in composition space, including on
+rotated, non-uniformly scaled, re-anchored or non-square clips and at any preview zoom.
+Ctrl keeps the aspect ratio captured when the drag (or the current modifier state)
+began, Shift resizes from the centre, Ctrl+Shift does both; side handles change one
+local axis; a resize stops at a three-pixel minimum and never flips. Shift still
+constrains a move to one axis and snaps rotation to 15 degrees. The overlay is
+editing-only and never reaches exported frames.
 
 **Effects** — Mosaic, ASCII Art, Face Tracker, Hand Tracker, Blob Tracker, puppet warp,
 corner pin, colour, blur, glow, plus audio effects (filter, compressor, limiter, delay,
