@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import QFrame
 
 from conftest import build_engine
 from meenifx import thumbnails as THUMBS
+from meenifx.icons import icon
 from meenifx.model import looks as LOOKS
 from meenifx.ui.panels import EffectsPanel
 
@@ -69,6 +70,23 @@ def test_browser_toggle_icons_share_one_grid(panel_and_clip):
                    browser.grid_button, browser.list_button, browser.menu_button):
         assert (button.iconSize().width(), button.iconSize().height()) == (16, 16)
         assert button.size().width() == button.size().height() == 28
+
+
+def test_browser_toggle_icons_are_real_shared_vectors(panel_and_clip):
+    """Favorites/Recent must not be blank or malformed private-painter glyphs."""
+    panel, _engine, _clip = panel_and_clip
+    browser = panel.browser
+    for button in (browser.favorites_button, browser.recent_button,
+                   browser.grid_button, browser.list_button):
+        pixmap = button.icon().pixmap(16, 16)
+        assert not pixmap.isNull()
+        image = pixmap.toImage()
+        assert any(image.pixelColor(x, y).alpha() for x in range(image.width())
+                   for y in range(image.height())), "the button icon must not be blank"
+    for name in ("star", "clock", "grid", "list"):
+        image = icon(name, "#ffffff", 16).pixmap(16, 16).toImage()
+        assert any(image.pixelColor(x, y).alpha() for x in range(image.width())
+                   for y in range(image.height()))
 
 
 def test_tracker_cards_are_labelled_instead_of_blank(panel_and_clip):

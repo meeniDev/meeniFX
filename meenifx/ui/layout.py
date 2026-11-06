@@ -15,7 +15,7 @@ import os
 from PyQt6.QtCore import QSettings, QStandardPaths, Qt, QTimer
 from PyQt6.QtWidgets import QApplication
 
-LAYOUT_VERSION = 8
+LAYOUT_VERSION = 9
 
 # key -> (dock title, default area, minimum size in pixels).
 # Preview is a normal dock (never the central widget) so it stays movable, floatable
@@ -27,12 +27,13 @@ DOCK_SPECS = {
     "effects": ("Effects", Qt.DockWidgetArea.RightDockWidgetArea, (320, 200)),
     "properties": ("Properties", Qt.DockWidgetArea.RightDockWidgetArea, (320, 160)),
     "timeline": ("Timeline", Qt.DockWidgetArea.BottomDockWidgetArea, (380, 150)),
+    "keyframe": ("Keyframe Editor", Qt.DockWidgetArea.BottomDockWidgetArea, (380, 160)),
     "graph": ("Graph Editor", Qt.DockWidgetArea.BottomDockWidgetArea, (360, 150)),
 }
 
 SIDE_KEYS = ("project", "preview", "effects", "properties")
 # Docks that share the bottom area with the timeline (tabbed with it by default).
-BOTTOM_KEYS = ("timeline", "graph")
+BOTTOM_KEYS = ("timeline", "keyframe", "graph")
 
 # Roughly: left 16 %, preview the rest, right 24 %; timeline 30 % of the dock area.
 LEFT_SHARE, RIGHT_SHARE, TIMELINE_SHARE = 0.16, 0.24, 0.30
@@ -97,13 +98,13 @@ def build_default_layout(window, apply_sizes=False):
     # while an effect is edited, and each keeps its own title bar and View entry.
     window.splitDockWidget(docks["effects"], docks["properties"], Qt.Orientation.Vertical)
     docks["project"].raise_()
-    graph = docks.get("graph")
-    if graph is not None and graph not in docks["timeline"].parentWidget().findChildren(type(graph)):
-        pass
-    if graph is not None:
-        # Tabbed behind the timeline: one dock row, no lost vertical space.
-        window.tabifyDockWidget(docks["timeline"], graph)
-        docks["timeline"].raise_()
+    # Both animation editors live in the same bottom tab group as the Timeline: one
+    # dock row, no lost vertical space, and each is independently dockable/floatable.
+    for key in ("keyframe", "graph"):
+        editor = docks.get(key)
+        if editor is not None:
+            window.tabifyDockWidget(docks["timeline"], editor)
+    docks["timeline"].raise_()
     # resizeDocks() only works once the window has its real geometry, so the caller
     # decides when to apply the shares (MainWindow does it on the first show).
     if apply_sizes:

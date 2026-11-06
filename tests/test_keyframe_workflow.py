@@ -507,9 +507,8 @@ def _clip(window):
     return window.engine.timeline.find_clip(window._test_clip_id)
 
 
-def test_timeline_double_click_lane_adds_a_keyframe(editor, qapp):
-    from PyQt6.QtCore import QEvent, QPointF, Qt
-    from PyQt6.QtGui import QMouseEvent
+def test_timeline_animation_badge_opens_the_keyframe_editor(editor, qapp):
+    from PyQt6.QtCore import Qt
 
     canvas = editor.timeline_panel.canvas
     canvas.ppf = 6.0
@@ -518,16 +517,20 @@ def test_timeline_double_click_lane_adds_a_keyframe(editor, qapp):
     _key(editor.engine, clip, "transform.opacity", 0, 100)
     pump(qapp, 0.2)
     clip = _clip(editor)
+    summary = canvas._keyframe_summary_rect(clip)
+    assert canvas._keyframe_toggle_hit(summary.center().x(), summary.center().y()) is clip
     canvas._toggle_keyframe_rows(clip)
-    _full, entries = canvas._keyframe_row_geometry(clip)
-    row, mid = entries[0]
-    # Click the middle of frame 24's cell: the left edge is a boundary between two frames,
-    # and rounding there made this test land on 23 depending on the zoom that ran before.
-    x = canvas.x_at(clip.timeline_start + 24) + canvas.ppf / 2.0
-    event = QMouseEvent(QEvent.Type.MouseButtonDblClick, QPointF(x, mid),
-                        QPointF(x, mid), Qt.MouseButton.LeftButton,
-                        Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
-    canvas.mouseDoubleClickEvent(event)
+    pump(qapp, 0.2)
+    assert editor.docks["keyframe"].isVisible()
+    assert canvas._visible_keyframe_rows(clip, summary) == []
+
+    panel = editor.keyframe_editor
+    row = next(item for item in panel.rows if item["id"] == "transform.opacity")
+    panel.fit()
+    panel.begin_key_drag(row, 0, panel.x_of(0), Qt.KeyboardModifier.NoModifier)
+    panel.drag_to(panel.x_of(24))
+    panel.end_key_drag()
+    pump(qapp, 0.2)
     assert 24 in _times(_clip(editor), "transform.opacity")
 
 
@@ -543,11 +546,14 @@ def test_timeline_and_graph_editor_share_the_selection(editor, qapp):
     pump(qapp, 0.15)
     assert editor.graph_editor.selection == {("transform.opacity", 20)}, \
         "a timeline selection shows up in the Graph Editor"
+    assert editor.keyframe_editor.selected_entries() == [(clip.id, "transform.opacity", 20)], \
+        "the Keyframe Editor reads the same shared selection"
 
     editor.graph_editor.select_keys({("transform.opacity", 0)})
     pump(qapp, 0.15)
     assert editor.engine.session.key_selection == {(clip.id, "transform.opacity", 0)}, \
         "a Graph Editor selection shows up on the timeline"
+    assert editor.keyframe_editor.selected_entries() == [(clip.id, "transform.opacity", 0)]
 
     canvas.open_keyframes_in_graph([(clip.id, "transform.opacity", 20)])
     pump(qapp, 0.25)
@@ -581,24 +587,23 @@ def test_envelope_drag_is_one_undo_step(editor, qapp):
     assert CH.value_at(_clip(editor), "transform.opacity", 10) == pytest.approx(100, abs=3)
 
 
-def test_lane_keyframe_drag_snaps_to_the_playhead(editor, qapp):
+def test_keyframe_editor_drag_snaps_to_the_playhead(editor, qapp):
     from PyQt6.QtCore import Qt
 
-    canvas = editor.timeline_panel.canvas
-    canvas.ppf = 6.0
-    canvas.scroll_x = 0.0
     clip = _clip(editor)
     _key(editor.engine, clip, "transform.opacity", 0, 100)
     pump(qapp, 0.2)
     clip = _clip(editor)
-    canvas._toggle_keyframe_rows(clip)
+    editor.timeline_panel.canvas._toggle_keyframe_rows(clip)
     editor.engine.session.set_playhead(40)
     pump(qapp, 0.15)
 
-    row = canvas.animation_rows(clip)[0]
-    canvas._begin_keyframe_drag(clip, row, 0, Qt.KeyboardModifier.NoModifier)
-    canvas._keyframe_move(canvas.x_at(clip.timeline_start + 40) + 3)
-    canvas._keyframe_release()
+    panel = editor.keyframe_editor
+    row = next(item for item in panel.rows if item["id"] == "transform.opacity")
+    panel.fit()
+    panel.begin_key_drag(row, 0, panel.x_of(0), Qt.KeyboardModifier.NoModifier)
+    panel.drag_to(panel.x_of(40) + 3)
+    panel.end_key_drag()
     pump(qapp, 0.2)
     assert 40 in _times(_clip(editor), "transform.opacity"), "snapped onto the playhead"
 

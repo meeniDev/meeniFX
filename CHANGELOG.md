@@ -2,6 +2,27 @@
 
 ## Unreleased (2026-11-05)
 
+### Keyframe editing
+
+- **Clean timeline, dedicated editor:** clips with animation now show one compact key-count
+  badge instead of dense property rows and tiny diamonds. Clicking the badge raises the new
+  dockable **Keyframe Editor**; trimming, moving, splitting, snapping and linked clips are
+  unchanged.
+- **Two named views, one model:** the Keyframe Editor and Graph Editor switch through
+  explicit mode buttons and share channels and selection. Add/delete, multi-select, group
+  drag, copy/paste, duplicate, typed values, previous/next, zoom, pan, fit, snapping,
+  playhead scrubbing and collapsible groups live in the Keyframe Editor; easing, speed
+  graphs and Bezier handles stay in the Graph Editor.
+- **Drag duplication fixed:** the Keyframe Editor now rebuilds every mouse move from the
+  press-time snapshot. Earlier moves can no longer leave extra keys behind, dragging starts
+  without a jump, and one drag is one undo step. Regression tests cover multi-row group
+  moves and repeated moves during a single drag.
+- **Docking and layout:** the Keyframe Editor is a closable, resizable, floatable dock next
+  to the Timeline, reopenable from View (`Shift+G`). Layout v9 adds it to saved workspaces;
+  older layouts fall back to the default.
+- **Animation baking:** Bounce still bakes visible Y motion plus opacity, and the baked Y
+  curve is now asserted in both editors as well as at the model and export level.
+
 ### Reliability and performance
 
 - **Auto Captions on linked clips:** linked-selection expansion no longer loses the clip

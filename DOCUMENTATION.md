@@ -138,12 +138,15 @@ image and scales the result back, and detector results are cached for repeated p
 export frames. Hand Tracker remains a skin-colour/morphology detector, not a hand-pose
 model.
 
-**Keyframes and the Graph Editor** — every numeric parameter animates: stopwatch, diamond,
-previous/next keys, Auto-Keyframe (on = key at playhead, off = shift the whole curve).
-Clip opacity, effect envelopes and audio gain animate too. Text has its own animation
-presets. Bake samples every channel the preset actually moves, including a vertical-only
-motion such as **Bounce** (its Y curve remains visible after baking), then removes the
-procedural instance so preview and export do not apply the motion twice.
+**Keyframes, Keyframe Editor and Graph Editor** — every numeric parameter animates:
+stopwatch, diamond, previous/next keys, Auto-Keyframe (on = key at playhead, off = shift the
+whole curve). Clip opacity, effect envelopes and audio gain animate too. The timeline keeps
+clips compact with one key-count badge; timing and values live in the dockable **Keyframe
+Editor**, while interpolation and Bezier curves live in the **Graph Editor**. Both are
+named modes over one animation model and share the selection immediately. Text has its own
+animation presets. Bake samples every channel the preset actually moves, including a
+vertical-only motion such as **Bounce** (its Y curve remains visible after baking), then
+removes the procedural instance so preview and export do not apply the motion twice.
 
 **Animation presets** — an Animations tab with the 81 shipped presets folded into 22
 families (one card per behaviour, with a Mode In/Out/Loop/Both and a Direction selector
@@ -242,7 +245,34 @@ file dialogs; no status bar, hints live in tooltips; fading toasts for the few m
 that matter; a crash guard that logs an exception from a Qt slot instead of aborting the
 application; docks that persist their layout.
 
-## 4. The Graph Editor today
+## 4. The Keyframe Editor and Graph Editor today
+
+Animation has two clearly labelled views over the same channels. The **Keyframe Editor**
+dock (`Shift+G`, tabbed next to the Timeline) handles timing and values; the **Graph
+Editor** dock (`G`) handles interpolation and curves. The mode buttons at the top of either
+panel raise the other one, and selection is shared through `session.key_selection`.
+
+### Keyframe Editor
+
+- **Readable rows** — Transform, Compositing, each effect by name, Text and Audio are
+  collapsible groups; every numeric property gets a label lane, a live value at the
+  playhead and its own diamonds. Non-numeric properties are not plotted or offered.
+- **Timing** — click to select, Ctrl/Shift-click for a multi-selection, and drag any
+  selected key to move the whole group. The drag is rebuilt from the press-time snapshot
+  on every mouse move, so the old key disappears instead of leaving a trail of duplicates,
+  and the release commits exactly one undo step. The playhead within 7 px is a snap target;
+  project frames are always whole numbers. Clip ends and locked tracks are respected.
+- **Values** — the toolbar field edits every selected key; with no selection it keys the
+  active property at the playhead. Double-clicking a key focuses the same field. Edits are
+  undoable and immediately update the preview and Graph Editor.
+- **Navigation and view** — previous/next on the active property, fit all or fit selection,
+  wheel zoom anchored at the pointer, middle-drag pan, playhead scrub, collapsible groups,
+  Add/Delete/Copy/Paste/Duplicate, and *Open in Graph Editor*.
+- **Docking** — a normal `QDockWidget` beside the Timeline: movable, floatable, tabbable,
+  closable, resizable, reopenable from View and independent of the Graph Editor's geometry.
+  Layout v9 adds it to saved workspaces; older saved layouts fall back to the default.
+
+### Graph Editor
 
 The panel lives in the **Graph Editor** dock (`G`) and edits the selected clip's curves.
 
@@ -277,7 +307,8 @@ The panel lives in the **Graph Editor** dock (`G`) and edits the selected clip's
 | Graph Editor crash | a channel holding a non-numeric animation (a colour preset stored as a curve) reached `float()` inside `paintEvent`; PyQt6 turned that into `qFatal` — no traceback, no window | non-numeric channels are never plotted; the guard logs instead of aborting |
 | Crash reporting | an exception inside a Qt slot killed the process silently | "meeniFX hit a problem" dialog with the traceback, the crash-log path, *Copy details* and *Open log folder*; an unclean session offers recovery, a clean quit clears the marker |
 | File dialogs | native Windows dialogs, light and out of place | themed, non-native Open/Save/Export dialogs that match the app |
-| Keyframe dragging (timeline and graph) | keys moved only when the button came up | live dragging, snapped to the playhead, one undo step per gesture |
+| Timeline animation display | every keyframe was packed into dense purple/yellow rows inside the clip | one compact `◆ N keys` badge opens the dedicated Keyframe Editor |
+| Keyframe dragging (Keyframe Editor and Graph Editor) | keys moved only when the button came up; the Keyframe Editor initially read live records, leaving a trail of intermediate keys | live dragging from the press-time snapshot; the old key is replaced, no duplicates, snapped to the playhead, one undo step per gesture |
 | Playhead dragging (graph) | the "scrub" branch was unreachable; the playhead could only be moved by clicking empty space | ruler press jumps and scrubs, grabbing the line drags it, hover cursor feedback |
 | Key drag repaint | a local variable named `time` shadowed the module, so every move raised on its last line — the model moved but the repaint never ran | renamed; the canvas repaints on every move (regression test included) |
 | Playhead during playback | the graph's red line froze on the frame where playback started, because playback advances the playhead *silently* and the curve view never listened | subscribes to the low-level move signal and repaints the two affected columns |
@@ -353,3 +384,11 @@ Strength, `.mfxlook` round trips). The Graph Editor work above is pinned by
 `tests/test_graph_editor.py`, `tests/test_graph_editor_perf.py` and
 `tests/test_graph_editor_robustness.py` (real mouse and wheel events, live-drag and
 playhead-follow regressions, and a guard against the paint crashes).
+
+The Keyframe Editor and the compact clip badge are pinned by `tests/test_keyframe_editor.py`
+(lanes and groups, add/delete, multi-select, the press-time snapshot group drag and its single
+undo entry, clipboard, value editing, zoom/fit/snap and the shared selection with the Graph
+Editor); `tests/test_keyframe_ui.py` and `tests/test_keyframe_workflow.py` cover the badge and
+the end-to-end workflow, and `tests/test_presets.py` checks that baked Bounce, Slide, Fade,
+Flip, Scale and Rotation keep every animated channel - the Bounce Y position included - and
+evaluate to the same values as the procedural animation.

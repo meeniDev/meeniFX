@@ -15,11 +15,10 @@ makes "double-click again removes it" discoverable.
 from __future__ import annotations
 
 import json
-import math
 
 from PyQt6.QtCore import (QEvent, QMimeData, QPoint, QPointF, QRectF, QSettings, QSize, Qt,
                           QTimer, pyqtSignal)
-from PyQt6.QtGui import QColor, QDrag, QIcon, QPainter, QPen, QPixmap, QPolygonF
+from PyQt6.QtGui import QColor, QDrag, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
                              QMenu, QScrollArea, QTabBar, QToolButton, QVBoxLayout, QWidget)
 
@@ -77,40 +76,6 @@ KEYWORDS = {
     "audio_reverb": ("room", "echo", "space"),
     "audio_delay": ("echo", "delay"),
 }
-
-
-def _glyph(kind, color, size=16):
-    """A crisp little icon for the few marks the shared icon set does not have yet."""
-    pixmap = QPixmap(size * 2, size * 2)
-    pixmap.setDevicePixelRatio(2.0)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-    painter.scale(2.0 * size / 16.0, 2.0 * size / 16.0)
-    painter.setPen(QPen(QColor(color), 1.4))
-    painter.setBrush(Qt.BrushStyle.NoBrush)
-    if kind == "grid":
-        for row in range(2):
-            for column in range(2):
-                painter.drawRoundedRect(QRectF(2.5 + column * 6, 2.5 + row * 6, 5, 5), 1, 1)
-    elif kind == "list":
-        for row in range(3):
-            y = 4.0 + row * 4.0
-            painter.drawLine(QPointF(2.5, y), QPointF(5.5, y))
-            painter.drawLine(QPointF(7.5, y), QPointF(13.5, y))
-    elif kind == "star":
-        points = []
-        for step in range(10):
-            angle = math.radians(-90 + step * 36)
-            radius = 6.0 if step % 2 == 0 else 2.6
-            points.append(QPointF(8 + radius * math.cos(angle), 8.2 + radius * math.sin(angle)))
-        painter.drawPolygon(QPolygonF(points))
-    elif kind == "clock":
-        painter.drawEllipse(QRectF(2.5, 2.5, 11, 11))
-        painter.drawLine(QPointF(8, 4.6), QPointF(8, 8.8))
-        painter.drawLine(QPointF(8, 8.8), QPointF(10.6, 8.8))
-    painter.end()
-    return QIcon(pixmap)
 
 
 # ------------------------------------------------------------------------------ cards
@@ -336,15 +301,15 @@ class BrowserView(QWidget):
         self.search.addAction(icon("search"), QLineEdit.ActionPosition.LeadingPosition)
         self.search.textChanged.connect(self._search_changed)
 
-        self.favorites_button = self._toggle(_glyph("star", tokens.COLORS["muted"]), "Favorites")
-        self.recent_button = self._toggle(_glyph("clock", tokens.COLORS["muted"]), "Recently used")
+        self.favorites_button = self._toggle(icon("star", tokens.COLORS["muted"]), "Favorites")
+        self.recent_button = self._toggle(icon("clock", tokens.COLORS["muted"]), "Recently used")
         self.favorites_button.clicked.connect(lambda: self._set_filter("favorites"))
         self.recent_button.clicked.connect(lambda: self._set_filter("recent"))
         self.category_combo = QComboBox()
         self.category_combo.setToolTip("Filter by category")
         self.category_combo.currentIndexChanged.connect(self._category_changed)
-        self.grid_button = self._toggle(_glyph("grid", tokens.COLORS["muted"]), "Grid view")
-        self.list_button = self._toggle(_glyph("list", tokens.COLORS["muted"]), "List view")
+        self.grid_button = self._toggle(icon("grid", tokens.COLORS["muted"]), "Grid view")
+        self.list_button = self._toggle(icon("list", tokens.COLORS["muted"]), "List view")
         self.grid_button.clicked.connect(lambda: self.set_view_mode("grid"))
         self.list_button.clicked.connect(lambda: self.set_view_mode("list"))
         self.menu_button = QToolButton()

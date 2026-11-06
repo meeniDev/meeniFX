@@ -174,6 +174,22 @@ def test_changing_a_tracker_checkbox_after_a_look_returns_to_custom(editor, qapp
     assert entry["params"]["connector_mode"] == "nearest"
 
 
+def test_label_clear_button_is_vertically_centred(editor, qapp):
+    from PyQt6.QtWidgets import QToolButton
+
+    panel = editor.effects_panel
+    panel.add_effect("face_tracker")
+    pump(qapp, 0.25)
+    row = next(item for item in panel._rows
+               if item["kind"] == "text_param" and item["name"] == "label_text")
+    field = row["field"]
+    clear = next(action for action in field.actions() if action.objectName() == "clearText")
+    button = next(child for child in field.findChildren(QToolButton)
+                  if child.defaultAction() is clear)
+    assert abs(button.geometry().center().y() - field.rect().center().y()) <= 1, \
+        "the clear X must sit on the field's centre line"
+
+
 def test_label_field_can_be_cleared_from_the_properties_panel(editor, qapp):
     panel = editor.effects_panel
     panel.add_effect("face_tracker")
@@ -181,15 +197,16 @@ def test_label_field_can_be_cleared_from_the_properties_panel(editor, qapp):
     row = next(item for item in panel._rows
                if item["kind"] == "text_param" and item["name"] == "label_text")
     field = row["field"]
-    assert field.isClearButtonEnabled(), "the label needs a one-click clear control"
+    clear = next((action for action in field.actions()
+                  if action.objectName() == "clearText"), None)
+    assert clear is not None, "the label needs a one-click clear control"
     clip = next(clip for clip in editor.engine.timeline.all_clips()
                 if any(effect["effect_id"] == "face_tracker" for effect in clip.effects))
     entry = next(effect for effect in clip.effects if effect["effect_id"] == "face_tracker")
     field.setText("Face")
     field.editingFinished.emit()
     assert entry["params"]["label_text"] == "Face"
-    field.setText("")
-    field.editingFinished.emit()
+    clear.trigger()
     assert entry["params"]["label_text"] == "", "clearing the field must remove the label"
 
 
@@ -211,6 +228,18 @@ def test_labels_are_off_by_default_and_numbering_is_separate():
     assert not np.array_equal(face.apply(frame), frame), "Labels must draw their text"
     face.label_text.set("")
     assert np.array_equal(face.apply(frame), frame), "clearing the label must remove it"
+    # A saved named Look may still contain show_labels=True.  The checkbox is the
+    # authority at render time, or the user sees labels with the box unchecked.
+    face.show_labels.set(True)
+    face.viz_preset.set("neon")
+    face.label_text.set("Face")
+    face.show_labels.set(False)
+    assert face._tracking_style()["show_labels"] is False
+    hidden = face.apply(frame)
+    face.show_labels.set(True)
+    shown = face.apply(frame)
+    assert not np.array_equal(hidden, shown), "unchecking Labels must hide the text"
+    face.viz_preset.set("custom")
     face.show_labels.set(False)
     face.show_numbers.set(True)
     assert not np.array_equal(face.apply(frame), frame), "Numbers must work independently"

@@ -132,8 +132,9 @@ def test_previous_and_next_jump_between_keyframes(editor, qapp):
     assert editor.engine.session.playhead == 30
 
 
-def test_timeline_diamonds_expand_drag_and_delete(editor, qapp):
+def test_timeline_shows_a_compact_badge_and_opens_the_keyframe_editor(editor, qapp):
     from PyQt6.QtCore import Qt
+
     canvas = editor.timeline_panel.canvas
     canvas.ppf = 6.0
     canvas.scroll_x = 0.0
@@ -143,25 +144,34 @@ def test_timeline_diamonds_expand_drag_and_delete(editor, qapp):
     clip = _clip(editor)
     rows = canvas.animation_rows(clip)
     assert len(rows) == 1 and rows[0]["value"].keyframes
+    summary = canvas._keyframe_summary_rect(clip)
+    assert summary.width() > 20, "an animated clip has one compact summary badge"
+    assert canvas._keyframe_toggle_hit(summary.center().x(), summary.center().y()) is clip
+    assert canvas._keyframe_hit(summary.center().x(), summary.center().y()) == (None, None, None)
 
     canvas._toggle_keyframe_rows(clip)
-    assert clip.id in canvas._expanded_clips
-    _full, entries = canvas._keyframe_row_geometry(clip)
-    assert entries, "the expanded clip draws an animation row"
-    row, mid = entries[0]
-    x = canvas.x_at(clip.timeline_start + row["value"].keyframes[0].time)
-    hit_clip, hit_row, hit_time = canvas._keyframe_hit(x, mid)
-    assert hit_clip is clip and hit_time == 0
+    pump(qapp, 0.25)
+    assert editor.docks["keyframe"].isVisible()
+    assert not canvas._expanded_clips, "the timeline must not grow dense keyframe rows"
+    assert canvas._visible_keyframe_rows(clip, summary) == []
 
+    panel = editor.keyframe_editor
+    channel = rows[0]["channel"]
+    row = next(item for item in panel.rows if item["id"] == channel)
+    panel.fit()
+    panel._set_active_channel(channel)
+    panel.session.set_key_selection({(clip.id, channel, 0)})
     before = editor.qt_undo_stack.undo_stack.count()
-    canvas._begin_keyframe_drag(clip, hit_row, hit_time, Qt.KeyboardModifier.NoModifier)
-    canvas._keyframe_move(canvas.x_at(clip.timeline_start + 12))
-    canvas._keyframe_release()
+    panel.begin_key_drag(row, 0, panel.x_of(0), Qt.KeyboardModifier.NoModifier)
+    panel.drag_to(panel.x_of(12))
+    panel.end_key_drag()
     pump(qapp, 0.2)
-    assert _clip(editor).effects[0]["params"]["scale"].key_at(12) is not None
+    stored = _clip(editor).effects[0]["params"]["scale"]
+    assert stored.key_at(12) is not None
+    assert stored.key_at(0) is None, "dragging moves a keyframe instead of copying it"
     assert editor.qt_undo_stack.undo_stack.count() == before + 1, "a keyframe drag is one undo step"
 
-    assert canvas._delete_selected_keyframes()
+    assert panel.delete_selected()
     pump(qapp, 0.2)
     assert _clip(editor).effects[0]["params"]["scale"].key_at(12) is None
     editor.engine.session.undo()
@@ -171,21 +181,24 @@ def test_timeline_diamonds_expand_drag_and_delete(editor, qapp):
 
 def test_dragging_a_keyframe_snaps_to_the_playhead(editor, qapp):
     from PyQt6.QtCore import Qt
-    canvas = editor.timeline_panel.canvas
-    canvas.ppf = 6.0
-    canvas.scroll_x = 0.0
+
     _param_row(editor)["stopwatch"].setChecked(True)
     pump(qapp, 0.25)
     editor.engine.session.set_playhead(40)
     pump(qapp, 0.15)
 
+    from meenifx.model import channels as CH
+
     clip = _clip(editor)
-    row = canvas.animation_rows(clip)[0]
-    key_time = row["value"].keyframes[0].time
-    canvas._begin_keyframe_drag(clip, row, key_time, Qt.KeyboardModifier.NoModifier)
+    editor.timeline_panel.canvas._toggle_keyframe_rows(clip)
+    panel = editor.keyframe_editor
+    channel = CH.effect_channel(clip.effects[0]["effect_id"], "scale")
+    row = next(item for item in panel.rows if item["id"] == channel)
+    panel.fit()
+    panel.begin_key_drag(row, 0, panel.x_of(0), Qt.KeyboardModifier.NoModifier)
     # Release 3 px away from the playhead: inside the snap distance, so it lands on it.
-    canvas._keyframe_move(canvas.x_at(clip.timeline_start + 40) + 3)
-    canvas._keyframe_release()
+    panel.drag_to(panel.x_of(40) + 3)
+    panel.end_key_drag()
     pump(qapp, 0.2)
     assert _clip(editor).effects[0]["params"]["scale"].key_at(40) is not None
 
@@ -234,4 +247,18 @@ def test_paused_parameter_edit_rerenders_the_preview(editor, qapp):
     pump(qapp, 0.8)
     changed = editor.last_frame
     assert float(np.abs(base.astype(int) - changed.astype(int)).mean()) > 1.0
+
+
+def test_disabling_an_effect_rerenders_the_preview_immediately(editor, qapp):
+    import numpy as np
+    pump(qapp, 0.6)
+    base = editor.last_frame.copy()
+    clip = _clip(editor)
+    entry = clip.effects[0]
+    editor.effects_panel._set_enabled(clip, entry, False)
+    pump(qapp, 0.8)
+    changed = editor.last_frame
+    assert not entry.get("enabled", True)
+    assert float(np.abs(base.astype(int) - changed.astype(int)).mean()) > 1.0, \
+        "toggling an effect must reach the preview without another edit"
 

@@ -239,6 +239,7 @@ class EffectsPanel(QWidget):
         self.engine.session.apply_to_clips([clip.id for clip in targets], label, add)
         self.browser.note_recent(item)
         self.properties_requested.emit()
+        self._notify()
         self.refresh_properties()
 
     def _browser_remove(self, item):
@@ -265,6 +266,7 @@ class EffectsPanel(QWidget):
             clip.effects = [entry for entry in clip.effects
                             if entry.get("effect_id") != key]
         self.engine.session.apply_to_clips([clip.id for clip in clips], f"Remove {name}", strip)
+        self._notify()
         self.refresh_properties()
 
     def _choose_effect_instance(self, clips, key, name):
@@ -298,6 +300,7 @@ class EffectsPanel(QWidget):
             clip.effects = kept
         label = f"Remove every {name}" if index is None else f"Remove {name} #{index + 1}"
         self.engine.session.apply_to_clips([clip.id for clip in clips], label, strip)
+        self._notify()
         self.refresh_properties()
 
     def _remove_style(self, look_id):
@@ -318,6 +321,7 @@ class EffectsPanel(QWidget):
             clip.effects = [entry for entry in clip.effects
                             if entry.get("look_id") not in groups]
         self.engine.session.apply_to_clips([clip.id for clip in clips], "Remove style", strip)
+        self._notify()
         self.refresh_properties()
 
     def _apply_animation_item(self, item):
@@ -406,6 +410,7 @@ class EffectsPanel(QWidget):
                                      "params": copy.deepcopy(effect.capture_params())})
         self.engine.session.apply_to_clips([c.id for c in clips], "Add effect", add)
         self.properties_requested.emit()
+        self._notify()
         self.refresh_properties()
 
     # ------------------------------------------------------------------- looks
@@ -418,6 +423,7 @@ class EffectsPanel(QWidget):
         applied = self.engine.session.apply_look(look_id, ids=[clip.id for clip in clips])
         if applied:
             self.properties_requested.emit()
+            self._notify()
             self.refresh_properties()
         return applied
 
@@ -481,6 +487,7 @@ class EffectsPanel(QWidget):
             target.effects = [item for item in target.effects
                               if group is None or item.get("look_id") != group]
         self.engine.session.apply_to_clips([clip.id], "Remove look", remove)
+        self._notify()
         self.refresh_properties()
 
     # --------------------------------------------------------------- properties
@@ -1698,6 +1705,7 @@ class EffectsPanel(QWidget):
         def action(target):
             change(target.effects)
         self.engine.session.apply_to_clips([clip.id], label, action)
+        self._notify()
         self.refresh_properties()
 
     def _move_member(self, clip, index, delta):
@@ -1796,7 +1804,22 @@ class EffectsPanel(QWidget):
                 self._palette_row(target, clip, entry, spec, str(current or ""))
             else:
                 edit = QLineEdit("" if current is None else str(current))
-                edit.setClearButtonEnabled(True)
+                clear = edit.addAction(icon("close", tokens.COLORS["muted"]),
+                                       QLineEdit.ActionPosition.TrailingPosition)
+                clear.setObjectName("clearText")
+                clear.setToolTip(f"Clear {spec.label.lower()}")
+                # The global toolbutton rule gives every button a 26 px minimum.  The
+                # line edit's action button then hangs below its 28 px field, which is
+                # the off-centre X the user sees.  Keep this one inside the field.
+                clear_button = next((child for child in edit.findChildren(QToolButton)
+                                     if child.defaultAction() is clear), None)
+                if clear_button is not None:
+                    clear_button.setFixedSize(18, 18)
+                    clear_button.setStyleSheet(
+                        "QToolButton { min-width: 18px; max-width: 18px; min-height: 18px; "
+                        "max-height: 18px; padding: 0; margin: 0; border: 0; background: transparent; }")
+                clear.triggered.connect(lambda _checked=False, c=clip, e=entry, n=spec.name,
+                                        w=edit, s=spec: self._clear_text(c, e, n, w, s))
                 edit.editingFinished.connect(lambda c=clip, e=entry, n=spec.name, w=edit, s=spec:
                                              self._commit_choice(c, e, n, w.text(), s))
                 self._rows.append({"kind": "text_param", "clip_id": clip.id, "entry": entry,
@@ -2184,9 +2207,16 @@ class EffectsPanel(QWidget):
         self._notify()
         self.refresh_properties()
 
+    def _clear_text(self, clip, entry, name, edit, spec):
+        if not edit.text():
+            return
+        edit.clear()
+        self._commit_choice(clip, entry, name, "", spec)
+
     def _set_enabled(self, clip, entry, enabled):
         self.engine.session.apply_to_clips([clip.id], "Toggle effect",
                                            lambda c: self._entry(c, entry["effect_id"]).__setitem__("enabled", enabled))
+        self._notify()
         self.refresh_properties()
 
     @staticmethod
@@ -2196,6 +2226,7 @@ class EffectsPanel(QWidget):
     def _remove_effect(self, clip, key):
         self.engine.session.apply_to_clips([clip.id], "Remove effect",
                                            lambda c: setattr(c, "effects", [e for e in c.effects if e["effect_id"] != key]))
+        self._notify()
         self.refresh_properties()
 
     def _move_effect(self, clip, key, direction):
@@ -2205,6 +2236,7 @@ class EffectsPanel(QWidget):
             if i is not None and 0 <= j < len(c.effects):
                 c.effects[i], c.effects[j] = c.effects[j], c.effects[i]
         self.engine.session.apply_to_clips([clip.id], "Reorder effect", move)
+        self._notify()
         self.refresh_properties()
 
     def _card_dropped(self, key, index):
@@ -2221,6 +2253,7 @@ class EffectsPanel(QWidget):
         before = [e["effect_id"] for e in clip.effects]
         self.engine.session.apply_to_clips([clip.id], "Reorder effect", move)
         if before != [e["effect_id"] for e in self._clip().effects]:
+            self._notify()
             self.refresh_properties()
 
     def _reset_effect(self, clip, entry, effect):
@@ -2232,6 +2265,7 @@ class EffectsPanel(QWidget):
             target = self._entry(c, entry["effect_id"])
             target["params"] = {**target.get("params", {}), **defaults}
         self.engine.session.apply_to_clips([clip.id], "Reset effect", reset)
+        self._notify()
         self.refresh_properties()
 
     def _copy_settings(self, entry):
@@ -2244,6 +2278,7 @@ class EffectsPanel(QWidget):
         self.engine.session.apply_to_clips(
             [clip.id], "Paste effect settings",
             lambda c: self._entry(c, entry["effect_id"]).__setitem__("params", params))
+        self._notify()
         self.refresh_properties()
 
     def _toggle_animation(self, clip, entry, name, enabled):

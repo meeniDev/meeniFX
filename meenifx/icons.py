@@ -1,5 +1,7 @@
 """Small vector icons drawn with QPainter, so every icon shares one stroke, size and palette."""
 
+import math
+
 from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 
@@ -231,6 +233,29 @@ def _draw(name, p, color):
         for x in (5.5, 10.5):
             for y in (4, 8, 12):
                 p.drawEllipse(QPointF(x, y), 1, 1)
+    elif name == "grid":
+        for row in range(2):
+            for column in range(2):
+                p.drawRoundedRect(QRectF(2.5 + column * 6, 2.5 + row * 6, 5, 5), 1, 1)
+    elif name == "list":
+        for row in range(3):
+            y = 4.0 + row * 4.0
+            p.drawLine(QPointF(2.5, y), QPointF(5.5, y))
+            p.drawLine(QPointF(7.5, y), QPointF(13.5, y))
+    elif name == "star":
+        points = []
+        for step in range(10):
+            angle = math.radians(-90 + step * 36)
+            radius = 6.0 if step % 2 == 0 else 2.6
+            points.append(QPointF(8 + radius * math.cos(angle), 8.2 + radius * math.sin(angle)))
+        p.drawPolygon(QPolygonF(points))
+    elif name == "clock":
+        p.drawEllipse(QRectF(2.5, 2.5, 11, 11))
+        p.drawLine(QPointF(8, 4.6), QPointF(8, 8.8))
+        p.drawLine(QPointF(8, 8.8), QPointF(10.6, 8.8))
+    elif name == "close":
+        p.drawLine(QPointF(4, 4), QPointF(12, 12))
+        p.drawLine(QPointF(12, 4), QPointF(4, 12))
     elif name == "clean":
         # Two sparkles: the usual "tidy this up" glyph, still readable at 16 px.
         p.setBrush(fill); p.setPen(Qt.PenStyle.NoPen)

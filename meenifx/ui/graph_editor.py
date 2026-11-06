@@ -17,7 +17,7 @@ import math
 import time
 from collections.abc import Mapping
 
-from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, Qt
+from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import (QBrush, QColor, QFont, QIcon, QLinearGradient, QPainter, QPainterPath,
                          QPen, QPixmap, QPolygonF)
 from PyQt6.QtWidgets import (QAbstractItemView, QComboBox, QHBoxLayout, QInputDialog, QLabel,
@@ -934,6 +934,8 @@ def _format_value(value, channel_meta):
 class GraphEditorPanel(QWidget):
     """Dockable Graph Editor: channel list, graph canvas and its toolbar."""
 
+    keyframe_requested = pyqtSignal()
+
     def __init__(self, engine, parent=None):
         super().__init__(parent)
         self.engine = engine
@@ -949,6 +951,24 @@ class GraphEditorPanel(QWidget):
         row = QHBoxLayout(self.toolbar)
         row.setContentsMargins(tokens.SP1, tokens.SP1, tokens.SP1, tokens.SP1)
         row.setSpacing(tokens.SP1)
+        # Two named animation editors, one shared model.  The buttons are a mode switch,
+        # not two copies: both panels read and write the session's channel data.
+        self.keyframe_mode_button = QToolButton()
+        self.keyframe_mode_button.setText("Keyframe Editor")
+        self.keyframe_mode_button.setToolTip("Edit animation timing and values")
+        self.keyframe_mode_button.setCheckable(True)
+        self.keyframe_mode_button.setFixedHeight(tokens.CONTROL_H)
+        self.keyframe_mode_button.clicked.connect(lambda _checked=False:
+                                                  self.keyframe_requested.emit())
+        row.addWidget(self.keyframe_mode_button)
+        self.graph_mode_button = QToolButton()
+        self.graph_mode_button.setText("Graph Editor")
+        self.graph_mode_button.setToolTip("Edit interpolation, Bezier handles and curves")
+        self.graph_mode_button.setCheckable(True)
+        self.graph_mode_button.setChecked(True)
+        self.graph_mode_button.setFixedHeight(tokens.CONTROL_H)
+        self.graph_mode_button.clicked.connect(lambda _checked=False: self.set_active(True))
+        row.addWidget(self.graph_mode_button)
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["Value Graph", "Speed Graph"])
         self.mode_combo.setToolTip("Value shows the property over time; Speed shows how fast it changes")
@@ -1031,6 +1051,15 @@ class GraphEditorPanel(QWidget):
     # ------------------------------------------------------------------- helpers
     def sizeHint(self):
         return QSize(640, 260)
+
+    def set_active(self, active):
+        """Reflect which of the two animation editors is raised, without changing data."""
+        self.keyframe_mode_button.blockSignals(True)
+        self.graph_mode_button.blockSignals(True)
+        self.keyframe_mode_button.setChecked(not bool(active))
+        self.graph_mode_button.setChecked(bool(active))
+        self.keyframe_mode_button.blockSignals(False)
+        self.graph_mode_button.blockSignals(False)
 
     def clip(self):
         clip = self.session.primary_clip()

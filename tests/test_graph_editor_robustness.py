@@ -207,6 +207,10 @@ def test_a_keyframe_keeps_following_the_pointer_for_the_whole_drag(editor):
     CH.set_value(clip, "transform.position_x", 60.0, 40, auto_key=True)
     graph = open_graph(editor, clip)
     canvas = graph.canvas
+    # The tracking contract is about pointer moves, not about how wide the dock is:
+    # choose a zoom where each step below lands on a different project frame.
+    canvas.zoom_x = 8.0
+    canvas.pan_x = 0.0
     start = QPointF(canvas.x_of(graph.start_frame() + 40), canvas.y_of(60.0))
     _press(canvas, start)
     times, expected = [], []

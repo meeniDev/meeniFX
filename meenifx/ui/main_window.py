@@ -213,7 +213,10 @@ class MainWindow(QMainWindow):
         # separate Presets panel, so there is a single animation UI.
         self.timeline_panel=TimelinePanel(self.engine,self.waveforms); self.docks={}
         from .graph_editor import GraphEditorPanel
-        # The Graph Editor is a real dock: it can float, be hidden or be tabbed.
+        from .keyframe_editor import KeyframeEditorPanel
+        # Two animation editors, one model: timing/values in the Keyframe Editor and
+        # curves/interpolation in the Graph Editor. Both are real, independent docks.
+        self.keyframe_editor=KeyframeEditorPanel(self.engine)
         self.graph_editor=GraphEditorPanel(self.engine)
         from .project_panel import ProjectPanel
         self.project_panel=ProjectPanel(self)
@@ -227,7 +230,8 @@ class MainWindow(QMainWindow):
         for key,widget in (("project",self.project_panel),("preview",self.preview_panel),
                            ("effects",self.effects_panel),
                            ("properties",self.effects_panel.props_scroll),
-                           ("timeline",self.timeline_panel),("graph",self.graph_editor)):
+                           ("timeline",self.timeline_panel),
+                           ("keyframe",self.keyframe_editor),("graph",self.graph_editor)):
             self._add_dock(key,widget)
         # Interactive editing lives on the picture, but only on screen: the overlay is
         # painted by the preview widget and never touches the rendered frame.
@@ -236,7 +240,8 @@ class MainWindow(QMainWindow):
         self.preview_panel.view.overlay=self.overlay
         self.overlay.on_change=self._overlay_changed
         self.engine.session.auto_keyframe.trace_add("write",lambda *_:self._sync_auto_key_buttons())
-        self.engine.session.clip_selected.connect(lambda _ids:self.graph_editor.refresh())
+        self.engine.session.clip_selected.connect(
+            lambda _ids:(self.graph_editor.refresh(),self.keyframe_editor.refresh()))
         self.preview_panel.zoom_preset.connect(self.preview_panel.apply_preset)
         self.preview_panel.files_dropped.connect(lambda paths:self.import_paths(paths,self.engine.session.playhead,find_free=True))
         self.preview_panel.media_ids_dropped.connect(
@@ -258,6 +263,11 @@ class MainWindow(QMainWindow):
         # (or "Open in Graph Editor") shows the curve there. Both read the shared
         # session keyframe selection, so the two views can never disagree.
         self.timeline_panel.canvas.graph_editor_requested.connect(self._open_graph_editor_for)
+        self.timeline_panel.canvas.keyframe_editor_requested.connect(self._open_keyframe_editor_for)
+        self.keyframe_editor.graph_requested.connect(
+            lambda:self._open_graph_editor_for(self.engine.session.selected_key_entries()))
+        self.graph_editor.keyframe_requested.connect(
+            lambda:self._open_keyframe_editor_for(self.engine.session.selected_key_entries()))
         self.effects_panel.preview_requested.connect(self._preview_clip_range)
         self.effects_panel.properties_requested.connect(self._raise_properties)
         self.timeline_panel.canvas.playhead_requested.connect(self._set_playhead)
@@ -275,6 +285,10 @@ class MainWindow(QMainWindow):
         graph_dock=self.docks.get("graph")
         if graph_dock is not None:
             toggle=graph_dock.toggleViewAction(); toggle.setShortcut(QKeySequence("G")); toggle.setText("Graph Editor")
+        keyframe_dock=self.docks.get("keyframe")
+        if keyframe_dock is not None:
+            toggle=keyframe_dock.toggleViewAction(); toggle.setShortcut(QKeySequence("Shift+G"))
+            toggle.setText("Keyframe Editor")
         self._menu_view.addAction("Reset Layout",self.reset_layout)
         self._menu_view.addAction("Save Layout As...",self.save_layout_preset)
         self._menu_view.addAction("Load Layout As...",self.load_layout_preset)
@@ -286,6 +300,7 @@ class MainWindow(QMainWindow):
         self.engine.session.tool.trace_add("write",lambda *_:self._update_hints())
         self.engine.session.snap_enabled.trace_add("write",lambda *_:self._update_hints())
         self.engine.session.loop_changed.connect(self._sync_loop_state)
+        self._activate_animation_editor("keyframe")
         self._update_hints()
 
     def _add_dock(self,key,widget):
@@ -401,6 +416,8 @@ class MainWindow(QMainWindow):
         self._add_action(keyframes_menu,"Delete Selected Keyframes",None,
                          lambda:self.timeline_panel.canvas._delete_selected_keyframes())
         keyframes_menu.addSeparator()
+        self._add_action(keyframes_menu,"Open Keyframe Editor",None,
+                         lambda:self._open_keyframe_editor_for(self.engine.session.selected_key_entries()))
         self._add_action(keyframes_menu,"Open Selection in Graph Editor",None,
                          lambda:self._open_graph_editor_for(self.engine.session.selected_key_entries()))
         keyframes_menu.addSeparator()
@@ -1065,7 +1082,8 @@ class MainWindow(QMainWindow):
 
     def _refresh_panels(self):
         self.effects_panel.refresh_properties(); self.timeline_panel.canvas.update()
-        self.graph_editor.refresh(); self.preview_panel.view.update()
+        self.keyframe_editor.refresh(); self.graph_editor.refresh()
+        self.preview_panel.view.update()
 
     def _overlay_changed(self):
         """A preview drag changed the model: refresh the panels and re-render live.
@@ -2158,6 +2176,12 @@ class MainWindow(QMainWindow):
             action.blockSignals(True); action.setChecked(bool(on)); action.blockSignals(False)
         self.preview_panel.view.update()
 
+    def _activate_animation_editor(self, mode):
+        """Keep the two mode switches and their docks showing the same active editor."""
+        graph = mode == "graph"
+        self.graph_editor.set_active(graph)
+        self.keyframe_editor.set_active(not graph)
+
     def _open_graph_editor_for(self, entries=None):
         """Show the Graph Editor dock and select the given keys' curves in it."""
         dock=self.docks.get("graph")
@@ -2168,8 +2192,20 @@ class MainWindow(QMainWindow):
             self.graph_editor.focus_entries(entries)
         else:
             self.graph_editor.refresh()
+        self._activate_animation_editor("graph")
         if getattr(self,"graph_button",None) is not None:
             self.graph_button.blockSignals(True); self.graph_button.setChecked(True); self.graph_button.blockSignals(False)
+
+    def _open_keyframe_editor_for(self, entries=None):
+        """Show the Keyframe Editor dock and select the requested timing keys."""
+        dock=self.docks.get("keyframe")
+        if dock is not None:
+            dock.setVisible(True)
+            dock.raise_()
+        self.keyframe_editor.refresh()
+        if entries:
+            self.keyframe_editor.focus_entries(entries)
+        self._activate_animation_editor("keyframe")
 
     def _preview_clip_range(self, start, end):
         """Play one clip so an animation preset can be checked without hunting for it."""

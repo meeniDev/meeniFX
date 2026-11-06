@@ -125,6 +125,9 @@ class TimelineCanvas(QWidget):
     # Double-clicking a keyframe (or "Open in Graph Editor") asks the window to show the
     # curve of these [(clip_id, channel, time)] keys.
     graph_editor_requested = pyqtSignal(list)
+    # The compact animation badge asks for the dedicated Keyframe Editor instead of
+    # expanding a dense set of property rows inside the clip.
+    keyframe_editor_requested = pyqtSignal(list)
 
     HEADER_W = 156
     TOP_H = 0           # the old "Timeline | timecode" row is gone; the timecode lives in the preview
@@ -699,12 +702,9 @@ class TimelineCanvas(QWidget):
         x1, x2 = self.x_at(clip.timeline_start), self.x_at(clip.end)
         rect = QRectF(x1 + 1, track_y + 3, max(2, x2 - x1 - 2), track_h - 6)
         rows = self.animation_rows(clip)
-        expanded = clip.id in self._expanded_clips and bool(rows)
-        shown_rows = self._visible_keyframe_rows(clip, rect) if expanded else []
-        band_h = len(shown_rows) * self.KEYFRAME_ROW_H
-        # Artwork, waveform, fades and the name stay in the upper part; the animation
-        # rows take the bottom band of the clip.
-        content = QRectF(rect.left(), rect.top(), rect.width(), max(8.0, rect.height() - band_h))
+        # The clip stays a clip.  Animation is advertised by one compact badge and edited
+        # in the dedicated Keyframe Editor; no property rows are packed inside the lane.
+        content = QRectF(rect)
         palette = TIMELINE_COLORS["audio" if track.type == "audio" else ("image" if clip.kind == "image" else "video")]
         selected = clip.id in self.session.selected or clip.id in self._band_ids
         p.setPen(QPen(QColor("#ffffff" if selected else _shade(palette[0], 1.25)), 2 if selected else 1))
@@ -760,7 +760,7 @@ class TimelineCanvas(QWidget):
         self._paint_fade_chip(p, clip, content)
         self._paint_envelope(p, clip, content)
         if rows:
-            self._paint_keyframe_controls(p, clip, rect, content, shown_rows, expanded)
+            self._paint_keyframe_controls(p, clip, rect, content, rows)
 
     # ------------------------------------------------------------------ presets
     PRESET_COLORS = {"in": "#4fbf87", "out": "#e0913f", "loop": "#6aa9ff"}
@@ -979,66 +979,43 @@ class TimelineCanvas(QWidget):
         return bool(self.session.show_keyframes.get())
 
     def _visible_keyframe_rows(self, clip, full_rect):
-        if not self.keyframes_visible:
-            return []
-        rows = self.animation_rows(clip)
-        if clip.id not in self._expanded_clips or not rows:
-            return []
-        fits = max(0, int((full_rect.height() - 16) // self.KEYFRAME_ROW_H))
-        return rows[:fits]
+        """Kept for callers that still ask: the timeline no longer expands property rows."""
+        return []
 
     def _keyframe_row_geometry(self, clip):
-        """(full clip rect, [(row, screen y of its centre)])."""
-        full = self._clip_full_rect(clip)
-        rows = self._visible_keyframe_rows(clip, full)
-        if not rows:
-            return full, []
-        content_bottom = full.top() + max(8.0, full.height() - len(rows) * self.KEYFRAME_ROW_H)
-        entries = [(row, content_bottom + index * self.KEYFRAME_ROW_H + self.KEYFRAME_ROW_H / 2)
-                   for index, row in enumerate(rows)]
-        return full, entries
+        """(full clip rect, no expanded rows); timing lives in the Keyframe Editor."""
+        return self._clip_full_rect(clip), []
+
+    def _keyframe_summary_rect(self, clip):
+        """The compact animation badge at the clip's lower-right corner."""
+        content = self._clip_full_rect(clip)
+        width = min(76.0, max(20.0, content.width() - 16.0))
+        return QRectF(content.right() - width - 5.0, content.bottom() - 20.0, width, 16.0)
 
     def _keyframe_toggle_rect(self, clip):
-        """Chevron in the clip's content corner, above the animation rows when open."""
-        content = self._clip_rect(clip)
-        return QRectF(content.right() - 16, content.bottom() - 15, 14, 13)
+        return self._keyframe_summary_rect(clip)
 
-    def _paint_keyframe_controls(self, p, clip, rect, content, rows, expanded):
-        if not self.keyframes_visible:
+    def _paint_keyframe_controls(self, p, clip, rect, content, rows):
+        """A quiet ``◆ 12 keys`` badge, never dozens of diamonds inside the clip."""
+        if not self.keyframes_visible or not rows:
             return
-        toggle = self._keyframe_toggle_rect(clip)
-        p.save()
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor("#dbe6f7"))
-        cx, cy = toggle.center().x(), toggle.center().y()
-        if expanded:
-            poly = QPolygonF([QPointF(cx - 4, cy - 2), QPointF(cx + 4, cy - 2), QPointF(cx, cy + 3)])
-        else:
-            poly = QPolygonF([QPointF(cx - 2, cy - 4), QPointF(cx + 3, cy), QPointF(cx - 2, cy + 4)])
-        p.drawPolygon(poly)
-        if not expanded:
-            # A clip that carries keyframes advertises it with a small diamond.
-            self._paint_keyframe_diamond(p, content.left() + 9, content.bottom() - 8, False, small=True)
-        p.restore()
-        if not rows:
+        nkeys = sum(len(CH.key_times(clip, row["channel"])) for row in rows)
+        if nkeys <= 0 or content.width() < 22 or content.height() < 14:
             return
+        box = self._keyframe_summary_rect(clip)
         p.save()
-        p.setClipRect(rect.adjusted(1, 0, -1, 0), Qt.ClipOperation.IntersectClip)
-        p.setFont(QFont("Segoe UI", 7))
-        for index, row in enumerate(rows):
-            top = content.bottom() + index * self.KEYFRAME_ROW_H
-            band = QRectF(rect.left() + 1, top, rect.width() - 2, self.KEYFRAME_ROW_H)
-            p.fillRect(band, QColor(8, 12, 18, 150))
-            mid = band.center().y()
-            p.setPen(QPen(QColor(TIMELINE_COLORS["muted"]), 1, Qt.PenStyle.DotLine))
-            p.drawLine(int(band.left()) + 3, int(mid), int(band.right()) - 3, int(mid))
-            p.setPen(QColor(TIMELINE_COLORS["muted"]))
-            p.drawText(band.adjusted(4, 0, -20, 0), int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-                       f"{row['effect_name']} · {row['label']}")
-            for key in row["value"].keyframes:
-                x = self.x_at(clip.timeline_start + key.time)
-                selected = (clip.id, row["channel"], key.time) in self.session.key_selection
-                self._paint_keyframe_diamond(p, x, mid, selected)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setPen(QPen(QColor(TIMELINE_COLORS["snap"]), 1.0))
+        p.setBrush(QColor(8, 12, 18, 205))
+        p.drawRoundedRect(box, 7, 7)
+        cx, cy = box.left() + 9.0, box.center().y()
+        self._paint_keyframe_diamond(p, cx, cy, False, small=True)
+        if box.width() >= 46:
+            p.setPen(QColor("#eaf2ff"))
+            p.setFont(QFont("Segoe UI", 7))
+            text = f"{nkeys} key" if nkeys == 1 else f"{nkeys} keys"
+            p.drawText(box.adjusted(18, 0, -4, 0),
+                       int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), text)
         p.restore()
 
     @staticmethod
@@ -1051,34 +1028,11 @@ class TimelineCanvas(QWidget):
         p.drawPolygon(poly)
 
     def _keyframe_hit(self, x, y):
-        """(clip, row, keyframe time) under the pointer, or (None, None, None)."""
-        for track in self.timeline.tracks:
-            for clip in track.sorted_clips():
-                if clip.id not in self._expanded_clips:
-                    continue
-                _full, entries = self._keyframe_row_geometry(clip)
-                for row, mid in entries:
-                    if abs(y - mid) > self.KEYFRAME_HIT_PX:
-                        continue
-                    for key in row["value"].keyframes:
-                        if abs(x - self.x_at(clip.timeline_start + key.time)) <= self.KEYFRAME_HIT_PX:
-                            return clip, row, key.time
+        """No keyframe diamonds live on the timeline any more."""
         return None, None, None
 
     def _keyframe_row_hit(self, x, y):
-        """(clip, row, clip-local frame) for a property lane under the pointer."""
-        if not self.keyframes_visible:
-            return None, None, None
-        for track in self.timeline.tracks:
-            for clip in track.sorted_clips():
-                if clip.id not in self._expanded_clips:
-                    continue
-                _full, entries = self._keyframe_row_geometry(clip)
-                for row, mid in entries:
-                    if abs(y - mid) <= self.KEYFRAME_ROW_H / 2.0:
-                        frame = self.frame_at(x) - clip.timeline_start
-                        if 0 <= frame < clip.duration:
-                            return clip, row, frame
+        """No property lanes live on the timeline any more."""
         return None, None, None
 
     def _keyframe_toggle_hit(self, x, y):
@@ -1093,11 +1047,13 @@ class TimelineCanvas(QWidget):
         return None
 
     def _toggle_keyframe_rows(self, clip):
-        if clip.id in self._expanded_clips:
-            self._expanded_clips.discard(clip.id)
-        else:
-            self._expanded_clips.add(clip.id)
-        self.update()
+        """Open the dedicated editor; the clip itself stays compact."""
+        if not self.animation_rows(clip):
+            return
+        if clip.id not in self.session.selected:
+            self.session.set_selection({clip.id})
+        self._expanded_clips.discard(clip.id)
+        self.keyframe_editor_requested.emit([])
 
     def _begin_keyframe_drag(self, clip, row, time, modifiers):
         """Select (Ctrl/Shift-aware) and arm a drag of every selected keyframe."""
@@ -1623,11 +1579,7 @@ class TimelineCanvas(QWidget):
 
     def _clip_rect(self, clip):
         """The content part of the clip (fades and grips live here), for hit tests."""
-        rect = self._clip_full_rect(clip)
-        if clip.id in self._expanded_clips and self.animation_rows(clip):
-            band = len(self._visible_keyframe_rows(clip, rect)) * self.KEYFRAME_ROW_H
-            rect.setHeight(max(8.0, rect.height() - band))
-        return rect
+        return self._clip_full_rect(clip)
 
     def _fade_handle_x(self, clip, edge):
         """x of a fade grip: it sits where the fade ends (and follows the pointer while dragging)."""
@@ -3574,6 +3526,7 @@ class TimelineCanvas(QWidget):
         keys.addAction("Duplicate Selected (Ctrl+Shift+D)", self.duplicate_selected_keyframes)
         keys.addAction("Delete Selected", self._delete_selected_keyframes)
         keys.addSeparator()
+        keys.addAction("Open Keyframe Editor", self.keyframe_editor_requested.emit([]))
         open_graph = keys.addAction("Open Selection in Graph Editor",
                                     lambda: self.open_keyframes_in_graph(
                                         self.session.selected_key_entries()))
@@ -3594,6 +3547,14 @@ class TimelineCanvas(QWidget):
         menu.addAction("Freeze frame", lambda: self.session.freeze_selected_clip(clip.id))
         menu.addAction("Duplicate", self.session.duplicate_selected)
         menu.addSeparator()
+        if self.animation_rows(clip):
+            menu.addAction("Open Keyframe Editor",
+                           lambda _checked=False, c=clip: self._toggle_keyframe_rows(c))
+            menu.addAction("Open in Graph Editor",
+                           lambda _checked=False, c=clip: self.open_keyframes_in_graph(
+                               [(c.id, row["channel"], key.time) for row in self.animation_rows(c)
+                                for key in row["value"].keyframes]))
+            menu.addSeparator()
         selection = sorted(self.session.selected) or [clip.id]
         link = menu.addAction("Link Selected Clips",
                               lambda _checked=False: self.session.link_selected())

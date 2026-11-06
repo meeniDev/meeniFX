@@ -22,7 +22,7 @@ The application resolves bundled tile images, the demo clip, and default output 
 
 ## Current features
 
-- PyQt6 main window with movable, floatable, tabbable Project, Preview, Effects, Properties, Timeline and Graph Editor docks; layout persists through QSettings (layout v8; the old Controls panel is gone and Effects/Properties are now two docks). View toggles visibility and Reset Layout restores the default docking arrangement. Preview quality, zoom and guides live in the one row under the preview, the master volume/meter sits beside it, Undo/Redo are in the top bar, and the playback FPS cap is in Preferences.
+- PyQt6 main window with movable, floatable, tabbable Project, Preview, Effects, Properties, Timeline, Keyframe Editor and Graph Editor docks; layout persists through QSettings (layout v9; the old Controls panel is gone and Effects/Properties are now two docks). View toggles visibility and Reset Layout restores the default docking arrangement. Preview quality, zoom and guides live in the one row under the preview, the master volume/meter sits beside it, Undo/Redo are in the top bar, and the playback FPS cap is in Preferences.
 - Video/GIF/image import into video tracks and audio clips in audio tracks. Drop supported media on the Project panel, Preview, or the Timeline. A video that carries sound arrives as a **linked video + audio pair** (see *Video with sound* below).
 - Multi-track timeline with frame-based positioning, thumbnails, playhead, a fixed ruler/loop strip that clips cleanly against the scrolling tracks, a translucent selection band, Vegas-style snapping feedback, split/razor, trim, move, Alt-drag time stretch, loop region, freeze frames, overlap modes, clipboard operations, and undo/redo.
 - Snapping resolves to one deterministic target: the closest clip edge, playhead, marker, loop edge or frame 0 within an 8 px radius (12 px once engaged, so it never flickers), with clip edges winning a tie, then the playhead, markers, the loop and finally frame 0. The radius is in screen pixels at every zoom, Shift places the clip exactly where the pointer is, and linked clips move as a pair on their own tracks. The feedback names the target: the resolved edge of the target clip lights up white with a short gradient fading inward (only that edge of only that clip, never a full border or a full-height band), a thin guide marks the exact frame the clips landed on, the dragged clip shows where its edge sits, and a small caption reads e.g. `Screen 1 · end`. Several aligned boundaries all light up and the caption says `3 clip edges aligned`. The playhead snaps the same way, including to the edge of the clip it lands on.
@@ -32,7 +32,7 @@ The application resolves bundled tile images, the demo clip, and default output 
 - One global dark theme for the whole application, including tooltips (dark #1b2230 tooltip, ~450 ms delay, shortcuts in the text), menus, context menus, combo drop-downs, message boxes and the non-native file dialogs.
 - Preview fit and percentage zoom, cursor-centered wheel zoom, pan, guides, and resize handling. The preview keeps two sizes: the logical project frame (which drives fit, zoom, pan and every crop decision) and the render size (project size x quality, drawn into the logical rectangle). Pixel-based effect parameters (mosaic tiles, ASCII cell size, tracker line thickness, minimum face size, blob areas, blur radius) are project pixels scaled by the quality factor, so lowering the quality only softens the image - it never changes the framing, and a 35% preview is the same picture as the export.
 - Mosaic, ASCII Art, Face Tracker, Hand Tracker and Blob Tracker plus the new Glitch, Stylize, Light, Time and LUT packs and one-click **Looks** (see *Compositing, effects and looks*); per-clip **blend modes**, **adjustment layers** and a **Mix** slider on every effect card. Every effect declares the media types it can process (`MEDIA_TYPES` on the effect class), and the browser, the timeline drop target and the engine all read that one declaration: on an audio clip the visual effects are listed greyed as *"(video only)"* and cannot be added, a drag or double-click is refused with a status message, and an effect loaded from an older project onto the wrong media type is switched off (kept, with an explanation in its card) instead of crashing or rendering. Each effect publishes a parameter table (range, unit, default, pixel-based or not) that the properties panel and the parameter audit test both build from, so a control can never write a value the effect does not read.
-- Keyframes on every numeric effect parameter: the stopwatch turns animation on and is accent-coloured while active, the value follows the playhead, the diamond is filled exactly on a keyframe and hollow between, and the previous/next buttons jump between them (the cluster only appears for animated parameters). On the timeline a clip with keyframes shows a small diamond and an expand arrow that opens one animation row per parameter; its diamonds can be selected, dragged in time (snapping to the playhead) and deleted, all as single undo steps. See *Keyframe workflow* below for the full timeline keyframe editing, the envelopes, clip opacity and the text animation presets.
+- Keyframes on every numeric effect parameter: the stopwatch turns animation on and is accent-coloured while active, the value follows the playhead, the diamond is filled exactly on a keyframe and hollow between, and the previous/next buttons jump between them (the cluster only appears for animated parameters). The timeline stays clip-focused: a clip with animation shows one compact `◆ 12 keys` badge, and clicking it opens the dedicated **Keyframe Editor** instead of packing property rows inside the clip. See *Keyframe workflow* below for timing/value editing, the envelopes, clip opacity and the text animation presets.
 - One numeric widget everywhere (`ScrubField`: fixed label column, a compact value with its unit, optional stopwatch and keyframe cluster): Transform, text, audio gain, every effect parameter including Mix, clip speed, fades, the Animation card, the export dialog, playback FPS and track height. The value is the handle: drag it sideways to scrub (right = up), Shift for a tenth of the speed, Ctrl for ten times, Alt to land between the field's steps; click once (or double-click, or just start typing) to type an exact number, Enter applies, Esc puts the previous value back; the arrow keys step, Page Up/Down jump ten steps, and the arrows that appear beside the value on hover step it too; double-clicking the label resets the default. A whole drag is one undo step and a typed edit is one step. Units (`px`, `%`, `°`, `dB`, `f`, `s`, `fps`) are drawn dimmed beside the number and accepted when typed, with both `,` and `.` as the decimal separator.
 - Whole-project or loop-region video/GIF/image export (the chosen range is written from frame 0) and Save Frame; frame processing and export run off the UI thread with progress and cancellation.
 
@@ -91,10 +91,19 @@ The application resolves bundled tile images, the demo clip, and default output 
 - **Motion paths** (toolbar eye icon, Transform menu) show every position keyframe on the
   picture. Points can be dragged, each point has spatial Bezier in/out handles, and the
   current position is drawn on the path.
-- The **Graph Editor** dock (toolbar button or `G`, tabbed next to the timeline) plots
-  the selected clip's channels as curves or as speed graphs, preserving the animation when
-  switching. Curves are sampled from the animation itself every 0.5 px (up to 2400 points)
-  and drawn through the real easing and Bezier handles, so what you shape is what renders.
+- The **Keyframe Editor** dock (`Shift+G`, tabbed next to the timeline) is the timing and
+  value view: one readable row per animated transform, text, audio or effect property,
+  grouped and collapsible. Add/delete, click/Ctrl-click multi-select, live drag, group
+  move, copy/paste, duplicate, typed values, previous/next navigation, wheel zoom,
+  middle-drag pan, Fit, frame snapping, playhead scrubbing and selection shared with the
+  Graph Editor are all here. A drag rebuilds from the press-time snapshot, so it moves the
+  existing keys, never leaves a trail of duplicates, and commits one undo step.
+- The **Graph Editor** dock (toolbar button or `G`, tabbed next to the Keyframe Editor)
+  plots the selected clip's channels as curves or as speed graphs, preserving the animation
+  when switching. Its **Keyframe Editor | Graph Editor** buttons switch to the timing view
+  without changing the data. Curves are sampled from the animation itself every 0.5 px (up
+  to 2400 points) and drawn through the real easing and Bezier handles, so what you shape is
+  what renders.
   A plain click picks one key, Ctrl/Shift toggles keys in and out, clicking empty space
   clears the selection and moves the playhead there, a plain drag in empty space draws a
   box and a plain drag on a key moves the whole selection in time and value together.
@@ -110,35 +119,33 @@ The application resolves bundled tile images, the demo clip, and default output 
   *Advanced Interpolation* submenu. Bounce and Elastic are real mathematical functions, not
   approximations. Auto and Continuous handles are computed from the neighbouring keys, so
   moving a key reshapes the curve the way it does in After Effects. The same menu is on the
-  timeline keys and inside the Graph Editor; custom presets can be saved, renamed and
+  selected keys in the Keyframe Editor and inside the Graph Editor; custom presets can be
+  saved, renamed and
   deleted from Preferences and are shared between projects.
 - Easing is stored per keyframe (`interpolation` plus normalised Bezier handles), so the
   preview, the Graph Editor and the exporter read the same numbers.
 
-## Keyframe workflow (timeline and Graph Editor)
+## Keyframe workflow (Keyframe Editor and Graph Editor)
 
-- **One animation model**: the stopwatch in the Properties panel, the diamonds on the
-  timeline and the curves in the Graph Editor all read and write the same channels
-  (`meenifx/model/channels.py`). There is no second keyframe system and no bake step, so
-  the three views can never disagree.
-- **Expandable clips**: a clip with keys shows a small diamond badge and an expand arrow;
-  expanding it adds one lane per animated channel (transform, effects, text, plus the
-  opacity and gain envelopes). Clips without animation show neither.
-- **Keyframe lane**: diamonds are click-selected, Ctrl-click adds to the selection,
-  Shift-click selects a range, and Ctrl+drag in empty lane space (or in an expanded row
-  band) draws a marquee. Selected keys drag together in time and snap to the playhead,
-  markers, the loop edges and other keys; `Esc` cancels a drag and every drag is one undo
-  step. Delete removes the selection, `Ctrl+Shift+C` / `Ctrl+Shift+V` copy and paste at the
-  playhead (relative timing kept), `Ctrl+Shift+D` duplicates in place, and `Ctrl+K` (or the
-  toolbar diamond) keys every animated channel of the selected clips at the playhead. The
-  selection is shared with the Graph Editor both ways, and double-clicking a key opens it
-  there (*Keyframes > Double-click Keyframe Opens Graph Editor*; switched off, the same
-  double-click deletes the key, the classic behaviour).
-- **Key context menu** on one key or a multi-selection: Linear, Hold, Ease In, Ease Out,
-  Ease In Out, Smooth, Auto Bézier, Continuous Bézier, Custom Bézier (opens the handles in
-  the Graph Editor), Bounce, Elastic, Overshoot, Copy, Paste, Delete and *Open in Graph
-  Editor*. Easing applies to the whole selection at once, and entries that make no sense
-  for the selection are hidden rather than disabled.
+- **One animation model**: the stopwatch in the Properties panel, the Keyframe Editor and
+  the Graph Editor all read and write the same channels (`meenifx/model/channels.py`).
+  There is no second keyframe system and no bake step, so the views can never disagree.
+- **Compact timeline**: a clip with keys shows one badge with its key count and a diamond;
+  clicking it selects the clip and raises the Keyframe Editor. The main timeline keeps its
+  trimming, moving, splitting, snapping and linked-clip behaviour, and never grows rows of
+  tiny diamonds. Clips without animation show no badge.
+- **Keyframe Editor**: one lane per animated property, grouped under Transform,
+  Compositing, effect names, Text and Audio. Groups collapse; clicking a key selects it,
+  Ctrl/Shift-click builds a multi-selection, and dragging one selected key moves the whole
+  selection together in time. `Esc` cancels; one drag is one undo step. `+ Key` adds on the
+  active property at the playhead, the toolbar value field edits the selected keys (or
+  keys the active property when nothing is selected), and Delete, Copy, Paste, Duplicate,
+  previous/next, Fit, wheel zoom, middle-drag pan, frame snapping and the playhead are all
+  available without leaving the panel. The dock is closable and comes back from View >
+  Keyframe Editor (`Shift+G`).
+- **Key context menu** in the Keyframe Editor: Delete, Copy, Paste, Duplicate, Fit
+  Selection, Add Keyframe Here and *Open in Graph Editor*. Easing and Bezier handles live in
+  the Graph Editor, where they apply to the same shared selection.
 - **Universal Clip Opacity** (0-100 %, default 100) in the Transform card: a real,
   keyframeable channel that multiplies the whole layer (picture and text, before the
   effects' own opacities), separate from the Text card's fill/shadow/background opacities
@@ -174,8 +181,9 @@ The application resolves bundled tile images, the demo clip, and default output 
 - **Format 5/6**: `.mfxpf` v5 adds the per-clip `gain` column and the text animation block;
   v6 adds the per-clip preset instances. Version 1-5 projects migrate on load with no
   change in appearance or sound. See *Animation presets* for the instance model.
-- Limits: the marquee needs empty lane space or an expanded row band, so a Ctrl+drag over
-  clip bodies still extends the clip selection. The envelope line is grabbed within 3 px
+- Limits: keyframe selection and dragging live in the Keyframe Editor (Ctrl/Shift-click
+  builds the selection, one drag moves all of it), so Ctrl+drag on the timeline always
+  extends the clip selection and never picks up keys. The envelope line is grabbed within 3 px
   (a wider band would steal the press that drags the clip, because a 0 dB gain line runs
   through the middle of an audio clip), and near the left/right edge the fade grips win the
   hit test - the exported channel and the Inspector row are always available. Gain
@@ -564,7 +572,7 @@ Ctrl+N new project; Ctrl+O open; Ctrl+S save; Ctrl+Shift+S save as; Ctrl+I impor
 
 Transform tools: V selection, T transform, P puppet warp, K auto-keyframe, G graph editor, Ctrl+Shift+P show motion paths, arrows nudge, Shift+F7/F8/F9 fit/fill/centre, Shift+F10 reset the transform, Esc cancels a drag and drops the overlay selection. With pins selected in the preview: Ctrl+C/Ctrl+V copy and paste their keyframes, Ctrl+R resets them to rest, Ctrl+A selects them all, L locks, Shift+E enables/disables, Delete removes them - all of it also on the preview's right-click menu. Fade grips: drag sideways for length, up/down (or Alt+drag) to bend, Shift to apply to the linked clip, right-click for presets, double-click to clear. Text-entry widgets keep their normal Qt shortcuts.
 
-Keyframes: Ctrl+K add a key at the playhead, Ctrl+Shift+C/V/D copy, paste and duplicate the selected keys, Delete removes them, Ctrl+drag draws the keyframe marquee, double-click a key opens it in the Graph Editor, Esc cancels a keyframe or envelope drag. Envelopes: drag the line to change the value, double-click to key it, right-click for the menu (add/remove key, easing, show/hide, reset).
+Keyframes: Ctrl+K add a key at the playhead, Ctrl+Shift+C/V/D copy, paste and duplicate the selected keys, Delete removes them, Esc cancels a key drag or an envelope drag. Shift+G opens the Keyframe Editor dock; there Ctrl/Shift-click builds a multi-selection, dragging moves the whole selection in one undo step, and the mode buttons switch to the Graph Editor (G) for easing and curves. Envelopes: drag the line to change the value, double-click to key it, right-click for the menu (add/remove key, easing, show/hide, reset).
 
 Preview cache: Ctrl+Shift+R render preview, Ctrl+Shift+E render the selected region, Ctrl+Shift+F performance overlay.
 
@@ -587,4 +595,4 @@ entry, and the next start offers its autosave for recovery. `tests/conftest.py` 
 pytest run, the app-driving scripts set it for themselves, and every test that creates a project does
 so inside pytest's `tmp_path` (the scripts remove their throwaway folder before exiting).
 
-`tests/test_effects_extended.py` renders synthetic frames through the colour, blur and glow effects (per-parameter change detection, preset identities, alpha preservation and preview/export equality), `tests/test_audio_effects.py` checks the DSP against the signal itself (filter response, compressor gain reduction, limiter ceiling, reverb tail, delay timing, pan law, chain caching), `tests/test_easing_presets.py` verifies every easing family, the auto/continuous handles and the preset menus, `tests/test_graph_editor.py` drives the Graph Editor with real mouse and wheel events (sampling, painting, selection, box select, key add, delete/undo, presets, handle drags, zoom and pan), and `tests/test_timeline_snapping.py` covers snapping resolution, determinism, the pixel threshold at several zooms, linked pairs, the playhead and the published glow/caption feedback. `tests/test_puppet_pins.py` drives pin multi-selection, group drags, auto-keyframe feedback, disabling, reset and the pin-key clipboard. `tests/test_av_links.py` covers the link model (planning, trimming, splitting, undo, save/load, migration and the mixer's one-segment-per-file rule), `tests/test_av_import_ui.py` drives the real window with real drag events from the Project panel to the canvas, and `tests/test_media_probe.py` checks header-only audio detection against hand-built MP4/Matroska files plus the A/V fixture from `tests/av_fixture.py`. `tests/test_transform_animation.py` covers the transform/keyframe/easing model, motion-path handles and the project format; `tests/test_transform_ui.py` and `tests/test_warp_ui.py` drive the preview override, the inspector and the Graph Editor with real mouse events (handles, snapping, puppet pins, corner pin, mesh nodes, motion paths, keyframe clipboard, easing presets, undo); `tests/test_text_generator.py` and `tests/test_text_ui.py` cover text rendering, text keyframes, effects on text, splitting and save/load. `tests/test_effect_parameters.py` renders a synthetic frame with every effect parameter at its minimum and maximum (and every toggle/choice alternative), checks that animated parameters change over time and evaluate at clip-local frames, and that the export path matches the preview. `tests/test_preview_cache.py` covers the cache (LRU, disk tier, manifest validation, pending/invalidation), the render thread (latest-wins, prerender, playback priority), the digest-based invalidation, the GPU dispatcher and the metrics. `tests/preview_live_check.py` and `tests/preview_ui_check.py` drive the real window (playback advancing, cache bar colours, prerender/cancel, invalidation, disk cache, Preferences) and `tests/preview_bench.py` produces the measured numbers above. `tests/test_preview_quality.py` checks that framing is identical at 10/35/50/75/100% and at Fit/100%/200% zoom with panning. `tests/test_keyframe_workflow.py` drives the whole AE-style workflow (timeline lanes, marquee, multi-move with snapping, clipboard, easing menu, shared selection with the Graph Editor, clip opacity, both envelopes, audio gain, anchor presets, text animation presets, rendering and the format-5 round trip), while `tests/test_keyframe_ui.py` and `tests/test_numeric_fields.py` cover the properties/timeline keyframe controls and the shared numeric widget. They run headless (`QT_QPA_PLATFORM=offscreen` is set by `tests/conftest.py`).
+`tests/test_effects_extended.py` renders synthetic frames through the colour, blur and glow effects (per-parameter change detection, preset identities, alpha preservation and preview/export equality), `tests/test_audio_effects.py` checks the DSP against the signal itself (filter response, compressor gain reduction, limiter ceiling, reverb tail, delay timing, pan law, chain caching), `tests/test_easing_presets.py` verifies every easing family, the auto/continuous handles and the preset menus, `tests/test_graph_editor.py` drives the Graph Editor with real mouse and wheel events (sampling, painting, selection, box select, key add, delete/undo, presets, handle drags, zoom and pan), and `tests/test_timeline_snapping.py` covers snapping resolution, determinism, the pixel threshold at several zooms, linked pairs, the playhead and the published glow/caption feedback. `tests/test_puppet_pins.py` drives pin multi-selection, group drags, auto-keyframe feedback, disabling, reset and the pin-key clipboard. `tests/test_av_links.py` covers the link model (planning, trimming, splitting, undo, save/load, migration and the mixer's one-segment-per-file rule), `tests/test_av_import_ui.py` drives the real window with real drag events from the Project panel to the canvas, and `tests/test_media_probe.py` checks header-only audio detection against hand-built MP4/Matroska files plus the A/V fixture from `tests/av_fixture.py`. `tests/test_transform_animation.py` covers the transform/keyframe/easing model, motion-path handles and the project format; `tests/test_transform_ui.py` and `tests/test_warp_ui.py` drive the preview override, the inspector and the Graph Editor with real mouse events (handles, snapping, puppet pins, corner pin, mesh nodes, motion paths, keyframe clipboard, easing presets, undo); `tests/test_text_generator.py` and `tests/test_text_ui.py` cover text rendering, text keyframes, effects on text, splitting and save/load. `tests/test_effect_parameters.py` renders a synthetic frame with every effect parameter at its minimum and maximum (and every toggle/choice alternative), checks that animated parameters change over time and evaluate at clip-local frames, and that the export path matches the preview. `tests/test_preview_cache.py` covers the cache (LRU, disk tier, manifest validation, pending/invalidation), the render thread (latest-wins, prerender, playback priority), the digest-based invalidation, the GPU dispatcher and the metrics. `tests/preview_live_check.py` and `tests/preview_ui_check.py` drive the real window (playback advancing, cache bar colours, prerender/cancel, invalidation, disk cache, Preferences) and `tests/preview_bench.py` produces the measured numbers above. `tests/test_preview_quality.py` checks that framing is identical at 10/35/50/75/100% and at Fit/100%/200% zoom with panning. `tests/test_keyframe_editor.py` covers the dedicated Keyframe Editor (property lanes and groups, add/delete, multi-select, the press-time snapshot group drag that must not leave trailing keys, one undo entry per drag, clipboard, value editing, zoom/fit/snap and the shared Graph Editor mode), `tests/test_keyframe_workflow.py` drives the whole AE-style workflow (compact clip badge, Keyframe Editor multi-move with snapping, clipboard, easing menu, shared selection with the Graph Editor, clip opacity, both envelopes, audio gain, anchor presets, text animation presets, rendering and the format-5 round trip), while `tests/test_keyframe_ui.py` and `tests/test_numeric_fields.py` cover the properties/timeline keyframe controls and the shared numeric widget. They run headless (`QT_QPA_PLATFORM=offscreen` is set by `tests/conftest.py`).

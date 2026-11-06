@@ -20,8 +20,9 @@ def test_text_and_icon_contrast_meets_4_5():
 
 
 def test_layout_version_and_docks(editor):
-    assert layout.LAYOUT_VERSION == 8
+    assert layout.LAYOUT_VERSION == 9
     assert "controls" not in editor.docks
+    assert "keyframe" in editor.docks
 
 
 def test_effects_and_properties_are_separate_labelled_docks(editor):
@@ -32,7 +33,8 @@ def test_effects_and_properties_are_separate_labelled_docks(editor):
     assert docks["properties"] not in editor.tabifiedDockWidgets(docks["effects"])
     assert editor.dockWidgetArea(docks["properties"]) == Qt.DockWidgetArea.RightDockWidgetArea
     entries = {action.text().strip() for action in editor._menu_view.actions() if action.isCheckable()}
-    assert {"Effects", "Properties"} <= entries, f"View must label both panels, got {entries}"
+    assert {"Effects", "Properties", "Keyframe Editor", "Graph Editor"} <= entries, \
+        f"View must label every animation panel, got {entries}"
     assert "" not in entries, "a panel entry with no text cannot be found in the View menu"
 
 
