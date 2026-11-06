@@ -265,8 +265,8 @@ class TrackerColorMixin:
                   help="Draw a circle enclosing each detection"),
         ParamSpec("show_points", "Points", "bool", default=False,
                   help="Draw sampled contour points (box corners when there is no contour)"),
-        ParamSpec("show_labels", "Labels", "bool", default=True,
-                  help="Name each detection"),
+        ParamSpec("show_labels", "Labels", "bool", default=False,
+                  help="Name each detection; tracking numbers are a separate control"),
         ParamSpec("show_numbers", "Numbers", "bool", default=False,
                   help="Draw a separate tracking number"),
         ParamSpec("label_text", "Label text", "text", default="",
@@ -305,7 +305,7 @@ class TrackerColorMixin:
         self.show_contour = Value(False)
         self.show_circle = Value(False)
         self.show_points = Value(False)
-        self.show_labels = Value(True)
+        self.show_labels = Value(False)
         self.show_numbers = Value(False)
         self.label_text = Value("")
         self.connector_mode = Value("none")
@@ -375,7 +375,7 @@ class TrackerColorMixin:
             show_contour=bool(style.get("show_contour", False)),
             show_points=bool(style.get("show_points", False)),
             show_circle=bool(style.get("show_circle", False)),
-            show_labels=bool(style.get("show_labels", True)),
+            show_labels=bool(style.get("show_labels", False)),
             show_numbers=bool(style.get("show_numbers", False)),
             label_text=str(self.label_text.get() or "").strip() or (label or self.TRACKING_LABEL),
             box_style=str(style.get("box_style", "rectangle")),

@@ -46,6 +46,10 @@
   ordinary parameters instead of overriding them at render time, so Numbers, Labels,
   Points, Outline, Circle and Box all work without choosing a look. A manual change after
   a look returns the Look dropdown to Custom, and the change survives preview refreshes.
+  Labels are off by default and no longer append a track number; the separate Numbers
+  control owns IDs, so the old `Face 1` text is gone unless explicitly enabled.
+- Silenced OpenCV's benign `setPreferableTarget` warning during YuNet construction while
+  preserving the detector's CPU execution and restoring OpenCV's log level immediately.
 
 ### Recording
 

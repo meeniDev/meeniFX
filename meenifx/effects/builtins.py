@@ -43,6 +43,33 @@ def face_model_path():
     return ASSETS_DIR / "models" / FACE_MODEL_FILE
 
 
+def _create_yunet(width, height, score):
+    """Create YuNet without leaking OpenCV 5's benign target warning into the console.
+
+    OpenCV 5's new DNN graph reports ``setPreferableTarget`` as unsupported while the
+    YuNet wrapper constructs the network.  Detection still runs on the CPU; the warning
+    is noise for users, so silence only this construction call and restore the previous
+    OpenCV log level immediately afterwards.
+    """
+    logging = getattr(getattr(cv2, "utils", None), "logging", None)
+    previous = None
+    if logging is not None:
+        try:
+            previous = logging.getLogLevel()
+            logging.setLogLevel(logging.LOG_LEVEL_ERROR)
+        except (AttributeError, RuntimeError):
+            previous = None
+    try:
+        return cv2.FaceDetectorYN.create(str(face_model_path()), "",
+                                         (width, height), score, 0.3, 50)
+    finally:
+        if previous is not None:
+            try:
+                logging.setLogLevel(previous)
+            except (AttributeError, RuntimeError):
+                pass
+
+
 class MosaicEffect(EffectBase):
     key = "mosaic"
     name = "Mosaic"
@@ -244,8 +271,7 @@ class FaceTrackerEffect(TrackerColorMixin, EffectBase):
             key = (width, height, int(self.confidence.get()))
             if self._detector is None or key != self._detector_key:
                 score = max(0.05, min(0.99, int(self.confidence.get()) / 100.0))
-                self._detector = cv2.FaceDetectorYN.create(str(face_model_path()), "",
-                                                           (width, height), score, 0.3, 50)
+                self._detector = _create_yunet(width, height, score)
                 self._detector_key = key
             _ok, faces = self._detector.detect(work)
             result = []

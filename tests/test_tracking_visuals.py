@@ -174,6 +174,24 @@ def test_changing_a_tracker_checkbox_after_a_look_returns_to_custom(editor, qapp
     assert entry["params"]["connector_mode"] == "nearest"
 
 
+def test_labels_are_off_by_default_and_numbering_is_separate():
+    engine, _clip = build_engine(frame=synthetic_frame())
+    face = engine.runtime_effects["face_tracker"]
+    face.detect_faces = lambda frame: [(40, 30, 60, 60)]
+    face.param_scale = 1.0
+    face.load_params({**face.defaults, "show_box": False, "show_contour": False,
+                      "show_circle": False, "show_points": False, "show_numbers": False,
+                      "connector_mode": "none", "glow": False, "blur_faces": False})
+    frame = synthetic_frame()
+    assert face.show_labels.get() is False
+    assert np.array_equal(face.apply(frame), frame), "the default face overlay is only the box"
+    face.show_labels.set(True)
+    assert not np.array_equal(face.apply(frame), frame), "Labels must add visible text"
+    face.show_labels.set(False)
+    face.show_numbers.set(True)
+    assert not np.array_equal(face.apply(frame), frame), "Numbers must work independently"
+
+
 def test_checkbox_style_is_what_the_face_tracker_renders():
     engine, _clip = build_engine(frame=synthetic_frame())
     face = engine.runtime_effects["face_tracker"]

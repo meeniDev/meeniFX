@@ -3,7 +3,8 @@ import hashlib
 import os
 
 import cv2
-from PyQt6.QtCore import QMimeData, QObject, QPoint, QRunnable, QSize, Qt, QThreadPool, QTimer, QUrl, pyqtSignal
+from PyQt6.QtCore import (QEvent, QMimeData, QObject, QPoint, QRunnable, QSize, Qt, QThreadPool,
+                          QTimer, QUrl, pyqtSignal)
 from PyQt6.QtGui import (QBrush, QColor, QDrag, QFontMetrics, QIcon, QImage, QPainter, QPen,
                          QPixmap, QPolygonF)
 from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QHBoxLayout, QInputDialog,
@@ -124,6 +125,10 @@ class _MediaList(QListWidget):
         self.setDragEnabled(False)
         self.setAcceptDrops(True)
         self.setDragDropMode(QAbstractItemView.DragDropMode.DropOnly)
+        # QAbstractItemView resets the viewport's accept flag inside setDragDropMode;
+        # set it afterwards or a real platform drag never reaches the folder rows.
+        self.viewport().setAcceptDrops(True)
+        self.viewport().setMouseTracking(True)
         self.setDefaultDropAction(Qt.DropAction.CopyAction)
         self.setDropIndicatorShown(True)
         self.setMouseTracking(True)
@@ -133,6 +138,7 @@ class _MediaList(QListWidget):
         self._drag_press = None
         self._drop_item = None
         self.current_bin = ""
+        self.viewport().installEventFilter(self)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.setMovement(QListWidget.Movement.Static)
         self.setResizeMode(QListWidget.ResizeMode.Adjust)
@@ -141,6 +147,39 @@ class _MediaList(QListWidget):
 
     def supportedDragActions(self):
         return Qt.DropAction.CopyAction
+
+    def eventFilter(self, watched, event):
+        """Route platform drag events from the viewport to this list's handlers.
+
+        QAbstractItemView normally translates these, but its internal dispatch can be
+        bypassed on some Windows/Qt combinations; an explicit event filter keeps folder
+        drops working even when the viewport was just created or re-created by a
+        view-mode change.  The filter is deliberately limited to drag/drop events.
+        """
+        if watched is self.viewport():
+            kind = event.type()
+            if kind == QEvent.Type.DragEnter:
+                self.dragEnterEvent(event)
+                return True
+            if kind == QEvent.Type.DragMove:
+                self.dragMoveEvent(event)
+                return True
+            if kind == QEvent.Type.DragLeave:
+                self._clear_drop_item()
+                event.accept()
+                return True
+            if kind == QEvent.Type.Drop:
+                self.dropEvent(event)
+                return True
+        return super().eventFilter(watched, event)
+
+    def showEvent(self, event):
+        # QAbstractScrollArea can recreate/reset the viewport while the widget is being
+        # shown, which clears the accept flag set in __init__.  A real platform drag is
+        # delivered to the viewport, so restore it once the widget is actually visible.
+        super().showEvent(event)
+        self.viewport().setAcceptDrops(True)
+        self.viewport().setMouseTracking(True)
 
     # ---- explicit drag source ------------------------------------------------
     def mousePressEvent(self, event):
@@ -272,6 +311,7 @@ class _MediaList(QListWidget):
         target = self.itemAt(event.position().toPoint())
         self._set_drop_item(target if target is not None and self._kind(target) in ("bin", "up", "root")
                             else None)
+        event.setDropAction(Qt.DropAction.CopyAction)
         event.acceptProposedAction()
 
     def dragMoveEvent(self, event):
@@ -282,6 +322,7 @@ class _MediaList(QListWidget):
         target = self.itemAt(event.position().toPoint())
         self._set_drop_item(target if target is not None and self._kind(target) in ("bin", "up", "root")
                             else None)
+        event.setDropAction(Qt.DropAction.CopyAction)
         event.acceptProposedAction()
 
     def dragLeaveEvent(self, event):
@@ -297,6 +338,7 @@ class _MediaList(QListWidget):
             self.items_moved.emit([i for i in ids if i], bin_id)
         elif mime.hasUrls():
             self.files_dropped.emit([u.toLocalFile() for u in mime.urls() if u.isLocalFile()], bin_id)
+        event.setDropAction(Qt.DropAction.CopyAction)
         event.acceptProposedAction()
 
 

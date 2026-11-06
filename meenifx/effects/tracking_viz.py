@@ -42,7 +42,7 @@ TRACKING_STYLES = {
     "minimal": {"show_box": True, "show_contour": False, "show_points": False,
                 "show_circle": False, "show_labels": False, "show_numbers": False,
                 "connector_mode": "none", "glow": False, "opacity": 100,
-                "box_style": "rectangle"},
+                "box_style": "corners"},
     "numbered": {"show_box": False, "show_contour": False, "show_points": False,
                  "show_circle": False, "show_labels": False, "show_numbers": True,
                  "connector_mode": "none", "glow": False, "opacity": 100,
@@ -220,7 +220,7 @@ def _connector_pairs(boxes, mode, limit, max_connections):
 
 def draw_tracking(frame, detections, *, color=(0, 255, 255), thickness=2, opacity=100,
                   show_box=True, show_contour=False, show_points=False, show_circle=False,
-                  show_labels=True, show_numbers=False, label_text="", box_style="rectangle",
+                  show_labels=False, show_numbers=False, label_text="", box_style="rectangle",
                   connector_mode="none", connector_distance=25, max_connections=2,
                   glow=False, colors=None, label_scale=0.55):
     """Draw real detections onto a copy of ``frame`` using the shared visual language.
@@ -321,10 +321,10 @@ def draw_tracking(frame, detections, *, color=(0, 255, 255), thickness=2, opacit
             for point in _detection_points(detection, box):
                 cv2.circle(overlay, point, max(3, thickness * 2 + 1), colour, -1, cv2.LINE_AA)
         if labels_on:
+            # Labels are names, not identity badges.  The Numbers control owns IDs, so
+            # enabling Labels alone never produces the old "Face 1" text.
             name = (label_text or detection.__class__.__name__ or "Object").strip()
-            # Callers pass a friendly name; keep the ID because several objects can share it.
-            text = name if not detection.track_id else f"{name} {detection.track_id}"
-            _draw_text(overlay, text, x, y, colour, label_scale, max(1, thickness // 2))
+            _draw_text(overlay, name, x, y, colour, label_scale, max(1, thickness // 2))
         if numbers_on:
             text = str(detection.track_id or index + 1)
             _draw_text(overlay, text, x + 4, y + h, colour, label_scale * 0.9,

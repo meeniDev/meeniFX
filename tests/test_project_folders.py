@@ -6,8 +6,8 @@ import time
 import cv2
 import numpy as np
 import pytest
-from PyQt6.QtCore import QMimeData, QPointF, QSettings, Qt
-from PyQt6.QtGui import QDragLeaveEvent, QDropEvent
+from PyQt6.QtCore import QMimeData, QPoint, QPointF, QSettings, Qt
+from PyQt6.QtGui import QDragLeaveEvent, QDragMoveEvent, QDropEvent
 from PyQt6.QtWidgets import QInputDialog
 
 from meenifx.project.media import norm_path
@@ -94,6 +94,7 @@ def test_folders_are_real_drop_targets_and_survive_save_and_reopen(panel_window,
     window = panel_window
     panel = window.project_panel
     library = window.projects.project.library
+    assert panel.list.viewport().acceptDrops(), "the real drag target must accept drops"
 
     root = tmp_path / "media"
     root.mkdir()
@@ -129,24 +130,10 @@ def test_folders_are_real_drop_targets_and_survive_save_and_reopen(panel_window,
     first_item.setSelected(True)
     second_item.setSelected(True)
     mime = panel.list.mimeData([first_item, second_item])
-
-    class _DragMove:
-        def __init__(self, mime, position):
-            self._mime, self._position = mime, QPointF(position)
-
-        def mimeData(self):
-            return self._mime
-
-        def position(self):
-            return self._position
-
-        def acceptProposedAction(self):
-            pass
-
-        def ignore(self):
-            pass
-
-    panel.list.dragMoveEvent(_DragMove(mime, folder_item_pos := panel.list.visualItemRect(folder_item).center()))
+    folder_pos = panel.list.visualItemRect(folder_item).center()
+    drag_move = QDragMoveEvent(QPoint(folder_pos), Qt.DropAction.CopyAction, mime,
+                               Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+    panel.list.dragMoveEvent(drag_move)
     assert folder_item.background().color().name() == "#2f5f8f"
     panel.list.dragLeaveEvent(QDragLeaveEvent())
     assert folder_item.background().style() == Qt.BrushStyle.NoBrush
