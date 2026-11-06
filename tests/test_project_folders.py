@@ -142,13 +142,14 @@ def test_folders_are_real_drop_targets_and_survive_save_and_reopen(panel_window,
     assert library.by_path(str(first)).bin == folders
     assert library.by_path(str(second)).bin == folders
 
-    # Double-click opens the folder; Back and the Project Root row both navigate.
+    # Double-click opens the folder; Back is the only in-list navigation row.
     panel.list.clearSelection()
     open_item = _item(panel, "bin", folders)
     panel._double_clicked(open_item)
     assert panel._current_bin == folders
     assert panel.back_button.text() == "Back"
     assert panel.back_button.isVisible()
+    assert _item(panel, "root", ROOT_BIN) is None, "root tile is redundant with Back"
     child_item = _item(panel, "bin", child)
     assert child_item is not None
     select = _item(panel, "item", library.by_path(str(first)).id)
@@ -162,13 +163,13 @@ def test_folders_are_real_drop_targets_and_survive_save_and_reopen(panel_window,
     assert "(1)" in _item(panel, "bin", child).text()
     panel.toggle_view()
 
-    # Drop the other item on the root row to move it back out of the folder.
+    # Dropping on Back moves the item to the parent/root as well.
     other = _item(panel, "item", library.by_path(str(second)).id)
-    root_item = _item(panel, "root", ROOT_BIN)
-    assert root_item is not None
+    back_item = _item(panel, "up", "")
+    assert back_item is not None
     panel.list.clearSelection()
     other.setSelected(True)
-    _drop(panel, panel.list.mimeData([other]), root_item)
+    _drop(panel, panel.list.mimeData([other]), back_item)
     pump(qapp, 0.1)
     assert library.by_path(str(second)).bin == ""
 

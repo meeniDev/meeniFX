@@ -270,9 +270,9 @@ class _MediaList(QListWidget):
     def _target_bin_at(self, position):
         """Destination for a drop at ``position`` (viewport coordinates).
 
-        A folder takes its own id, Back takes its parent and the Project Root row takes
-        the root.  Empty space means the folder currently being viewed, so moving a clip
-        between bins does not require hitting a small row exactly.
+        A folder takes its own id and Back takes its parent.  Empty space means the
+        folder currently being viewed, so moving a clip between bins does not require
+        hitting a small row exactly.
         """
         target = self.itemAt(position)
         if target is None:
@@ -282,8 +282,6 @@ class _MediaList(QListWidget):
             return key
         if kind == "up":
             return key  # parent bin id, or "" for a top-level folder
-        if kind == "root":
-            return ROOT_BIN
         return self.current_bin
 
     def _set_drop_item(self, item):
@@ -502,12 +500,6 @@ class ProjectPanel(QWidget):
             up.setToolTip("Back to " + (library.bins.get(parent, "the project root")))
             up.setFlags(up.flags() | Qt.ItemFlag.ItemIsDropEnabled)
             self.list.addItem(up)
-            root = QListWidgetItem("Project Root")
-            root.setData(Qt.ItemDataRole.UserRole, ("root", ROOT_BIN, ""))
-            root.setIcon(self._folder_icon())
-            root.setToolTip("Drop media here to move it back to the project root")
-            root.setFlags(root.flags() | Qt.ItemFlag.ItemIsDropEnabled)
-            self.list.addItem(root)
         if not needle:
             for bin_id in library.child_bins(self._current_bin):
                 name = library.bins.get(bin_id, "Folder")
@@ -809,11 +801,8 @@ class ProjectPanel(QWidget):
         if kind == "bin":
             self._current_bin = key
             self.rebuild(force=True)
-        elif kind in ("up", "root"):
-            if kind == "root":
-                self._current_bin = ""
-            else:
-                self._current_bin = self.project.library.bin_parent(self._current_bin)
+        elif kind == "up":
+            self._current_bin = self.project.library.bin_parent(self._current_bin)
             self.rebuild(force=True)
         elif key in self.project.library.items:
             self.insert_at_playhead([self.project.library.items[key]])
@@ -833,10 +822,8 @@ class ProjectPanel(QWidget):
             menu.addAction("Open", lambda: self._double_clicked(item))
             menu.addAction("Rename...", lambda: self._rename_bin(key))
             menu.addAction("Delete Folder...", lambda: self._delete_bin(key))
-        elif kind in ("up", "root"):
-            text = "Back" if kind == "up" else "Open Project Root"
-            menu.addAction(text, self.go_back if kind == "up" else
-                           lambda: self._double_clicked(item))
+        elif kind == "up":
+            menu.addAction("Back", self.go_back)
         elif kind == "item":
             if not item.isSelected():
                 self.list.clearSelection()
