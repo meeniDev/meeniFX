@@ -113,13 +113,27 @@ and sorting in the Project panel, a searchable Keyboard Shortcuts page built fro
 menu bar, and an in-app recording status (`● mm:ss`, click to stop) with the always-on-top
 recording bar now opt-in under Preferences.
 
+**Simple Choker (Matte / Keying)** — one control moves a layer's alpha edge: positive Choke
+pulls it inward so the visible matte shrinks, negative pushes it outward, measured in project
+pixels so a reduced preview and the export agree. Edge softness widens the new edge into a
+smooth band and Edge quality trades distance-field accuracy for speed. The edge is rebuilt
+from a signed distance field around the matte's 50 % contour, so fractional amounts land
+where they say and the result stays antialiased; colour is never multiplied by alpha, growth
+takes the nearest opaque colour so no dark rim appears, and only the matte's bounds plus the
+growth margin are processed and cached. Shapes, text, transparent PNGs and any alpha matte
+work; fully opaque footage is left untouched and the effect card explains why. Choke and Edge
+softness keyframe like any other parameter. The browser card renders it through a soft inset
+matte because the shipped café reference is fully opaque, which is a preview composition
+only — the reference asset itself is never changed.
+
 **Preview and transform** — fit/percentage zoom, cursor-centred wheel zoom, pan, guides.
 A bounding box with eight scale handles, rotation knob, visible anchor, motion path and
 warp pins. A corner drag is a free transform: the dragged corner follows the pointer on
 both axes while the opposite corner stays fixed in composition space, including on
 rotated, non-uniformly scaled, re-anchored or non-square clips and at any preview zoom.
 Ctrl keeps the aspect ratio captured when the drag (or the current modifier state)
-began, Shift resizes from the centre, Ctrl+Shift does both; side handles change one
+began and grows the picture around its centre, so the middle never drifts, Shift
+resizes from the centre with free axes, Ctrl+Shift does both; side handles change one
 local axis; a resize stops at a three-pixel minimum and never flips. Shift still
 constrains a move to one axis and snaps rotation to 15 degrees. The overlay is
 editing-only and never reaches exported frames.

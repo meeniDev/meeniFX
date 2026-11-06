@@ -874,7 +874,12 @@ class PreviewOverlay:
         if kind == "scale":
             if project is None:
                 return False
-            from_centre = bool(modifiers & (Qt.KeyboardModifier.ShiftModifier
+            # Ctrl is the free transform's proportional centre resize: the picture grows
+            # around its middle, so neither corner can drift. Shift and Alt resize from
+            # the centre without locking the ratio; with no modifier the opposite corner
+            # stays pinned, which is the plain corner drag.
+            from_centre = bool(modifiers & (Qt.KeyboardModifier.ControlModifier
+                                            | Qt.KeyboardModifier.ShiftModifier
                                             | Qt.KeyboardModifier.AltModifier)) \
                 or flags["scale_from_center"]
             base = self._scale_geometry(clip, state, handle, from_centre)
@@ -928,8 +933,8 @@ class PreviewOverlay:
         # Modifier contract. Moving and rotating keep their long-standing keys:
         #   move    - Shift constrains to one axis, Ctrl skips snapping;
         #   rotate  - Shift snaps to 15 degrees, Ctrl is a fine 1:10 ratio;
-        #   scale   - Ctrl locks the aspect ratio, Shift resizes from the centre,
-        #             Ctrl+Shift does both (Alt also resizes from the centre).
+        #   scale   - Ctrl resizes proportionally from the centre, Shift/Alt resize from
+        #             the centre without a ratio lock, no modifier pins the opposite corner.
         # The scale keys are the free-transform convention, so Ctrl can never mean
         # "precision" there: a corner drag is already 1:1 with the pointer.
         shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
@@ -1095,9 +1100,10 @@ class PreviewOverlay:
 
         The term of the drag is the pointer delta from the mouse-down, applied to the
         geometry captured at mouse-down, so the result never accumulates error and never
-        depends on the path the pointer took. A corner drag is non-uniform by default;
-        Ctrl locks the aspect ratio the picture had when the gesture (or the current
-        modifier state) began, Shift resizes around the centre, Ctrl+Shift does both.
+        depends on the path the pointer took. A corner drag pins the opposite corner and
+        changes each axis on its own; Ctrl keeps the aspect ratio the picture had when the
+        gesture (or the current modifier state) began and grows around the centre, Shift
+        resizes around the centre, Ctrl+Shift does both.
         Switching modifiers rebases on the picture as it is now, which cannot jump, and
         the pinned point is translated back into place afterwards so it stays put.
         """
@@ -1105,7 +1111,7 @@ class PreviewOverlay:
         project = self.to_project(pos)
         if project is None:
             return
-        from_centre = bool(shift or alt)
+        from_centre = bool(ctrl or shift or alt)
         mods = (bool(ctrl), from_centre)
         base = drag.get("base")
         if base is None or base.get("mods") != mods:

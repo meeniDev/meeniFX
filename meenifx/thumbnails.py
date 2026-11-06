@@ -63,6 +63,8 @@ PREVIEW_ENTRIES = {
     "motion_blur": {"params": {"length": 60.0, "follow_motion": False}},
     "perspective": {"params": {"tilt_x": 22.0, "tilt_y": -12.0, "zoom": 118.0}},
     "light_leak": {"params": {"amount": 100.0, "spread": 100.0, "hue": 40.0}},
+    # A visible choke, so the card reads as an edge tool rather than an untouched picture.
+    "simple_choker": {"params": {"choke": 12.0, "softness": 1.5}},
     # A puppet needs pins before it does anything; two pulled pins show the deformation.
     "puppet_warp": {"pins": [
         {"id": 1, "src": [0.42, 0.40], "x": 0.36, "y": 0.34, "locked": False},
@@ -72,6 +74,24 @@ PREVIEW_ENTRIES = {
 
 # Frames at which a time-driven effect is rendered when frame 0 is the neutral state.
 PREVIEW_FRAME = {"flash": 3, "exposure_flicker": 6, "light_leak": 60}
+
+# Effects whose subject is the alpha edge cannot be shown on an opaque picture, so their
+# card renders the reference through a soft inset matte instead. This is a preview-only
+# composition: the shipped reference asset itself is never changed.
+ALPHA_DEMOS = {"simple_choker"}
+
+
+def _alpha_demo_layer(layer):
+    """The reference picture behind a soft inset ellipse, so an edge effect has an edge."""
+    height, width = layer.shape[:2]
+    mask = np.zeros((height, width), np.uint8)
+    cv2.ellipse(mask, (width // 2, height // 2),
+                (max(1, int(width * 0.38)), max(1, int(height * 0.38))),
+                0, 0, 360, 255, -1)
+    mask = cv2.GaussianBlur(mask, (0, 0), max(1.0, min(width, height) * 0.006))
+    out = layer.copy()
+    out[:, :, 3] = np.minimum(out[:, :, 3], mask)
+    return out
 
 
 # --------------------------------------------------------------------------- settings
@@ -461,6 +481,15 @@ def render_effect(engine, effect_key, width, height, settings=None):
     if effect is None:
         return None
     frame = PREVIEW_FRAME.get(effect_key, 0)
+    if effect_key in ALPHA_DEMOS:
+        # The reference is a fully opaque photo, which has no alpha edge to choke: inset it
+        # behind a soft matte for this card only, then run the effect exactly as usual.
+        settings = settings or PreviewSettings.load()
+        layer = reference_layer(width, height, settings)
+        if layer is None:
+            return None
+        layer = apply_entries(engine, [preview_entry(effect)], _alpha_demo_layer(layer), frame)
+        return _alpha_over(background_layer(width, height, settings.background), layer)
     return render_entries(engine, [preview_entry(effect)], width, height, settings, frame)
 
 

@@ -2,6 +2,37 @@
 
 ## Unreleased (2026-11-05)
 
+### Simple Choker (Matte / Keying)
+
+- **New alpha-edge effect.** `Simple Choker` moves a layer's matte: positive Choke pulls the
+  edge inward so the visible alpha shrinks, negative pushes it outward, in project pixels so a
+  50 % preview and the export agree. The edge is rebuilt from a signed distance field around the
+  matte's 50 % contour, so fractional amounts land where they say and the result keeps an
+  antialiased ramp; Edge softness turns that ramp into a smooth band, Edge quality trades
+  distance accuracy for speed (Fast solves at half resolution), Preserve original RGB keeps
+  partial-alpha colour, and Mix blends the result with the source.
+- **No dark halos, no wasted frames.** Colour is never multiplied by alpha, and a grown edge
+  takes the nearest opaque colour for its new ring instead of RGB 0. Only the matte's bounding
+  box plus the growth margin is processed, the crop is padded so outward growth is not clipped
+  by the region of interest, and results are cached per matte pixels and parameters.
+- **Real layers, real keyframes.** Shapes, text, transparent PNGs and any alpha matte work;
+  fully opaque footage is left byte-for-byte untouched and the card says it needs an alpha
+  edge. Choke and Edge softness use the normal keyframe channels, and the browser card renders
+  the effect on a soft-matted copy of the reference picture (the shipped café illustration is
+  opaque), without touching the reference asset.
+- `tests/test_simple_choker.py` covers every shape kind, text, a transparent PNG, partial
+  alpha, positive/negative/zero choke, softness, quality, cache reuse, keyframes, the
+  thumbnail, the opaque-footage note, preview/export parity and save/reopen.
+
+### Free transform: Ctrl is a proportional centre resize
+
+- **Ctrl now grows a corner drag around the centre.** Holding Ctrl keeps the aspect ratio and
+  fixes the picture's middle instead of anchoring the opposite corner; with no modifier the
+  corner drag stays free on each axis with the opposite corner pinned, as in Photoshop and
+  Photopea. Shift and Alt still resize from the centre with free axes, Ctrl+Shift is the
+  proportional centre resize with either modifier, and switching modifiers mid-drag rebases on
+  the current picture, so the size and position never jump.
+
 ### Vector shape clips
 
 - **Native shape layers.** Six shapes - Rectangle, Rounded Rectangle, Ellipse, Polygon, Star and

@@ -1,7 +1,7 @@
-"""Free-transform corner handles: the opposite corner must stay pinned.
+"""Free-transform corner handles: the opposite corner stays pinned, Ctrl pins the centre.
 
 Every test here drives the real preview widget with mouse events and then measures the
-fixed corner in composition space, so a wrong pivot, a cumulative update, a modifier jump
+fixed point in composition space, so a wrong pivot, a cumulative update, a modifier jump
 or a hidden aspect lock fails even when the resulting scale numbers look plausible.
 """
 
@@ -103,6 +103,13 @@ def corners_of(window, clip):
                              window.overlay.image_size(live))
 
 
+def centre_of(window, clip):
+    """The picture's middle in composition space: what a centre resize must not move."""
+    corners = corners_of(window, clip)
+    return (sum(point[0] for point in corners) / 4.0,
+            sum(point[1] for point in corners) / 4.0)
+
+
 def send(window, kind, point, modifiers=NONE):
     view = window.preview_panel.view
     event = QMouseEvent(kind, QPointF(point), Qt.MouseButton.LeftButton,
@@ -153,17 +160,18 @@ def test_every_corner_pins_the_opposite_corner_and_scales_freely(editor, handle)
 
 
 @pytest.mark.parametrize("handle", ["nw", "ne", "se", "sw"])
-def test_ctrl_pins_the_corner_and_keeps_the_aspect(editor, handle):
+def test_ctrl_scales_proportionally_around_the_centre(editor, handle):
     window = editor
     clip = add_still(window)
-    before = corners_of(window, clip)[FIXED[handle]]
+    before = centre_of(window, clip)
     start = grab(window, clip, handle, CTRL)
     slide(window, start, *INWARD[handle], modifiers=CTRL)
     state = T.evaluate(current(window, clip), 0)
-    assert_point(corners_of(window, clip)[FIXED[handle]], before)
     assert state.scale_x < 100.0
     assert state.scale_x == pytest.approx(state.scale_y, rel=1e-6), \
         "Ctrl must hold the ratio the drag started with"
+    # Both corners moved, so the fixed point is the middle, not the opposite corner.
+    assert_point(centre_of(window, clip), before, tolerance=0.1)
 
 
 def test_ctrl_never_resets_the_size_and_releasing_it_does_not_jump(editor):
@@ -183,16 +191,17 @@ def test_ctrl_never_resets_the_size_and_releasing_it_does_not_jump(editor):
     assert switched.scale_x == pytest.approx(free.scale_x, abs=1e-6)
     assert switched.scale_y == pytest.approx(free.scale_y, abs=1e-6)
     assert switched.scale_x != pytest.approx(100.0), "Ctrl must not reset the size"
-    fixed = corners_of(window, clip)[0]
+    centre = centre_of(window, clip)
 
-    # Keep dragging with Ctrl: the ratio captured at the press is preserved.
+    # Keep dragging with Ctrl: the ratio captured at the press is preserved and the
+    # picture grows around its middle instead of around the opposite corner.
     held = QPointF(first.x() - 40, first.y() - 10)
     send(window, QMouseEvent.Type.MouseMove, held, CTRL)
     pump(0.05)
     locked = T.evaluate(current(window, clip), 0)
     assert locked.scale_x / locked.scale_y == pytest.approx(
         switched.scale_x / switched.scale_y, rel=1e-6)
-    assert_point(corners_of(window, clip)[0], fixed)
+    assert_point(centre_of(window, clip), centre, tolerance=0.1)
 
     # Release Ctrl without moving: no jump either, and the axes are free again.
     send(window, QMouseEvent.Type.MouseMove, held, NONE)
@@ -206,7 +215,6 @@ def test_ctrl_never_resets_the_size_and_releasing_it_does_not_jump(editor):
     final = T.evaluate(current(window, clip), 0)
     assert final.scale_x / final.scale_y != pytest.approx(locked.scale_x / locked.scale_y,
                                                           rel=1e-3)
-    assert_point(corners_of(window, clip)[0], fixed)
 
 
 def test_shift_resizes_from_the_centre_and_ctrl_shift_keeps_the_ratio(editor):
@@ -297,13 +305,13 @@ def test_a_non_uniformly_stretched_picture_keeps_its_own_ratio_under_ctrl(editor
     transform["scale_x"], transform["scale_y"] = 150.0, 70.0
     window.engine.session.changed.emit()
     pump(0.1)
-    before = corners_of(window, clip)[FIXED["se"]]
+    before = centre_of(window, clip)
     start = grab(window, clip, "se", CTRL)
     slide(window, start, -30, -10, modifiers=CTRL)
     state = T.evaluate(current(window, clip), 0)
     assert state.scale_x / state.scale_y == pytest.approx(150.0 / 70.0, rel=1e-6)
     assert state.scale_x < 150.0, "Ctrl must keep the ratio, not restore the size"
-    assert_point(corners_of(window, clip)[FIXED["se"]], before)
+    assert_point(centre_of(window, clip), before, tolerance=0.1)
 
 
 def test_a_custom_anchor_does_not_become_the_fixed_corner(editor):

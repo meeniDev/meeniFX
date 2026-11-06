@@ -114,6 +114,9 @@ class EffectBase:
     # picture effect can never run on an audio clip (or the other way round).
     MEDIA_TYPES = ("video",)
     PARAMS = ()
+    # A sentence the properties card shows under the controls when the effect only applies
+    # to some sources (an alpha edge, a face, a matte). Empty means no note.
+    NOTE = ""
 
     def __init__(self, app):
         self.app = app

@@ -47,9 +47,9 @@ class PreviewWidget(QWidget):
         # The transform modifier keys, where the gestures happen. Ctrl is the free
         # transform's aspect lock; the inspector switches mirror all three.
         self.setToolTip("Corner handles resize freely and keep the opposite corner fixed. "
-                         "Ctrl keeps the aspect ratio, Shift resizes from the centre, "
-                         "Ctrl+Shift does both. Side handles change one axis; drag inside "
-                         "to move, the knob to rotate, the crosshair to move the anchor.")
+                         "Ctrl resizes proportionally from the centre, Shift from the "
+                         "centre without a ratio lock. Side handles change one axis; drag "
+                         "inside to move, the knob to rotate, the crosshair to move the anchor.")
         self.setStyleSheet("#previewCanvas { background: #141617; border: 1px solid #34383A; }")
         self._quality_getter = quality_getter or (lambda: 100)
         self._image = QImage()

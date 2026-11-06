@@ -40,9 +40,9 @@ from .widgets import ScrubField
 
 CARD_MIME = "application/x-meenifx-card"
 # Effects panel order: everyday picture work first, technical/motion tools after.
-CATEGORY_ORDER = ("Video Effects", "Looks", "Glitch & Distortion", "Stylize", "Color Correction",
-                  "Blur & Sharpen", "Glow & Light", "Light", "Time", "Transform",
-                  "Distortion & Warp", "Warp", "Text Effects", "Audio Effects",
+CATEGORY_ORDER = ("Video Effects", "Looks", "Glitch & Distortion", "Stylize", "Matte / Keying",
+                  "Color Correction", "Blur & Sharpen", "Glow & Light", "Light", "Time",
+                  "Transform", "Distortion & Warp", "Warp", "Text Effects", "Audio Effects",
                   "Blur and Sharpen", "Color", "Distort", "Tracking")
 LABEL_W = 88
 # Property groups an effect card opens by default. The everyday controls live here;
@@ -1963,6 +1963,15 @@ class EffectsPanel(QWidget):
             _box, advanced_form = self._advanced_fold(form)
             for spec in advanced:
                 self._param_row(advanced_form, clip, effect, entry, spec)
+        # Some effects only apply to certain sources (the choker needs an alpha edge). A
+        # short note under the controls says so instead of leaving a no-op card unexplained.
+        note = str(getattr(effect, "NOTE", "") or "")
+        if note:
+            hint = QLabel(note)
+            hint.setWordWrap(True)
+            hint.setObjectName("effectNote")
+            hint.setStyleSheet(f"color: {tokens.COLORS['muted']}; font-size: 11px;")
+            form.addWidget(hint)
 
     def _param_row(self, target, clip, effect, entry, spec):
         """One parameter control (numeric, switch, choice or text) in `target`."""

@@ -210,7 +210,8 @@ def test_corner_handle_scales_and_ctrl_keeps_the_aspect(editor):
     pump(0.1)
     state = T.evaluate(window.engine.timeline.find_clip(clip.id), 0)
     assert state.scale_x < 100.0
-    assert abs(state.scale_x - state.scale_y) < 0.01, "Ctrl must keep the aspect ratio"
+    assert abs(state.scale_x - state.scale_y) < 0.01, \
+        "Ctrl must keep the aspect ratio and resize around the centre"
 
 
 def test_rotation_handle_rotates_the_clip(editor):

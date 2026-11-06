@@ -11,7 +11,22 @@ import pytest
 
 from conftest import build_engine, frame_diff, render, synthetic_frame
 
+# Effects whose subject is transparency: they need a source with an alpha edge, so the audit
+# feeds them a matted version of the synthetic frame instead of the fully opaque one.
+ALPHA_SOURCE_EFFECTS = {"simple_choker"}
+
+
 EFFECT_KEYS = ("mosaic", "ascii", "face_tracker", "hand_tracker", "blob_tracker")
+
+
+def alpha_frame(width=320, height=180):
+    """The synthetic picture behind a soft matte, so an alpha effect has an edge to move."""
+    import cv2
+    frame = cv2.cvtColor(synthetic_frame(width, height), cv2.COLOR_BGR2BGRA)
+    mask = np.zeros((height, width), np.uint8)
+    cv2.ellipse(mask, (width // 2, height // 2), (width // 3, height // 3), 0, 0, 360, 255, -1)
+    frame[:, :, 3] = cv2.GaussianBlur(mask, (0, 0), 6.0)
+    return frame
 
 
 def _specs(kind="int"):
@@ -93,6 +108,8 @@ def blob_frame(width=640, height=480):
 
 def _engine_for(effect_id, monkeypatch):
     frame = blob_frame() if effect_id == "blob_tracker" else synthetic_frame()
+    if effect_id in ALPHA_SOURCE_EFFECTS:
+        frame = alpha_frame()
     engine, clip = build_engine(frame=frame)
     if effect_id == "face_tracker":
         # Face detection needs a real face; the drawing parameters are what is audited.
