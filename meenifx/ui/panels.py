@@ -1796,8 +1796,11 @@ class EffectsPanel(QWidget):
                 self._palette_row(target, clip, entry, spec, str(current or ""))
             else:
                 edit = QLineEdit("" if current is None else str(current))
+                edit.setClearButtonEnabled(True)
                 edit.editingFinished.connect(lambda c=clip, e=entry, n=spec.name, w=edit, s=spec:
                                              self._commit_choice(c, e, n, w.text(), s))
+                self._rows.append({"kind": "text_param", "clip_id": clip.id, "entry": entry,
+                                   "name": spec.name, "field": edit, "spec": spec})
                 target.addWidget(self._labelled(spec.label, edit, tip))
 
     def _mix_row(self, form, clip, effect, entry):

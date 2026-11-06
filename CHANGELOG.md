@@ -48,6 +48,8 @@
   a look returns the Look dropdown to Custom, and the change survives preview refreshes.
   Labels are off by default and no longer append a track number; the separate Numbers
   control owns IDs, so the old `Face 1` text is gone unless explicitly enabled.
+  Emptying the label text now removes the label instead of falling back to `Face`, and
+  the field has a clear button; legacy projects with no saved label stay clean.
 - Silenced OpenCV's benign `setPreferableTarget` warning during YuNet construction while
   preserving the detector's CPU execution and restoring OpenCV's log level immediately.
 

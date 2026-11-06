@@ -131,8 +131,9 @@ into the ordinary controls, so every checkbox still works independently and the 
 manual change returns the Look dropdown to Custom. Old projects'
 draw-box/hull/mode/label values are mapped onto the new controls. Face
 Tracker can blur a face with a feathered elliptical mask; labels are off by default,
-and the Numbers control draws track IDs without appending them to labels. Each tracker
-has Fast/Balanced/Precise detection quality. That setting runs detection on a smaller working
+and the Numbers control draws track IDs without appending them to labels. Clearing
+Label text removes the label; new effects start with a useful tracker name. Each
+tracker has Fast/Balanced/Precise detection quality. That setting runs detection on a smaller working
 image and scales the result back, and detector results are cached for repeated preview or
 export frames. Hand Tracker remains a skin-colour/morphology detector, not a hand-pose
 model.

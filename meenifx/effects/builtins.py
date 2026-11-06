@@ -20,10 +20,25 @@ from ..processing.mosaic import frame_pixel, mosaic_frame
 from .base import EffectBase, ParamSpec, TrackerColorMixin
 from .tracking_viz import Detection
 
-HAND_VIS_PARAMS = tuple(
-    replace(spec, default=True) if spec.name == "show_contour" else spec
-    for spec in TrackerColorMixin.VIS_PARAMS
-)
+def _tracker_vis_params(label, contour=False):
+    """Shared tracker controls with a useful default label for new effects.
+
+    Existing projects carry their own label_text value, so an empty saved label stays
+    empty (and now draws nothing) instead of being replaced with a tracker name.
+    """
+    result = []
+    for spec in TrackerColorMixin.VIS_PARAMS:
+        if spec.name == "label_text":
+            spec = replace(spec, default=label)
+        elif spec.name == "show_contour" and contour:
+            spec = replace(spec, default=True)
+        result.append(spec)
+    return tuple(result)
+
+
+FACE_VIS_PARAMS = _tracker_vis_params("Face")
+HAND_VIS_PARAMS = _tracker_vis_params("Hand", contour=True)
+BLOB_VIS_PARAMS = _tracker_vis_params("Blob")
 
 FACE_CASCADE_FILE = "haarcascade_frontalface_default.xml"
 FACE_MODEL_FILE = "face_detection_yunet_2023mar.onnx"
@@ -211,7 +226,7 @@ class FaceTrackerEffect(TrackerColorMixin, EffectBase):
                   help="Blur radius as a percentage of the smaller face edge"),
         ParamSpec("blur_feather", "Blur feather", "int", 0, 80, 10, unit=" px", pixels=True,
                   help="Soften the blur edge so it does not leave a hard rectangle"),
-    ) + TrackerColorMixin.COLOR_PARAMS + TrackerColorMixin.VIS_PARAMS
+    ) + TrackerColorMixin.COLOR_PARAMS + FACE_VIS_PARAMS
 
     def __init__(self, app):
         super().__init__(app)
@@ -415,7 +430,7 @@ class BlobTrackerEffect(TrackerColorMixin, EffectBase):
                   help="Brightness cut-off for a pixel to belong to a blob"),
         ParamSpec("invert", "Invert mask", "bool", default=False),
         ParamSpec("thickness", "Line thickness", "int", 1, 12, 2, unit=" px", pixels=True),
-    ) + TrackerColorMixin.COLOR_PARAMS + TrackerColorMixin.VIS_PARAMS
+    ) + TrackerColorMixin.COLOR_PARAMS + BLOB_VIS_PARAMS
 
     def __init__(self, app):
         super().__init__(app)

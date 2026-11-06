@@ -270,7 +270,7 @@ class TrackerColorMixin:
         ParamSpec("show_numbers", "Numbers", "bool", default=False,
                   help="Draw a separate tracking number"),
         ParamSpec("label_text", "Label text", "text", default="",
-                  help="Leave empty to use the tracker's own name"),
+                  help="Text drawn by Labels; leave empty to draw no label. Numbers is separate"),
         ParamSpec("connector_mode", "Connectors", "choice",
                   choices=("none", "nearest", "distance", "sequential"),
                   choice_labels=("None", "Nearest neighbour", "All within range",
@@ -307,7 +307,10 @@ class TrackerColorMixin:
         self.show_points = Value(False)
         self.show_labels = Value(False)
         self.show_numbers = Value(False)
-        self.label_text = Value("")
+        # New effects get a useful default label, but old projects that stored an empty
+        # label_text stay empty.  Empty now means "draw no text" rather than silently
+        # falling back to "Face" and making the Labels control impossible to remove.
+        self.label_text = Value(str(getattr(self, "TRACKING_LABEL", "") or ""))
         self.connector_mode = Value("none")
         self.connector_distance = Value(25)
         self.max_connections = Value(2)
@@ -336,6 +339,11 @@ class TrackerColorMixin:
             mapped["show_box"] = mode == "box"
             mapped["show_contour"] = mode == "contour"
             mapped["show_circle"] = mode == "circle"
+        # Projects saved before label_text existed must not inherit the new "Face"
+        # default along with an already-enabled label.  An absent legacy value means
+        # no text; the user can type one or turn Labels back on explicitly.
+        if "label_text" not in mapped:
+            mapped["label_text"] = ""
         super().load_params(mapped)
 
     def _resolve_draw_color(self, object_index=0):
@@ -377,7 +385,9 @@ class TrackerColorMixin:
             show_circle=bool(style.get("show_circle", False)),
             show_labels=bool(style.get("show_labels", False)),
             show_numbers=bool(style.get("show_numbers", False)),
-            label_text=str(self.label_text.get() or "").strip() or (label or self.TRACKING_LABEL),
+            # An empty label field means no text.  Do not silently fall back to
+            # "Face"/"Hand"/"Blob": that made the Labels control impossible to remove.
+            label_text=str(self.label_text.get() or "").strip(),
             box_style=str(style.get("box_style", "rectangle")),
             connector_mode=str(style.get("connector_mode", "none")),
             connector_distance=int(self.connector_distance.get()),

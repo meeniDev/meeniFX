@@ -321,10 +321,11 @@ def draw_tracking(frame, detections, *, color=(0, 255, 255), thickness=2, opacit
             for point in _detection_points(detection, box):
                 cv2.circle(overlay, point, max(3, thickness * 2 + 1), colour, -1, cv2.LINE_AA)
         if labels_on:
-            # Labels are names, not identity badges.  The Numbers control owns IDs, so
-            # enabling Labels alone never produces the old "Face 1" text.
-            name = (label_text or detection.__class__.__name__ or "Object").strip()
-            _draw_text(overlay, name, x, y, colour, label_scale, max(1, thickness // 2))
+            # Labels are explicit text, not identity badges.  An empty field draws
+            # nothing; Numbers is the separate control for track IDs.
+            name = str(label_text or "").strip()
+            if name:
+                _draw_text(overlay, name, x, y, colour, label_scale, max(1, thickness // 2))
         if numbers_on:
             text = str(detection.track_id or index + 1)
             _draw_text(overlay, text, x + 4, y + h, colour, label_scale * 0.9,
