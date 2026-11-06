@@ -16,6 +16,8 @@ from .branding import app_icon, wordmark
 from .filedialogs import choose_folder, open_file
 from .layout import app_settings
 from .toast import Toast
+from .themed import muted_text
+from .. import tokens
 
 THUMB_SIZE = QSize(224, 126)
 SHOW_ON_STARTUP_KEY = "startup/showStartWindow"
@@ -76,7 +78,7 @@ def _paint_temp_badge(painter):
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(QColor(0, 0, 0, 150))
     painter.drawRoundedRect(rect, 3, 3)
-    painter.setPen(QColor("#ffce6b"))
+    painter.setPen(QColor(tokens.COLORS["coral_text"]))
     painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
     painter.restore()
 
@@ -197,7 +199,7 @@ class StartWindow(QWidget):
         main.addWidget(self.grid, 1)
         self.empty = QLabel("No recent projects")
         self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty.setStyleSheet("color: #8a8f9a;")
+        muted_text(self.empty)
         main.addWidget(self.empty)
         root.addLayout(main, 1)
 
@@ -418,7 +420,7 @@ class TempCleanupDialog(QDialog):
         note = QLabel("Tests and automation create their projects there. Removing them only edits "
                       "this list; the files stay where they are unless you ask for the Recycle Bin.")
         note.setWordWrap(True)
-        note.setStyleSheet("color: #8a8f9a;")
+        muted_text(note)
         layout.addWidget(note)
         self.trash = QCheckBox("Also move the project folders to the Recycle Bin")
         self.trash.setChecked(False)
@@ -669,7 +671,7 @@ class PreferencesDialog(QDialog):
         note = QLabel("Ctrl+V in a text field still pastes text, and in the Media panel it only "
                       "adds the file without touching the timeline.")
         note.setWordWrap(True)
-        note.setStyleSheet("color: #8a8f9a;")
+        muted_text(note)
         form.addRow("", note)
         layout.addWidget(group)
 
@@ -699,7 +701,7 @@ class PreferencesDialog(QDialog):
         form.addRow("Engine", self.caption_backend)
         folder = QLabel(whisper.MODEL_DIR)
         folder.setWordWrap(True)
-        folder.setStyleSheet("color: #8a8f9a;")
+        muted_text(folder)
         form.addRow("Models folder", folder)
         self._caption_models_host = QWidget()
         self._caption_models_layout = QVBoxLayout(self._caption_models_host)
@@ -720,7 +722,7 @@ class PreferencesDialog(QDialog):
         models = whisper.installed_models()
         if not models:
             empty = QLabel("No model downloaded yet")
-            empty.setStyleSheet("color: #8a8f9a;")
+            muted_text(empty)
             layout.addWidget(empty)
             return
         for name, size in models:

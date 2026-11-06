@@ -28,7 +28,7 @@ from ..preview.settings import WAVEFORM_MODES
 from ..preview import gpu as render_backend
 from ..preview.invalidation import changed_ranges, fingerprint, timeline_digests
 from ..preview.metrics import PerfOverlay
-from ..theme import configure_theme
+from ..theme import configure_theme, resolve_theme
 from . import layout as dock_layout
 from .branding import app_icon
 from .dialogs import AboutDialog, MarkerListDialog
@@ -104,7 +104,7 @@ class ExportJob(QRunnable):
 class MainWindow(QMainWindow):
     def __init__(self, app):
         super().__init__()
-        self.qt_app=app; configure_theme(app)
+        self.qt_app=app; configure_theme(app,resolve_theme(app,dock_layout.app_settings().value("ui/theme","light")))
         self.setWindowTitle(APP_TITLE); self.resize(1420,880)
         icon=app_icon(); self.setWindowIcon(icon)
         # Message boxes and dialogs take the application icon; set it here too so any
@@ -479,6 +479,22 @@ class MainWindow(QMainWindow):
                                                        bool(self.playback_settings.show_overlay),
                                                        self.set_perf_overlay_visible)
         self._menu_view=bar.addMenu("View")
+        self._build_theme_menu(self._menu_view)
+
+    def _build_theme_menu(self,menu):
+        from PyQt6.QtGui import QActionGroup
+        sub=menu.addMenu("Appearance")
+        group=QActionGroup(self); group.setExclusive(True)
+        current=dock_layout.app_settings().value("ui/theme","light")
+        self._theme_actions={}
+        for key,label in (("light","Light"),("dark","Dark"),("system","Match system")):
+            action=QAction(label,self); action.setCheckable(True); action.setChecked(key==current)
+            action.triggered.connect(lambda _c=False,k=key: self.set_theme_choice(k))
+            group.addAction(action); sub.addAction(action); self._theme_actions[key]=action
+
+    def set_theme_choice(self,choice):
+        dock_layout.app_settings().setValue("ui/theme",choice)
+        configure_theme(self.qt_app,resolve_theme(self.qt_app,choice))
 
     def _add_action(self,menu,label,shortcut,callback):
         action=QAction(label,self)
@@ -569,6 +585,15 @@ class MainWindow(QMainWindow):
         self.export_button.setToolTip("Export the timeline (Ctrl+R)"); self.export_button.setFixedHeight(tokens.CONTROL_H)
         self.export_button.setMinimumWidth(88); self.export_button.clicked.connect(lambda _=False:self.open_export_dialog())
         toolbar.addWidget(self.export_button)
+        icon_names=[(self.undo_button,"undo"),(self.redo_button,"redo"),(self.select_tool_button,"select"),
+                    (self.transform_tool_button,"transform"),(self.puppet_tool_button,"puppet"),
+                    (self.text_button,"text"),(self.captions_button,"captions"),(self.graph_button,"graph"),
+                    (self.path_button,"path"),(self.autokey_button,"auto_key")]
+        def refresh_icons(_toolbar):
+            for button,name in icon_names: button.setIcon(icon(name))
+            self.record_button.setIcon(icon("record",tokens.COLORS["red"]))
+        from .themed import bind_theme
+        bind_theme(toolbar,refresh_icons)
 
     def _sync_undo_buttons(self,*_):
         stack=self.qt_undo_stack

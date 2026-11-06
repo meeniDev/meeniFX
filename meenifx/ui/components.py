@@ -256,8 +256,17 @@ class EmptyState(QWidget):
         if action is not None:
             col.addWidget(action, 0, Qt.AlignmentFlag.AlignHCenter)
         col.addStretch(1)
+        # Never force a dock taller: the artwork and message give way when space is short.
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.setMinimumSize(0, 0)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        height = event.size().height()
+        self._art.setVisible(height >= 230)
+        self.message.setVisible(bool(self.message.text()) and height >= 120)
 
     def set_text(self, title, message=""):
         self.title.setText(title)
         self.message.setText(message)
-        self.message.setVisible(bool(message))
+        self.message.setVisible(bool(message) and self.height() >= 120)

@@ -25,6 +25,7 @@ from ..model.keyframes import AnimatedValue, Keyframe, clip_animations, clip_key
 from ..model.timeline import FADE_CURVES, MARKER_COLORS, fade_curve_name, fade_gain
 from ..theme import COLORS
 from .track_header import header_hit, header_layout, paint_header, TOOLTIPS
+from .themed import on_theme_change
 from .widgets import ScrubField
 
 
@@ -60,8 +61,30 @@ TIMELINE_COLORS = {
     "select": "#ffffff", "band": "#7c9cff", "accent": COLORS["accent"],
     "ghost": "#8fb0ff", "invalid": "#ff5c6c", "wave": "#7ef0c0", "wave_dim": "#3f8f74",
     "loop_strip": "#0b1017", "loop_band": "#5f7bff", "loop_band_off": "#3a4457",
-    "video": ("#2c5694", "#5f93e6"), "image": ("#6a45a8", "#a784e6"), "audio": ("#1c7a5c", "#3fcf9b"),
+    "video": ("#3C6A8E", "#7FB2D6"), "image": ("#9A5545", "#E39B86"), "audio": ("#37755C", "#7FC4A6"),
 }
+
+# Lanes, ruler and headers follow the theme; clip colours stay deep enough for white labels in both.
+_TIMELINE_SURFACES = {
+    "light": {"bg": "#E9E4DA", "lane_a": "#F4F0E7", "lane_b": "#EFEADF", "lane_audio": "#EAF0E7",
+              "sep": "#D6CFC1", "header": "#F0ECE3", "header_text": "#333A40", "muted": "#5D645E",
+              "ruler": "#ECE7DC", "tick": "#A39B8C", "tick_major": "#6B645A",
+              "loop_strip": "#E2DCCF", "loop_band_off": "#C9C1B2", "playhead": "#D6453A",
+              "band": "#4F7FA8", "ghost": "#4F7FA8", "snap": "#B8860B", "loop_band": "#4F7FA8"},
+    "dark": {"bg": "#1B1D1F", "lane_a": "#222527", "lane_b": "#26292B", "lane_audio": "#222927",
+             "sep": "#34383A", "header": "#2A2D2F", "header_text": "#EDEAE3", "muted": "#A8A399",
+             "ruler": "#26292B", "tick": "#6E7270", "tick_major": "#A8ABA6",
+             "loop_strip": "#1A1C1D", "loop_band_off": "#4A4E50", "playhead": "#FF6B5E",
+             "band": "#7FB2D6", "ghost": "#8FC0E0", "snap": "#F4D98C", "loop_band": "#7FB2D6"},
+}
+
+
+def _retheme_timeline():
+    TIMELINE_COLORS.update(_TIMELINE_SURFACES["dark" if tokens.is_dark() else "light"])
+    TIMELINE_COLORS["accent"] = COLORS["accent"]
+
+
+on_theme_change(_retheme_timeline)
 
 HIST = 14          # pixels of lane hysteresis when changing lanes mid-drag
 

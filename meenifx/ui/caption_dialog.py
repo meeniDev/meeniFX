@@ -20,6 +20,8 @@ from ..captions import model as caption_model
 from ..captions import styles as caption_styles
 from ..captions import subtitles
 from ..captions import whisper
+from .themed import muted_text
+from .. import tokens
 
 MAX_SECONDS = 30 * 60
 SOURCES = (("Entire timeline", "timeline"), ("Selected clip", "clip"),
@@ -108,7 +110,7 @@ class CaptionDialog(QDialog):
         source_form.addRow("Analyse", self.source)
         self.range_label = QLabel("")
         self.range_label.setWordWrap(True)
-        self.range_label.setStyleSheet("color: #8a8f9a;")
+        muted_text(self.range_label)
         source_form.addRow("", self.range_label)
         layout.addWidget(source_group)
 
@@ -197,7 +199,7 @@ class CaptionDialog(QDialog):
         if whisper.backend_available():
             self.backend_note.setText("Transcription runs locally. The first use of a model "
                                       "downloads it after you agree; afterwards it works offline.")
-            self.backend_note.setStyleSheet("color: #8a8f9a;")
+            muted_text(self.backend_note)
         else:
             self.backend_note.setText("faster-whisper is not installed, so speech recognition is "
                                       "unavailable in this build. You can still import an SRT.")
@@ -438,7 +440,7 @@ class TranscriptDialog(QDialog):
         layout.addLayout(style_row)
 
         note = QLabel("Times are in seconds. Changes are applied to the timeline as one undo step.")
-        note.setStyleSheet("color: #8a8f9a;")
+        muted_text(note)
         note.setWordWrap(True)
         layout.addWidget(note)
 

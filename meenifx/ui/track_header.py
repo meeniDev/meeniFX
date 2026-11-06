@@ -11,6 +11,7 @@ from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPolygonF
 
 from .. import tokens
 from ..icons import paint as paint_icon
+from .themed import on_theme_change
 
 BUTTON = tokens.HIT
 GAP = 4
@@ -28,6 +29,22 @@ COLORS = {
     "hover": "#2a3a55", "press": "#0d1220", "track": "#2f3b4d",
     "fill": tokens.COLORS["accent_fill"], "volume_bg": "#1b2330",
 }
+
+_HEADER_SURFACES = {
+    "light": {"text": "#333A40", "dim": "#5D645E", "icon": "#4A5157", "hover": "#E3DDD0",
+              "press": "#D6CFC0", "track": "#BFB7A8", "volume_bg": "#DDD6C8"},
+    "dark": {"text": "#EDEAE3", "dim": "#A8A399", "icon": "#CFCBC2", "hover": "#3A3E40",
+             "press": "#17191A", "track": "#55595B", "volume_bg": "#1E2022"},
+}
+
+
+def _retheme_header():
+    COLORS.update(_HEADER_SURFACES["dark" if tokens.is_dark() else "light"])
+    for key, token in (("active", "accent"), ("warn", "accent"), ("danger", "accent"), ("fill", "accent_fill")):
+        COLORS[key] = tokens.COLORS[token]
+
+
+on_theme_change(_retheme_header)
 
 TOOLTIPS = {
     "visible": "Show / hide this video track (hidden tracks are not rendered)",

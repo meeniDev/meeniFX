@@ -176,6 +176,8 @@ def test_media_panel_focus_imports_without_a_clip(window, tmp_path):
     project = start_project(editor, tmp_path)
     panel = editor.project_panel
     panel.show()
+    editor.activateWindow()
+    process(0.05)
     panel.list.setFocus()
     process(0.05)
     clipboard().clear()

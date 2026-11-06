@@ -34,6 +34,7 @@ from ..model import transform as T
 from ..model.keyframes import AnimatedValue, parameter_value_at
 from ..processing.blend import BLEND_LABELS, normalise_mode
 from .browser import BrowserView
+from .components import EmptyState
 from .widgets import ScrubField
 
 CARD_MIME = "application/x-meenifx-card"
@@ -545,10 +546,9 @@ class EffectsPanel(QWidget):
                 item.widget().hide()
                 item.widget().deleteLater()
         if not clips:
-            empty = QLabel("Select a clip")
-            empty.setProperty("quiet", True)
-            self.properties_layout.addWidget(empty)
-            self.properties_layout.addStretch(1)
+            empty = EmptyState("Nothing selected", "Click a clip on the timeline to adjust its size, "
+                               "position and effects.", "sparkles")
+            self.properties_layout.addWidget(empty, 1)
             return
         clip = clips[0]
         self._clip_card(clip)

@@ -44,7 +44,7 @@ class PreviewWidget(QWidget):
         self.setAcceptDrops(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMouseTracking(True)
-        self.setStyleSheet("#previewCanvas { background: #101114; border: 1px solid #2a3240; }")
+        self.setStyleSheet("#previewCanvas { background: #141617; border: 1px solid #34383A; }")
         self._quality_getter = quality_getter or (lambda: 100)
         self._image = QImage()
         self._frame_size = (0, 0)      # logical/project size only
@@ -184,7 +184,7 @@ class PreviewWidget(QWidget):
     def paintEvent(self, _event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-        painter.fillRect(self.rect(), QColor("#101114"))
+        painter.fillRect(self.rect(), QColor("#141617"))
         if self._image.isNull() or not self._frame_size[0]:
             # Nothing to show yet, but the statistics are live: an empty timeline still
             # answers "is the overlay on?" instead of drawing nothing at all.

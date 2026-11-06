@@ -4,6 +4,9 @@ from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QLineEdit,
                              QTableWidget, QTableWidgetItem, QVBoxLayout)
 
+from .. import tokens
+from .themed import muted_text, warning_text
+
 
 def collect_shortcuts(window):
     """[(action text, shortcut, menu path)] from the live menu bar.
@@ -76,7 +79,7 @@ class ShortcutsDialog(QDialog):
         note = QLabel("Shortcuts are ignored while a text or numeric field has focus, so "
                       "typing always works normally. Conflicting entries are marked red.")
         note.setWordWrap(True)
-        note.setStyleSheet("color: #8a8f9a;")
+        muted_text(note)
         layout.addWidget(note)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
@@ -87,10 +90,10 @@ class ShortcutsDialog(QDialog):
             names = "; ".join(f"{shortcut}: {', '.join(labels)}"
                               for shortcut, labels in sorted(self.conflicts.items()))
             self.conflict_label.setText(f"{len(self.conflicts)} conflicting shortcut(s): {names}")
-            self.conflict_label.setStyleSheet("color: #ffce6b;")
+            warning_text(self.conflict_label)
         else:
             self.conflict_label.setText("No conflicting shortcuts.")
-            self.conflict_label.setStyleSheet("color: #8a8f9a;")
+            muted_text(self.conflict_label)
         self._fill()
 
     def _fill(self, *_args):
@@ -110,7 +113,7 @@ class ShortcutsDialog(QDialog):
             for column, value in enumerate((label, shortcut, path, note)):
                 item = QTableWidgetItem(value)
                 if note:
-                    item.setForeground(QColor("#ffce6b"))
+                    item.setForeground(QColor(tokens.COLORS["coral_text"]))
                 self.table.setItem(index, column, item)
         self.table.resizeColumnsToContents()
         self.table.setUpdatesEnabled(True)

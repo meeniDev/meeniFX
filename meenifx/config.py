@@ -21,6 +21,7 @@ ASSETS_DIR = ASSETS_ROOT / "assets"
 APP_ICON = ASSETS_DIR / "icon.ico"
 APP_ICON_PNGS = tuple(ASSETS_DIR / name for name in ("icon_1024.png", "icon_512.png", "icon_256.png"))
 APP_LOGO = ASSETS_DIR / "logo_horizontal.png"
+APP_LOGO_DARK = ASSETS_DIR / "logo_horizontal_on_dark.png"
 DEFAULT_INPUT = str(PROJECT_ROOT / "flight-reacts-flight.gif")
 DEFAULT_OUTPUT = str(PROJECT_ROOT / "mosaic-output.mp4")
 

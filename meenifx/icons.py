@@ -2,8 +2,8 @@
 
 import math
 
-from PyQt6.QtCore import QPointF, QRectF, Qt
-from PyQt6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
+from PyQt6.QtCore import QPointF, QRectF, QSize, Qt
+from PyQt6.QtGui import QColor, QIcon, QIconEngine, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 
 from .tokens import COLORS
 
@@ -308,21 +308,49 @@ def paint(painter, name, rect, color):
     painter.restore()
 
 
+class _ThemedEngine(QIconEngine):
+    """Renders at request time in the current theme's colours, so one QIcon serves both themes."""
+
+    def __init__(self, name, color, size):
+        super().__init__()
+        self.name, self.color, self.size = name, color, size
+
+    def clone(self):
+        return _ThemedEngine(self.name, self.color, self.size)
+
+    def _colour(self, mode):
+        if mode == QIcon.Mode.Disabled:
+            return COLORS["disabled"]
+        return self.color or COLORS["text"]
+
+    def pixmap(self, size, mode, state):
+        pixels = max(1, min(size.width(), size.height()))
+        key = (self.name, self._colour(mode), pixels)
+        if key not in _PIXMAPS:
+            _PIXMAPS[key] = _render(self.name, key[1], pixels, 1.0)
+        return _PIXMAPS[key]
+
+    def paint(self, painter, rect, mode, state):
+        scale = max(1.0, painter.device().devicePixelRatioF()) if painter.device() is not None else 1.0
+        side = max(1, int(round(min(rect.width(), rect.height()) * scale)))
+        pixmap = self.pixmap(QSize(side, side), mode, state)
+        target = QRectF(rect.x() + (rect.width() - side / scale) / 2.0,
+                        rect.y() + (rect.height() - side / scale) / 2.0, side / scale, side / scale)
+        painter.drawPixmap(target, pixmap, QRectF(pixmap.rect()))
+
+
+_PIXMAPS = {}
+
+
 def clear_icon_cache():
     """Forget every rendered icon (a theme switch changes their colours)."""
     _CACHE.clear()
+    _PIXMAPS.clear()
 
 
 def icon(name, color=None, size=16):
-    """Icon in `color` (default: the normal text colour); a dimmed twin is used when disabled."""
-    key = (name, color, size, COLORS["text"])
-    if key in _CACHE:
-        return _CACHE[key]
-    result = QIcon()
-    states = ((QIcon.Mode.Normal, color or COLORS["text"]), (QIcon.Mode.Disabled, COLORS["disabled"]),
-              (QIcon.Mode.Active, color or COLORS["text"]))
-    for mode, value in states:
-        for scale in _ICON_SCALES:
-            result.addPixmap(_render(name, value, size, scale), mode)
-    _CACHE[key] = result
-    return result
+    """Icon in `color` (default: the live text colour, so it follows the theme); dimmed when disabled."""
+    key = (name, color, size)
+    if key not in _CACHE:
+        _CACHE[key] = QIcon(_ThemedEngine(name, color, size))
+    return _CACHE[key]

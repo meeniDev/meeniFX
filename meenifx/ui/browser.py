@@ -278,12 +278,15 @@ class BrowserCard(QFrame):
         if self.item.get("applied"):
             border = QColor(tokens.COLORS["accent"])
         elif self._hover:
-            border = QColor(tokens.COLORS["border"]).lighter(150)
+            border = QColor(tokens.COLORS["border_strong"])
         else:
             border = QColor(tokens.COLORS["border"])
         painter.setPen(QPen(border, 1.2))
-        painter.setBrush(QColor(tokens.COLORS["panel_alt"]))
-        painter.drawRoundedRect(rect, tokens.RADIUS + 1, tokens.RADIUS + 1)
+        fill = QColor(tokens.COLORS["panel_alt"])
+        if self._hover:
+            fill = QColor(tokens.COLORS["panel_soft"])
+        painter.setBrush(fill)
+        painter.drawRoundedRect(rect, tokens.RADIUS_LG - 2, tokens.RADIUS_LG - 2)
         painter.end()
 
 

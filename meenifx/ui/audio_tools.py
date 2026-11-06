@@ -17,6 +17,8 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDialo
 from ..audio import mix, silence
 from ..audio.plan import build_segments
 from ..model.timeline import SYNC_TOLERANCE
+from .. import tokens
+from .themed import muted_text
 
 SCOPES = (("linked", "Audio and linked video"),
           ("matching", "Matching source video and audio"),
@@ -204,9 +206,9 @@ class CutPreview(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         rect = self.rect().adjusted(1, 1, -1, -1)
-        painter.fillRect(rect, QColor("#141821"))
+        painter.fillRect(rect, QColor(tokens.COLORS["panel_alt"]))
         if self.duration <= 0 or self.times.size == 0:
-            painter.setPen(QColor("#8a8f9a"))
+            painter.setPen(QColor(tokens.COLORS["muted"]))
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "Analyze a clip to see its cuts")
             return
         span = max(0.001, self.duration)
@@ -216,7 +218,7 @@ class CutPreview(QWidget):
             painter.fillRect(int(x0), rect.top(), max(1, int(x1 - x0)), rect.height(),
                              QColor(214, 69, 69, 90))
         floor = -70.0
-        painter.setPen(QPen(QColor("#6be0a6"), 1))
+        painter.setPen(QPen(QColor(tokens.COLORS["success"]), 1))
         step = max(1, self.times.size // max(1, rect.width()))
         for index in range(0, self.times.size, step):
             x = rect.left() + rect.width() * min(1.0, self.times[index] / span)
@@ -540,7 +542,7 @@ class NormalizeDialog(QDialog):
         layout.addWidget(self.rows)
         self.status = QLabel("")
         self.status.setWordWrap(True)
-        self.status.setStyleSheet("color: #8a8f9a;")
+        muted_text(self.status)
         layout.addWidget(self.status)
 
         buttons = QDialogButtonBox()

@@ -12,7 +12,7 @@ the wordmark and the app tile are never drawn from a bitmap that was enlarged af
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QIcon, QPixmap
 
-from ..config import APP_ICON, APP_ICON_PNGS, APP_LOGO
+from ..config import APP_ICON, APP_ICON_PNGS, APP_LOGO, APP_LOGO_DARK
 
 # The icon file happens to be the first pick; the PNGs add ready-made large sizes so
 # Qt never has to upscale for high-DPI taskbars and alt-tab previews.
@@ -43,12 +43,14 @@ def wordmark(width=440, dpr=1.0):
     still a downscale, which is what makes the wordmark look like vector art rather than
     like an enlarged bitmap.
     """
-    if not APP_LOGO.exists():
+    from .. import tokens
+    logo = APP_LOGO_DARK if tokens.is_dark() else APP_LOGO
+    if not logo.exists():
         return None
-    key = (int(round(width)), round(float(dpr or 1.0), 2))
+    key = (int(round(width)), round(float(dpr or 1.0), 2), tokens.is_dark())
     if key in _LOGO_CACHE:
         return _LOGO_CACHE[key]
-    source = QPixmap(str(APP_LOGO))
+    source = QPixmap(str(logo))
     if source.isNull():
         return None
     scaled = _smooth(source, width, source.height() * width / max(1, source.width()), dpr)

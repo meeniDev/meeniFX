@@ -14,6 +14,14 @@ own widget alive.
 import weakref
 
 _BOUND = weakref.WeakKeyDictionary()
+_HOOKS = []
+
+
+def on_theme_change(hook):
+    """Run a module-level ``hook()`` now and before every widget restyle (for shared palettes)."""
+    _HOOKS.append(hook)
+    hook()
+    return hook
 
 
 def bind_theme(widget, apply):
@@ -28,7 +36,20 @@ def themed_style(widget, build):
     return bind_theme(widget, lambda w: w.setStyleSheet(build()))
 
 
+def muted_text(widget):
+    """Secondary text colour that follows the theme."""
+    from .. import tokens
+    return themed_style(widget, lambda: f"color: {tokens.COLORS['muted']};")
+
+
+def warning_text(widget):
+    from .. import tokens
+    return themed_style(widget, lambda: f"color: {tokens.COLORS['coral_text']};")
+
+
 def restyle_all():
+    for hook in _HOOKS:
+        hook()
     for widget, apply in list(_BOUND.items()):
         try:
             apply(widget)

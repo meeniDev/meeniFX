@@ -182,6 +182,9 @@ def main():
     app.setOrganizationName("meeniFX")
     app.setApplicationName("Studios")
     app.setWindowIcon(app_icon())
+    from .theme import configure_theme, resolve_theme
+    from .ui.layout import app_settings
+    configure_theme(app,resolve_theme(app,app_settings().value("ui/theme","light")))
     controller=AppController(app,sys.argv[1:])  # noqa: F841 - keeps the windows alive
     return app.exec()
 

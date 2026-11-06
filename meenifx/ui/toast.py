@@ -24,9 +24,6 @@ class Toast(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.setStyleSheet(
-            "#toast { background: #1b2230; border: 1px solid #323d54; border-radius: 6px; }"
-            "#toast QLabel { color: #e8edf7; background: transparent; }")
         self.label = QLabel("", self)
         self.label.setWordWrap(True)
         self.label.setTextFormat(Qt.TextFormat.PlainText)
@@ -45,7 +42,16 @@ class Toast(QWidget):
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self.fade_out)
         self._kind = "info"
+        self._style()
         self.hide()
+
+    def _style(self):
+        from .. import tokens
+        c = tokens.COLORS
+        edge = c["coral_text"] if self._kind == "error" else c["border_strong"]
+        self.setStyleSheet(
+            f"#toast {{ background: {c['panel']}; border: 1px solid {edge}; border-radius: {tokens.RADIUS}px; }}"
+            f"#toast QLabel {{ color: {c['text']}; background: transparent; }}")
 
     # ------------------------------------------------------------------ content
     def message(self):
@@ -59,11 +65,7 @@ class Toast(QWidget):
         self._fade.stop()
         self._timer.stop()
         self._kind = "error" if kind == "error" else "info"
-        self.setStyleSheet(
-            "#toast { background: #1b2230; border: 1px solid "
-            + ("#ff5c6c" if self._kind == "error" else "#323d54")
-            + "; border-radius: 6px; }"
-            "#toast QLabel { color: #e8edf7; background: transparent; }")
+        self._style()
         self.label.setText(text)
         self.adjustSize()
         self.reposition()

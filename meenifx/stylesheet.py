@@ -214,6 +214,11 @@ def build_stylesheet():
         QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 4px; color: {c['muted']}; }}
 
         /* Sliders, check boxes, scroll bars, progress */
+        QSlider::groove:vertical {{ width: 5px; background: {c['border']}; border-radius: 2px; }}
+        QSlider::sub-page:vertical {{ background: {c['border']}; border-radius: 2px; }}
+        QSlider::add-page:vertical {{ background: {c['accent']}; border-radius: 2px; }}
+        QSlider::handle:vertical {{ background: {c['panel_alt']}; border: 2px solid {c['accent']}; height: 10px;
+            margin: 0 -5px; border-radius: 7px; }}
         QSlider::groove:horizontal {{ height: 5px; background: {c['border']}; border-radius: 2px; }}
         QSlider::sub-page:horizontal {{ background: {c['accent']}; border-radius: 2px; }}
         QSlider::handle:horizontal {{ background: {c['panel_alt']}; border: 2px solid {c['accent']}; width: 10px;

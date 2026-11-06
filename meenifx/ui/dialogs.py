@@ -14,6 +14,7 @@ from .branding import wordmark
 from .filedialogs import save_file
 from .. import crashlog
 from .widgets import ScrubField
+from .themed import muted_text
 
 
 def span_text(start, end, fps):
@@ -139,9 +140,9 @@ class MarkerListDialog(QDialog):
         self.list.itemDoubleClicked.connect(self._jump)
         self.list.itemClicked.connect(self._select)
         self.hint = QLabel("Double-click a marker to jump to it.")
-        self.hint.setStyleSheet("color: #9aa9ba;")
+        muted_text(self.hint)
         self.empty = QLabel("No markers yet. Press M on the timeline to add one.")
-        self.empty.setStyleSheet("color: #9aa9ba;")
+        muted_text(self.empty)
         delete = QPushButton("Delete Selected")
         delete.clicked.connect(lambda: session.delete_markers())
         layout = QVBoxLayout(self)
@@ -223,7 +224,7 @@ class PasteAttributesDialog(QDialog):
             layout.addWidget(box)
         note = QLabel("Effects that cannot run on a target clip's media type are skipped.")
         note.setWordWrap(True)
-        note.setStyleSheet("color: #8a8f9a;")
+        muted_text(note)
         layout.addWidget(note)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
                                    QDialogButtonBox.StandardButton.Cancel)
@@ -250,10 +251,7 @@ class AboutDialog(QDialog):
         self.setWindowTitle(f"About {APP_TITLE}")
         self.setMinimumWidth(470)
         self.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
-        # The wordmark art carries a flat #11161f background. Matching the dialog to it means
-        # the logo blends seamlessly instead of sitting in a slightly different dark rectangle,
-        # and the labels are made transparent so no panel-coloured band cuts across it.
-        self.setStyleSheet("QDialog{background:#11161f;}QLabel{background:transparent;}")
+        self.setStyleSheet("QLabel{background:transparent;}")
         dpr = max(1.0, self.devicePixelRatioF())
 
         layout = QVBoxLayout(self)
