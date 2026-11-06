@@ -126,8 +126,10 @@ explanation instead of rendering wrongly. Each effect publishes its parameter ta
 the properties panel builds itself from. Face, Hand and Blob Tracker share one overlay
 language: box, corner brackets or ellipse, contour/hull, sampled points, labels, tracking
 numbers, opacity, glow and connectors (nearest, all within range, or in track order, with
-a range and link cap). Named looks cover common setups; Custom exposes every switch, and
-old projects' draw-box/hull/mode/label values are mapped onto the new controls. Face
+a range and link cap). Named looks cover common setups; choosing one copies its values
+into the ordinary controls, so every checkbox still works independently and the first
+manual change returns the Look dropdown to Custom. Old projects'
+draw-box/hull/mode/label values are mapped onto the new controls. Face
 Tracker can blur a face with a feathered elliptical mask, and each tracker has
 Fast/Balanced/Precise detection quality. That setting runs detection on a smaller working
 image and scales the result back, and detector results are cached for repeated preview or
@@ -178,9 +180,12 @@ encoder when available and switches to software libx264 if it produces no data, 
 driver refusal does not lose the take. The settings dialog reports the encoder it will use.
 
 **Project folders** — the Project panel is organised with virtual folders (New Folder,
-rename, nested folders, drag and drop, multi-item moves, breadcrumbs and search across the
-whole project). Moving an item changes only its project metadata: the file on disk and the
-stable media id do not move. Deleting a non-empty folder asks whether to move its contents
+rename, nested folders, drag and drop, multi-item moves, a Back button, a Project Root
+drop target, item counts and search across the whole project). Folder rows use a folder
+icon, hover/selection styling and a highlighted drop target; grid and list views both
+work. Moving an item changes only its project metadata: the file on disk, the stable
+media id and the existing thumbnail stay put. Long media names are elided in the middle
+with the full name and path in the tooltip. Deleting a non-empty folder asks whether to move its contents
 to the parent, remove the folder and its media references, or cancel; files on disk are
 never deleted by that action. **Remove from Project** only removes references, while
 **Delete File from Computer...** shows the exact paths, warns about timeline use and moves

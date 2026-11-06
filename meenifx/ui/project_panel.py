@@ -4,7 +4,8 @@ import os
 
 import cv2
 from PyQt6.QtCore import QMimeData, QObject, QPoint, QRunnable, QSize, Qt, QThreadPool, QTimer, QUrl, pyqtSignal
-from PyQt6.QtGui import QColor, QDrag, QIcon, QImage, QPainter, QPen, QPixmap, QPolygonF
+from PyQt6.QtGui import (QBrush, QColor, QDrag, QFontMetrics, QIcon, QImage, QPainter, QPen,
+                         QPixmap, QPolygonF)
 from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QHBoxLayout, QInputDialog,
                              QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox,
                              QPushButton, QToolButton, QVBoxLayout, QWidget)
@@ -124,7 +125,14 @@ class _MediaList(QListWidget):
         self.setAcceptDrops(True)
         self.setDragDropMode(QAbstractItemView.DragDropMode.DropOnly)
         self.setDefaultDropAction(Qt.DropAction.CopyAction)
+        self.setDropIndicatorShown(True)
+        self.setMouseTracking(True)
+        self.setStyleSheet(
+            "QListWidget::item:hover { background: rgba(92, 112, 142, 120); }"
+            "QListWidget::item:selected { background: #335f8f; color: #ffffff; }")
         self._drag_press = None
+        self._drop_item = None
+        self.current_bin = ""
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.setMovement(QListWidget.Movement.Static)
         self.setResizeMode(QListWidget.ResizeMode.Adjust)
@@ -220,21 +228,69 @@ class _MediaList(QListWidget):
     def _accepts(self, mime):
         return mime.hasFormat(MEDIA_MIME) or mime.hasUrls()
 
+    def _target_bin_at(self, position):
+        """Destination for a drop at ``position`` (viewport coordinates).
+
+        A folder takes its own id, Back takes its parent and the Project Root row takes
+        the root.  Empty space means the folder currently being viewed, so moving a clip
+        between bins does not require hitting a small row exactly.
+        """
+        target = self.itemAt(position)
+        if target is None:
+            return self.current_bin
+        kind, key, _path = target.data(Qt.ItemDataRole.UserRole)
+        if kind == "bin":
+            return key
+        if kind == "up":
+            return key  # parent bin id, or "" for a top-level folder
+        if kind == "root":
+            return ROOT_BIN
+        return self.current_bin
+
+    def _set_drop_item(self, item):
+        """Highlight the one folder that will receive the drop, without changing selection."""
+        if item is self._drop_item:
+            return
+        if self._drop_item is not None:
+            try:
+                self._drop_item.setBackground(QBrush())
+            except RuntimeError:
+                pass
+        self._drop_item = item
+        if item is not None:
+            item.setBackground(QColor("#2f5f8f"))
+        self.viewport().update()
+
+    def _clear_drop_item(self):
+        self._set_drop_item(None)
+
     def dragEnterEvent(self, event):
-        event.acceptProposedAction() if self._accepts(event.mimeData()) else event.ignore()
+        if not self._accepts(event.mimeData()):
+            self._clear_drop_item()
+            event.ignore()
+            return
+        target = self.itemAt(event.position().toPoint())
+        self._set_drop_item(target if target is not None and self._kind(target) in ("bin", "up", "root")
+                            else None)
+        event.acceptProposedAction()
 
     def dragMoveEvent(self, event):
-        event.acceptProposedAction() if self._accepts(event.mimeData()) else event.ignore()
+        if not self._accepts(event.mimeData()):
+            self._clear_drop_item()
+            event.ignore()
+            return
+        target = self.itemAt(event.position().toPoint())
+        self._set_drop_item(target if target is not None and self._kind(target) in ("bin", "up", "root")
+                            else None)
+        event.acceptProposedAction()
+
+    def dragLeaveEvent(self, event):
+        self._clear_drop_item()
+        super().dragLeaveEvent(event)
 
     def dropEvent(self, event):
-        target = self.itemAt(event.position().toPoint())
-        bin_id = ""
-        if target is not None:
-            kind, key, _path = target.data(Qt.ItemDataRole.UserRole)
-            if kind == "bin":
-                bin_id = key
-            elif kind == "up":
-                bin_id = ROOT_BIN
+        bin_id = self._target_bin_at(event.position().toPoint())
+        self._clear_drop_item()
         mime = event.mimeData()
         if mime.hasFormat(MEDIA_MIME):
             ids = bytes(mime.data(MEDIA_MIME)).decode("utf-8").split("\n")
@@ -267,11 +323,16 @@ class ProjectPanel(QWidget):
         self.bin_button = QToolButton()
         self.bin_button.setText("New Folder")
         self.bin_button.setToolTip("Create a folder inside the current project folder")
+        self.back_button = QToolButton()
+        self.back_button.setText("Back")
+        self.back_button.setToolTip("Go up one project folder")
+        self.back_button.setVisible(False)
         self.view_button = QToolButton()
         self.view_button.setText("List")
         self.view_button.setToolTip("Switch between grid and list view")
         bar.addWidget(self.import_button)
         bar.addWidget(self.bin_button)
+        bar.addWidget(self.back_button)
         bar.addStretch(1)
         bar.addWidget(self.view_button)
         layout.addLayout(bar)
@@ -308,6 +369,7 @@ class ProjectPanel(QWidget):
 
         self.import_button.clicked.connect(self.import_dialog)
         self.bin_button.clicked.connect(self.new_folder)
+        self.back_button.clicked.connect(self.go_back)
         self.view_button.clicked.connect(self.toggle_view)
         self.search.textChanged.connect(lambda _t: self.rebuild(force=True))
         self.kind_filter.currentIndexChanged.connect(lambda _i: self.rebuild(force=True))
@@ -388,13 +450,22 @@ class ProjectPanel(QWidget):
         self.crumb.setText("Project" + "".join(
             f"  /  {library.bins.get(bid, 'Folder')}" for bid in chain))
         self.crumb.setToolTip(self.crumb.text())
+        self.back_button.setVisible(bool(self._current_bin))
+        self.list.current_bin = self._current_bin
         if self._current_bin and not needle:
-            up = QListWidgetItem("Back")
-            up.setData(Qt.ItemDataRole.UserRole, ("up", "", ""))
-            up.setIcon(self._glyph_icon("<"))
             parent = library.bin_parent(self._current_bin)
+            up = QListWidgetItem("Back")
+            up.setData(Qt.ItemDataRole.UserRole, ("up", parent, ""))
+            up.setIcon(self._glyph_icon("<"))
             up.setToolTip("Back to " + (library.bins.get(parent, "the project root")))
+            up.setFlags(up.flags() | Qt.ItemFlag.ItemIsDropEnabled)
             self.list.addItem(up)
+            root = QListWidgetItem("Project Root")
+            root.setData(Qt.ItemDataRole.UserRole, ("root", ROOT_BIN, ""))
+            root.setIcon(self._folder_icon())
+            root.setToolTip("Drop media here to move it back to the project root")
+            root.setFlags(root.flags() | Qt.ItemFlag.ItemIsDropEnabled)
+            self.list.addItem(root)
         if not needle:
             for bin_id in library.child_bins(self._current_bin):
                 name = library.bins.get(bin_id, "Folder")
@@ -402,7 +473,9 @@ class ProjectPanel(QWidget):
                 entry = QListWidgetItem(f"{name}\n{count} item{'s' if count != 1 else ''}" if self._grid
                                         else f"{name}   ({count})")
                 entry.setData(Qt.ItemDataRole.UserRole, ("bin", bin_id, ""))
-                entry.setIcon(self._glyph_icon("\u25a4"))
+                entry.setIcon(self._folder_icon())
+                entry.setToolTip(f"{name}\nFolder \u00b7 {count} item{'s' if count != 1 else ''}"
+                                 "\nDouble-click to open")
                 entry.setFlags(entry.flags() | Qt.ItemFlag.ItemIsDropEnabled)
                 self.list.addItem(entry)
         kind = self.kind_filter.currentData()
@@ -453,14 +526,21 @@ class ProjectPanel(QWidget):
         if media.fps:
             detail.append(f"{media.fps:g} fps")
         info = "  \u00b7  ".join(detail)
+        # Long names are elided in the middle (the extension stays readable) and never
+        # wrap into a third or fourth line; the tooltip always has the full name and path.
+        available = self._icon_size().width() + 24 if self._grid else max(160, self.list.width() - 80)
+        display_name = QFontMetrics(self.list.font()).elidedText(
+            media.name, Qt.TextElideMode.ElideMiddle, max(40, available))
         if self._grid:
-            text = media.name + (f"\n{info}" if info else "")
+            text = display_name + (f"\n{info}" if info else "")
         else:
-            text = f"{media.name}\n{info or media.type}" + ("   (missing)" if missing else "")
+            text = f"{display_name}\n{info or media.type}" + ("   (missing)" if missing else "")
         item = QListWidgetItem(text)
         item.setData(Qt.ItemDataRole.UserRole, ("item", media.id, media.path))
         item.setIcon(self._media_icon(media, used, missing))
-        item.setToolTip(media.path + ("\nFile not found" if missing else "") + ("\nUsed in the timeline" if used else ""))
+        item.setToolTip(media.name + "\n" + media.path +
+                        ("\nFile not found" if missing else "") +
+                        ("\nUsed in the timeline" if used else ""))
         if missing:
             item.setForeground(QColor("#ffb020"))
         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsDragEnabled)
@@ -479,6 +559,29 @@ class ProjectPanel(QWidget):
         font.setPixelSize(max(12, size.height() // 2))
         painter.setFont(font)
         painter.drawText(canvas.rect(), Qt.AlignmentFlag.AlignCenter, glyph)
+        painter.end()
+        return QIcon(canvas)
+
+    def _folder_icon(self):
+        """A real folder silhouette, sized like every media thumbnail in the current view."""
+        size = self._icon_size()
+        canvas = QPixmap(size)
+        canvas.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(canvas)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        w, h = size.width(), size.height()
+        left, top = max(2, int(w * 0.10)), max(2, int(h * 0.20))
+        width, height = w - left * 2, h - top - max(2, int(h * 0.12))
+        tab_w, tab_h = max(10, int(width * 0.36)), max(4, int(height * 0.22))
+        body = QPolygonF([self._pt(left, top + tab_h // 2), self._pt(left + tab_w, top + tab_h // 2),
+                          self._pt(left + tab_w + 4, top), self._pt(left + tab_w + 10, top),
+                          self._pt(left + tab_w + 14, top + tab_h // 2), self._pt(left + width, top + tab_h // 2),
+                          self._pt(left + width, top + height), self._pt(left, top + height)])
+        painter.setPen(QPen(QColor("#d8ad52"), max(1, w // 80)))
+        painter.setBrush(QColor("#d8ad52"))
+        painter.drawPolygon(body)
+        painter.setPen(QPen(QColor("#f6d98b"), max(1, w // 90)))
+        painter.drawLine(left + 2, top + tab_h + 2, left + width - 2, top + tab_h + 2)
         painter.end()
         return QIcon(canvas)
 
@@ -554,7 +657,6 @@ class ProjectPanel(QWidget):
             self.list.setViewMode(QListWidget.ViewMode.IconMode)
             self.list.setIconSize(GRID_ICON)
             self.list.setGridSize(QSize(GRID_ICON.width() + 24, GRID_ICON.height() + 52))
-            self.list.setWordWrap(True)
             self.list.setSpacing(4)
             self.view_button.setText("List")
         else:
@@ -563,6 +665,9 @@ class ProjectPanel(QWidget):
             self.list.setGridSize(QSize())
             self.list.setSpacing(2)
             self.view_button.setText("Grid")
+        # Newlines still make the two-line tile; word wrapping must not add a third line.
+        self.list.setWordWrap(False)
+        self.list.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         self.list.setMovement(QListWidget.Movement.Static)
 
     # ---- importing -----------------------------------------------------------
@@ -598,13 +703,20 @@ class ProjectPanel(QWidget):
         return added
 
     def _files_dropped(self, paths, bin_id):
-        target = self._current_bin if bin_id == "" else ("" if bin_id == ROOT_BIN else bin_id)
+        library = self.project.library if self.project else None
+        target = "" if bin_id in ("", ROOT_BIN) else bin_id
+        if library is not None and target not in ("",) and target not in library.bins:
+            target = self._current_bin if self._current_bin in library.bins else ""
         self.add_files(paths, target)
 
     def _items_moved(self, ids, bin_id):
-        if self.project is None or bin_id == "":
-            return  # dropped on empty space: nothing to do
-        self.project.library.move_to_bin(ids, "" if bin_id == ROOT_BIN else bin_id)
+        if self.project is None:
+            return
+        library = self.project.library
+        destination = "" if bin_id in ("", ROOT_BIN) else bin_id
+        if destination and destination not in library.bins:
+            return
+        self.project.library.move_to_bin(ids, destination)
         self.w.projects.mark_dirty()
         self.rebuild(force=True)
 
@@ -622,6 +734,13 @@ class ProjectPanel(QWidget):
 
     # Kept as an alias for callers/tests written before the bin terminology change.
     new_bin = new_folder
+
+    def go_back(self):
+        """Leave the current folder for its parent (the project root at the top level)."""
+        if self.project is None:
+            return
+        self._current_bin = self.project.library.bin_parent(self._current_bin)
+        self.rebuild(force=True)
 
     def _selected_media(self):
         out = []
@@ -648,9 +767,11 @@ class ProjectPanel(QWidget):
         if kind == "bin":
             self._current_bin = key
             self.rebuild(force=True)
-        elif kind == "up":
-            library = self.project.library
-            self._current_bin = library.bin_parent(self._current_bin)
+        elif kind in ("up", "root"):
+            if kind == "root":
+                self._current_bin = ""
+            else:
+                self._current_bin = self.project.library.bin_parent(self._current_bin)
             self.rebuild(force=True)
         elif key in self.project.library.items:
             self.insert_at_playhead([self.project.library.items[key]])
@@ -670,6 +791,10 @@ class ProjectPanel(QWidget):
             menu.addAction("Open", lambda: self._double_clicked(item))
             menu.addAction("Rename...", lambda: self._rename_bin(key))
             menu.addAction("Delete Folder...", lambda: self._delete_bin(key))
+        elif kind in ("up", "root"):
+            text = "Back" if kind == "up" else "Open Project Root"
+            menu.addAction(text, self.go_back if kind == "up" else
+                           lambda: self._double_clicked(item))
         elif kind == "item":
             if not item.isSelected():
                 self.list.clearSelection()
@@ -847,11 +972,22 @@ class ProjectPanel(QWidget):
         self.w.timeline_panel.canvas.update()
         return True
 
-    # ---- OS drops onto the whole panel ----------------------------------------
+    # ---- drops onto the whole panel -------------------------------------------
     def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls():
+        if event.mimeData().hasUrls() or event.mimeData().hasFormat(MEDIA_MIME):
             event.acceptProposedAction()
 
     def dropEvent(self, event):
-        self.add_files([u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()], self._current_bin)
+        """A video/file dropped outside the list still imports into the open folder.
+
+        An internal media drag dropped here means the project root, which makes the
+        breadcrumb area a large, discoverable target for moving media out of a folder.
+        """
+        mime = event.mimeData()
+        if mime.hasFormat(MEDIA_MIME):
+            ids = bytes(mime.data(MEDIA_MIME)).decode("utf-8").split("\n")
+            self._items_moved([i for i in ids if i], ROOT_BIN)
+        elif mime.hasUrls():
+            self.add_files([u.toLocalFile() for u in mime.urls() if u.isLocalFile()],
+                           self._current_bin)
         event.acceptProposedAction()

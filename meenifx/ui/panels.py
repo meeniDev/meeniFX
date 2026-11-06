@@ -21,7 +21,7 @@ from .. import tokens
 from .filedialogs import open_file, save_file
 from ..constants import EFFECT_MIME
 from ..effects.base import ParamSpec
-from ..effects.tracking_viz import TRACKING_STYLES
+from ..effects.tracking_viz import STYLE_KEYS, TRACKING_STYLES
 from ..icons import icon
 from ..model import animation as ANIM
 from ..model import animation_families as FAMILIES
@@ -1786,6 +1786,9 @@ class EffectsPanel(QWidget):
                 box.setToolTip(tip)
                 box.toggled.connect(lambda value, c=clip, e=entry, n=spec.name, s=spec:
                                     self._commit_choice(c, e, n, bool(value), s))
+                self._rows.append({"kind": "toggle", "clip_id": clip.id, "entry": entry,
+                                   "name": spec.name, "box": box, "effect": effect,
+                                   "spec": spec})
                 target.addWidget(box)
             elif spec.kind == "choice":
                 target.addWidget(self._choice_row(clip, entry, spec, current, tip))
@@ -2073,6 +2076,14 @@ class EffectsPanel(QWidget):
                 value = CH.value_at(clip, row["channel"], local)
                 if value is not None:
                     row["field"].set_value(value)
+            elif kind == "toggle":
+                entry = row["entry"]
+                if not any(entry is e for e in clip.effects):
+                    continue
+                stored = (entry.get("params") or {}).get(row["name"])
+                row["box"].blockSignals(True)
+                row["box"].setChecked(bool(row["spec"].clamp(stored)))
+                row["box"].blockSignals(False)
             elif kind == "param":
                 entry = row["entry"]
                 if not any(entry is e for e in clip.effects):
@@ -2141,6 +2152,11 @@ class EffectsPanel(QWidget):
             if target_entry is None:
                 return
             self._write_param(target, target_entry, name, value, frame)
+            if name in STYLE_KEYS and str(value) != "custom":
+                # A preset is a starting point.  The first manual change after choosing
+                # one returns the Look dropdown to Custom, so the visible controls and
+                # the renderer can never disagree about which values are in force.
+                self._write_param(target, target_entry, "viz_preset", "custom", frame)
             if name == "viz_preset" and value != "custom":
                 # Store the preset's values as ordinary parameters too, so switching
                 # back to Custom starts from what the user saw instead of stale defaults.

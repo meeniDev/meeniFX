@@ -358,7 +358,8 @@ class TrackerColorMixin:
     def _tracking_style(self):
         manual = {key: getattr(self, key).get() for key in STYLE_KEYS}
         manual["opacity"] = int(manual.get("opacity", 100) or 100)
-        return resolve_style(self.viz_preset.get(), manual)
+        defaults = {spec.name: spec.default for spec in self.VIS_PARAMS}
+        return resolve_style(self.viz_preset.get(), manual, defaults)
 
     def draw_tracking(self, frame, detections, label=None, thickness=None):
         """Draw detections with this tracker's shared style and colour scheme."""

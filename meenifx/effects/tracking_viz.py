@@ -30,8 +30,9 @@ class Detection:
     color: tuple = None
 
 
-# Presets are resolved by the effect before drawing.  ``custom`` is the only one that
-# reads the individual checkboxes; the named presets are a coherent starting style.
+# A preset is a starting point, not a lock.  Choosing one writes these values into the
+# ordinary effect parameters; the renderer always reads those parameters, so every
+# checkbox and dropdown keeps working afterwards.
 TRACKING_STYLES = {
     "custom": {},
     "clean": {"show_box": True, "show_contour": False, "show_points": False,
@@ -64,19 +65,27 @@ STYLE_KEYS = ("show_box", "show_contour", "show_points", "show_circle", "show_la
               "show_numbers", "connector_mode", "glow", "opacity", "box_style")
 
 
-def resolve_style(preset, manual=None):
-    """The effective style for ``preset``.
+def resolve_style(preset, manual=None, defaults=None):
+    """The effective style for a tracker.
 
-    A named preset is authoritative so it stays predictable; ``custom`` uses the values
-    the UI checkboxes hold.  Connector distance/count are always manual because they
-    depend on the footage, not on the look.
+    Presets are applied by the properties panel when the user picks one: their values
+    are written into the ordinary parameters.  Rendering therefore uses ``manual`` for
+    both Custom and named looks.  A preset must never become a hidden second source of
+    truth that ignores a checkbox changed afterwards.
+
+    ``defaults`` is for callers that only set the Look key (API/tests): in that case a
+    named preset fills values that are still at their defaults.  A value the user has
+    changed is never overwritten, and the properties panel switches the Look to Custom
+    on the first manual change.
     """
     manual = dict(manual or {})
     name = str(preset or "custom").strip().lower()
-    if name not in TRACKING_STYLES or name == "custom":
+    if defaults is None or name not in TRACKING_STYLES or name == "custom":
         return manual
     style = dict(manual)
-    style.update(TRACKING_STYLES[name])
+    for key, value in TRACKING_STYLES[name].items():
+        if key not in style or style[key] == defaults.get(key):
+            style[key] = value
     return style
 
 

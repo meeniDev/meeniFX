@@ -42,6 +42,10 @@
 - Hand Tracker still uses the existing skin-colour/morphology detector. It is **not** a
   hand-pose model and can still pick up a face or forearm; the new max-area filter, shared
   overlay and cache reduce false boxes but do not turn it into validated hand tracking.
+- **Face Tracker visualization controls are independent:** named looks now seed the
+  ordinary parameters instead of overriding them at render time, so Numbers, Labels,
+  Points, Outline, Circle and Box all work without choosing a look. A manual change after
+  a look returns the Look dropdown to Custom, and the change survives preview refreshes.
 
 ### Recording
 
@@ -54,6 +58,12 @@
 
 ### Project organization
 
+- **Project folders now accept real drag and drop:** folder rows highlight as drop
+targets, one or many selected assets can be moved into a folder, between folders, or back
+to the project root through the root row/panel background, and the toolbar has a Back
+button. Folder rows use a recognizable folder icon, item counts, hover/selection styling
+and tooltips. Long media names elide cleanly with the full name in the tooltip, and
+moving an asset does not clear its cached thumbnail.
 - Renamed the Project panel's bin terminology to **New Folder**, with nested virtual
   folders, breadcrumbs, drag and drop, multi-item moves and search across all folders.
   Folder organization is saved in `.mfxpf`; old flat bin lists still load.

@@ -14,15 +14,15 @@ def boxes(count):
             for index in range(count)]
 
 
-def test_named_preset_overrides_manual_style_but_custom_keeps_it():
+def test_named_preset_does_not_override_manual_controls():
     manual = {"show_box": False, "show_labels": False, "connector_mode": "distance"}
+    # Presets are written into the parameters when chosen; rendering always reads those
+    # parameters, so a named look must not become a hidden override afterwards.
     clean = resolve_style("clean", manual)
-    assert clean["show_box"] is True
-    assert clean["show_labels"] is True
-    assert clean["connector_mode"] == "none"
-    custom = resolve_style("custom", manual)
-    assert custom["show_box"] is False
-    assert custom["connector_mode"] == "distance"
+    assert clean["show_box"] is False
+    assert clean["show_labels"] is False
+    assert clean["connector_mode"] == "distance"
+    assert resolve_style("custom", manual) == manual
 
 
 def test_connector_links_are_capped_and_never_all_to_all():
@@ -129,6 +129,100 @@ def test_hand_tracker_detects_skin_regions_but_not_grey():
     assert found, "the synthetic skin patches should be detected"
     grey = np.full_like(skinned, 120)
     assert effect._detect(grey) == []
+
+
+def test_a_face_checkbox_works_without_choosing_a_look(editor, qapp):
+    panel = editor.effects_panel
+    panel.add_effect("face_tracker")
+    pump(qapp, 0.25)
+    row = next(item for item in panel._rows
+               if item["kind"] == "toggle" and item["name"] == "show_numbers")
+    row["box"].setChecked(True)
+    pump(qapp, 0.2)
+    clip = next(clip for clip in editor.engine.timeline.all_clips()
+                if clip.id == row["clip_id"])
+    entry = next(effect for effect in clip.effects if effect["effect_id"] == "face_tracker")
+    assert entry["params"]["show_numbers"] is True
+    assert entry["params"]["viz_preset"] == "custom"
+    panel.sync_playhead()
+    row = next(item for item in panel._rows
+               if item["kind"] == "toggle" and item["name"] == "show_numbers")
+    assert row["box"].isChecked(), "a preview refresh must not reset the checkbox"
+
+
+def test_changing_a_tracker_checkbox_after_a_look_returns_to_custom(editor, qapp):
+    panel = editor.effects_panel
+    panel.add_effect("face_tracker")
+    pump(qapp, 0.25)
+    row = next(item for item in panel._rows
+               if item["kind"] == "choice" and item["name"] == "viz_preset")
+    combo = row["combo"]
+    clip = next(clip for clip in editor.engine.timeline.all_clips()
+                if clip.id == row["clip_id"])
+    panel._choice_picked(clip, row["entry"], row["spec"], combo, combo.findData("neon"))
+    pump(qapp, 0.2)
+
+    toggle = next(item for item in panel._rows
+                  if item["kind"] == "toggle" and item["name"] == "show_numbers")
+    toggle["box"].setChecked(True)
+    pump(qapp, 0.2)
+    entry = next(effect for effect in clip.effects if effect["effect_id"] == "face_tracker")
+    assert entry["params"]["show_numbers"] is True
+    assert entry["params"]["viz_preset"] == "custom"
+    # Other values written by the preset stay, and remain independently editable.
+    assert entry["params"]["show_points"] is True
+    assert entry["params"]["connector_mode"] == "nearest"
+
+
+def test_checkbox_style_is_what_the_face_tracker_renders():
+    engine, _clip = build_engine(frame=synthetic_frame())
+    face = engine.runtime_effects["face_tracker"]
+    calls = []
+
+    def detect(frame):
+        calls.append(frame.shape)
+        return [(40, 30, 60, 60)]
+
+    face.detect_faces = detect
+    face.param_scale = 1.0
+    frame = synthetic_frame()
+    face.load_params({**face.defaults, "viz_preset": "custom", "show_box": False,
+                      "show_points": True, "show_labels": True, "show_numbers": True,
+                      "blur_faces": False, "connector_mode": "none"})
+    style = face._tracking_style()
+    assert style["show_box"] is False
+    assert style["show_points"] is True
+    assert style["show_labels"] is True
+    assert style["show_numbers"] is True
+    with_numbers = face.apply(frame)
+    assert len(calls) == 1
+    # Changing an overlay control must repaint from the cached detection, not rerun the
+    # detector, and must immediately change the picture.
+    face.show_numbers.set(False)
+    without_numbers = face.apply(frame)
+    assert len(calls) == 1
+    assert np.abs(with_numbers.astype(int) - without_numbers.astype(int)).mean() > 0.01
+
+
+def test_turning_every_face_overlay_off_hides_it_but_still_tracks():
+    engine, _clip = build_engine(frame=synthetic_frame())
+    face = engine.runtime_effects["face_tracker"]
+    calls = []
+
+    def detect(frame):
+        calls.append(frame.shape)
+        return [(40, 30, 60, 60)]
+
+    face.detect_faces = detect
+    face.param_scale = 1.0
+    face.load_params({**face.defaults, "show_box": False, "show_contour": False,
+                      "show_circle": False, "show_points": False, "show_labels": False,
+                      "show_numbers": False, "connector_mode": "none", "glow": False,
+                      "blur_faces": False, "opacity": 100})
+    frame = synthetic_frame()
+    result = face.apply(frame)
+    assert len(calls) == 1
+    assert np.array_equal(result, frame)
 
 
 def test_choosing_a_tracking_look_writes_its_values_into_the_clip(editor, qapp):
