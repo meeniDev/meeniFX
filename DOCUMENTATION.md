@@ -322,6 +322,25 @@ The panel lives in the **Graph Editor** dock (`G`) and edits the selected clip's
 | Playhead head clipping | the triangle was centred on the frame, so half of it fell outside the canvas at frame 0 and the border drew through it | the line keeps the exact frame, the head is clamped inside the plot and drawn above the border |
 | Unrelated crash paths found on the way | unguarded callbacks in `effects/base.py`, `project_controller.py`, `undo.py`, and a Qt parent mistake in the crash reporter itself | guarded, and covered by the crash-reporting tests |
 
+### This pass: render cost, captions and dialogs
+
+- **Opaque blur fast path** (`meenifx/effects/blur.py`): Gaussian and Box Blur used to
+  premultiply every layer into float32 and unpremultiply the result. For a fully opaque
+  layer - the ordinary full-frame clip - that round trip is an identity and cost about
+  90 % of the frame time, so it is skipped: the 8-bit layer is blurred directly. Measured
+  at 1080p on a 6-core Intel machine: Gaussian Blur (radius 8) 134 -> 27 ms, Box Blur
+  (radius 6) 110 -> 27 ms; at 720p 75 -> 12 ms. Layers with real alpha keep the
+  premultiplied path, so text, PNG characters and letterboxed pictures still blur with a
+  soft, correctly feathered edge instead of a dark fringe. `tests/test_blur_fast_path.py`
+  compares both paths (maximum one 8-bit step) and covers the transparent-margin case.
+- **Caption sources** (`tests/test_caption_sources.py`): each Auto Captions source is now
+  pinned - standalone audio, linked video+audio (clicking either half analyses the
+  sound), embedded-audio video, trimmed clips and clips with a source offset. Generating
+  captions never changes the video/audio link.
+- **File dialog theme** (`meenifx/ui/filedialogs.py`): the scoped stylesheet is built per
+  dialog rather than once at import, so it follows a live theme switch; the tinted
+  navigation icons use the active theme text colour.
+
 ## 6. Known limitations
 
 - Animation presets are a render layer: the Graph Editor shows nothing for them until

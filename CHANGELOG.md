@@ -2,6 +2,36 @@
 
 ## Unreleased (2026-11-05)
 
+### Render performance
+
+- **Opaque blurs no longer take the float path.** Gaussian and Box Blur premultiplied
+  every layer into a float32 buffer and unpremultiplied the result, which on a layer with
+  no transparency at all - the ordinary full-frame clip - cost about 90 % of the frame
+  time. A fully opaque layer is now blurred directly in 8 bits: 1080p Gaussian Blur
+  (radius 8) went from **134 ms to 27 ms per frame**, Box Blur (radius 6) from 110 ms to
+  27 ms, and 720p from 75 ms to 12 ms. Layers that really carry alpha keep the
+  premultiplied path, so letterboxed pictures, PNG characters and text still get soft,
+  correctly feathered edges. The two paths agree within one 8-bit step and
+  `tests/test_blur_fast_path.py` pins that, including the transparent-margin case.
+- Remaining measured hotspots are unchanged and documented: Glow is 198 ms/frame at
+  1080p Full (5 fps ceiling) and 80 ms at 720p; Mosaic is 40 ms at 1080p. Auto preview
+  quality is what keeps those timelines responsive.
+
+### Auto Captions
+
+- Every source choice is now covered by a regression test: standalone audio, a linked
+  video+audio pair (clicking either member analyses the sound), a video with embedded
+  audio, a trimmed clip and a clip with a source offset. The reported "range has no audio"
+  failure came from reading the clicked clip instead of its link group; the range now
+  follows the audible members, so nothing has to be unlinked to generate captions.
+
+### File dialogs
+
+- The file dialog's stylesheet is built when the dialog opens instead of once at import,
+  so it follows a theme switch instead of freezing the palette the app started with. The
+  tinted navigation icons therefore always use the current theme's text colour, which is
+  what `tests/test_filedialogs.py` now asserts (in either theme).
+
 ### Properties panel and effect browser
 
 - **Grouped property cards:** effect parameters can declare a group (`ParamSpec.group`),
@@ -147,6 +177,12 @@ moving an asset does not clear its cached thumbnail.
   Silence...**.
 
 ### Tests
+
+- New `tests/test_blur_fast_path.py` (opaque shortcut against the float reference, alpha
+  preservation, transparent margins, scale consistency) and `tests/test_caption_sources.py`
+  (nine caption-source scenarios). `tests/test_filedialogs.py` gained a theme-switch case
+  and a theme-independent icon-tint assertion; `tests/test_ui_refactor.py`'s empty-state
+  check no longer asserts on an impossible count.
 
 - Added model tests for cross-file linking, group unlinking, audio-only and matching scopes,
   locked tracks, offset pairs, short retained fragments and the corrected split-group

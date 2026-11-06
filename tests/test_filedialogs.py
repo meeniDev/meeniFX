@@ -62,16 +62,45 @@ def test_every_toolbar_button_has_a_visible_icon(themed):
         assert buttons, "the styled dialog must still have its navigation buttons"
         for button in buttons:
             assert not button.icon().isNull(), "a navigation button lost its icon"
-        # The stock icons are painted for a light surface; the tint makes them readable.
+        # The stock icons are painted for the platform surface; the tint repaints them in
+        # the theme's text colour, whichever theme is active.
+        from meenifx.tokens import COLORS, contrast
+
         pixmap = buttons[0].icon().pixmap(16, 16)
         image = pixmap.toImage()
         lightest = max((QColor(image.pixel(x, y)).lightness()
                         for x in range(image.width()) for y in range(image.height())
                         if QColor(image.pixel(x, y)).alpha() > 40), default=0)
-        assert lightest > 150, "the icon must be tinted for the dark dialog"
+        expected = QColor(COLORS["text"]).lightness()
+        assert abs(lightest - expected) <= 4, "the icon must carry the theme text colour"
+        assert contrast(COLORS["text"], COLORS["panel_soft"]) >= 3.0, \
+            "the tinted glyph must stay legible on the dialog surface"
     finally:
         dialog.close()
         dialog.deleteLater()
+
+
+def test_the_dialog_follows_a_theme_switch(themed):
+    """A theme change must reach the next dialog, not only the widgets built after import."""
+    from meenifx import theme, tokens
+    from meenifx.ui.filedialogs import open_dialog
+
+    first = open_dialog(None, "Open Project", "", FILTER, False, None)
+    light_sheet = first.styleSheet()
+    first.close()
+    first.deleteLater()
+    theme.configure_theme(themed, "dark")
+    try:
+        dark = open_dialog(None, "Open Project", "", FILTER, False, None)
+        try:
+            assert tokens.COLORS["panel"] == "#252A2C", "the dark palette is active"
+            assert tokens.COLORS["panel"] in dark.styleSheet()
+            assert dark.styleSheet() != light_sheet
+        finally:
+            dark.close()
+            dark.deleteLater()
+    finally:
+        theme.configure_theme(themed, "light")
 
 
 def test_the_dialog_is_dark_and_scoped(themed):

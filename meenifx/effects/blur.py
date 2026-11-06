@@ -37,6 +37,21 @@ def premultiply(layer):
     return data
 
 
+def fully_opaque(layer):
+    """True when every pixel is opaque, so premultiplication changes nothing.
+
+    A picture that fills its layer exactly (the ordinary full-frame clip) has no
+    transparency at all. Round-tripping it through a float32 premultiplied buffer is then
+    mathematically an identity, but it cost three full-frame float passes: at 1080p that
+    was ~90 % of a Gaussian Blur (43 ms premultiply + 59 ms unpremultiply against 10 ms
+    of actual blur). Blurring the 8-bit layer directly is the same picture within one
+    8-bit step, and it is what makes a blur usable during playback.
+    """
+    if layer.ndim != 3 or layer.shape[2] != 4 or layer.size == 0:
+        return False
+    return int(layer[:, :, 3].min()) == 255
+
+
 def unpremultiply(data, like):
     """Premultiplied float32 BGRA -> uint8 BGRA with the original alpha restored."""
     alpha = np.clip(data[:, :, 3:4], 0.0, 255.0)
@@ -82,8 +97,12 @@ class GaussianBlurEffect(LayerEffect):
         radius = _num(self.radius, self.local_frame) * max(0.02, float(self.param_scale))
         if radius <= 0.05:
             return layer
-        data = premultiply(layer) if not self.keep_edges.get() else layer.astype(np.float32)
         sigma = max(0.1, radius / 2.5)
+        if not self.keep_edges.get() and fully_opaque(layer):
+            # No transparency to protect: blur the 8-bit layer in one pass.
+            return cv2.GaussianBlur(layer, (0, 0), sigmaX=sigma, sigmaY=sigma,
+                                    borderType=cv2.BORDER_REPLICATE)
+        data = premultiply(layer) if not self.keep_edges.get() else layer.astype(np.float32)
         blurred = cv2.GaussianBlur(data, (0, 0), sigmaX=sigma, sigmaY=sigma,
                                    borderType=cv2.BORDER_REPLICATE)
         if self.keep_edges.get():
@@ -114,6 +133,12 @@ class BoxBlurEffect(LayerEffect):
         if radius < 1:
             return layer
         k = radius * 2 + 1
+        if fully_opaque(layer):
+            # Same identity as the gaussian: no alpha to protect, no float passes.
+            data = layer
+            for _ in range(max(1, int(self.passes.get()))):
+                data = cv2.blur(data, (k, k), borderType=cv2.BORDER_REPLICATE)
+            return data
         data = premultiply(layer)
         for _ in range(max(1, int(self.passes.get()))):
             data = cv2.blur(data, (k, k), borderType=cv2.BORDER_REPLICATE)

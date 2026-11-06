@@ -18,8 +18,17 @@ from PyQt6.QtWidgets import QFileDialog, QHeaderView, QToolButton, QTreeView
 
 from ..tokens import COLORS, RADIUS
 
-# Scoped to the dialog: these rules must never leak into the editor's own widgets.
-_QSS = f"""
+def _qss():
+    """The dialog sheet for the *current* theme.
+
+    It used to be one f-string built at import time, which froze the palette the app
+    happened to start with: switching to the dark theme left the file dialog light, with
+    tinted navigation icons as its only dark-mode colours. Building the sheet when the
+    dialog opens keeps the two in step.
+
+    Scoped to the dialog: these rules must never leak into the editor's own widgets.
+    """
+    return f"""
 QFileDialog {{ background: {COLORS['panel']}; }}
 QFileDialog QLabel {{ color: {COLORS['muted']}; background: transparent; }}
 QFileDialog QTreeView, QFileDialog QListView {{
@@ -99,7 +108,7 @@ def _tidy_columns(dialog):
 def style_dialog(dialog):
     """Apply the dialog theme and restore the icons the platform style tints invisibly."""
     dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
-    dialog.setStyleSheet(_QSS)
+    dialog.setStyleSheet(_qss())
     dialog.setMinimumSize(660, 420)
     if dialog.width() < 760:
         dialog.resize(880, 540)

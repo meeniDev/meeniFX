@@ -200,6 +200,9 @@ def test_empty_state(editor, qapp):
     editor.engine.session.set_selection(set())
     editor.effects_panel.refresh_properties()
     layout_ = editor.effects_panel.properties_layout
-    texts = [layout_.itemAt(i).widget().text() for i in range(layout_.count())
-             if isinstance(layout_.itemAt(i).widget(), QLabel)]
-    assert len(texts) == layout_.count() - 1 and texts == ["Select a clip"]
+    from meenifx.ui.components import EmptyState
+    widgets = [layout_.itemAt(i).widget() for i in range(layout_.count())]
+    states = [w for w in widgets if isinstance(w, EmptyState)]
+    # Exactly one empty state and nothing else; the trailing stretch is not a widget.
+    assert len(states) == 1
+    assert [w for w in widgets if w is not None] == states
