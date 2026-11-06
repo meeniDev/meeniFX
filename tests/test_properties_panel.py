@@ -97,9 +97,9 @@ def test_tracker_cards_fall_back_to_the_reference_picture_and_an_icon(editor, qa
     assert "no face or hand to detect" in card.toolTip()
 
 
-def test_audio_cards_keep_the_word_fallback(editor, qapp):
+def test_audio_cards_show_an_icon(editor, qapp):
     browser = editor.effects_panel.browser
     pump(qapp, 0.2)
     card = next(card for card in browser._cards if card.item.get("id") == "audio_gain")
-    assert card.thumb.text(), "audio has no still preview, so it names itself"
-    assert card.thumb.pixmap() is None or card.thumb.pixmap().isNull()
+    assert not card.thumb.text(), "audio cards use an icon, not words"
+    assert card.thumb.pixmap() is not None and not card.thumb.pixmap().isNull()

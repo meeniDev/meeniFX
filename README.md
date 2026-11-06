@@ -29,12 +29,20 @@ The application resolves bundled tile images, the demo clip, and default output 
 - Named, coloured markers pinned to the ruler: click to select, drag to move (they snap to clip edges, the playhead, loop edges and other markers), Shift-click or Shift-drag a rectangle to select several, double-click or F2 to rename, right-click for colour/delete/go-to, and a non-modal Markers list under View. Markers and the loop region are saved with the project.
 - Per-clip fades, Vegas style: a grip on the top-left and top-right corner of every video, image and audio clip (shown on hover or selection). Drag a grip sideways to set the fade length in frames with snapping, up/down (or Alt+drag) to bend the curve, right-click for Linear/Fast/Slow/Smooth/Sharp presets, double-click to clear it. Video fades blend the layers underneath (black on the bottom track), audio fades ramp the waveform, live playback, scrub bursts and the export through the same curve. Split keeps the fade-in on the left piece and the fade-out on the right, trimming clamps both, copy/paste/duplicate carry them, Shift sets the linked video/audio pair together.
 - No status bar and no instruction text in the panels: state lives on the buttons, one-line hints live in tooltips, an empty timeline shows a faint "Drop files here", and the few messages that matter (failed import, finished export, missing audio device) appear as a small fading toast at the bottom of the window.
-- One global dark theme for the whole application, including tooltips (dark #1b2230 tooltip, ~450 ms delay, shortcuts in the text), menus, context menus, combo drop-downs, message boxes and the non-native file dialogs.
+- Warm light and dark themes (View → Appearance: Light, Dark or Match system; remembered between launches) that cover tooltips, menus, context menus, combo drop-downs, message boxes and the non-native file dialogs. See *Design system* below.
 - Preview fit and percentage zoom, cursor-centered wheel zoom, pan, guides, and resize handling. The preview keeps two sizes: the logical project frame (which drives fit, zoom, pan and every crop decision) and the render size (project size x quality, drawn into the logical rectangle). Pixel-based effect parameters (mosaic tiles, ASCII cell size, tracker line thickness, minimum face size, blob areas, blur radius) are project pixels scaled by the quality factor, so lowering the quality only softens the image - it never changes the framing, and a 35% preview is the same picture as the export.
 - Mosaic, ASCII Art, Face Tracker, Hand Tracker and Blob Tracker plus the new Glitch, Stylize, Light, Time and LUT packs and one-click **Looks** (see *Compositing, effects and looks*); per-clip **blend modes**, **adjustment layers** and a **Mix** slider on every effect card. Every effect declares the media types it can process (`MEDIA_TYPES` on the effect class), and the browser, the timeline drop target and the engine all read that one declaration: on an audio clip the visual effects are listed greyed as *"(video only)"* and cannot be added, a drag or double-click is refused with a status message, and an effect loaded from an older project onto the wrong media type is switched off (kept, with an explanation in its card) instead of crashing or rendering. Each effect publishes a parameter table (range, unit, default, pixel-based or not) that the properties panel and the parameter audit test both build from, so a control can never write a value the effect does not read.
 - Keyframes on every numeric effect parameter: the stopwatch turns animation on and is accent-coloured while active, the value follows the playhead, the diamond is filled exactly on a keyframe and hollow between, and the previous/next buttons jump between them (the cluster only appears for animated parameters). The timeline stays clip-focused: a clip with animation shows one compact `◆ 12 keys` badge, and clicking it opens the dedicated **Keyframe Editor** instead of packing property rows inside the clip. See *Keyframe workflow* below for timing/value editing, the envelopes, clip opacity and the text animation presets.
 - One numeric widget everywhere (`ScrubField`: fixed label column, a compact value with its unit, optional stopwatch and keyframe cluster): Transform, text, audio gain, every effect parameter including Mix, clip speed, fades, the Animation card, the export dialog, playback FPS and track height. The value is the handle: drag it sideways to scrub (right = up), Shift for a tenth of the speed, Ctrl for ten times, Alt to land between the field's steps; click once (or double-click, or just start typing) to type an exact number, Enter applies, Esc puts the previous value back; the arrow keys step, Page Up/Down jump ten steps, and the arrows that appear beside the value on hover step it too; double-clicking the label resets the default. A whole drag is one undo step and a typed edit is one step. Units (`px`, `%`, `°`, `dB`, `f`, `s`, `fps`) are drawn dimmed beside the number and accepted when typed, with both `,` and `.` as the decimal separator.
 - Whole-project or loop-region video/GIF/image export (the chosen range is written from frame 0) and Save Frame; frame processing and export run off the UI thread with progress and cancellation.
+
+## Design system
+
+- `meenifx/tokens.py` holds every colour (light and dark palettes), spacing, radius, type size and control height; `meenifx/stylesheet.py` generates the application stylesheet from them and `meenifx/theme.py` applies it (`configure_theme`, `resolve_theme`).
+- Shared widgets live in `meenifx/ui/components.py` (buttons, icon buttons, search field, dropdown, section header, collapsible group, status dot, empty state) and `meenifx/ui/cards.py` (media and folder cards). Icons come from one vector set in `meenifx/icons.py` and repaint in the current theme's colours.
+- Widgets that paint their own colours register with `meenifx/ui/themed.py` (`bind_theme`, `on_theme_change`) so a theme switch restyles them without restarting. The preview canvas stays neutral in both themes.
+- Effects with no meaningful still preview (audio and time effects) show a theme-coloured icon on their card instead of text.
+- `python tests/ui_prototype.py` renders the window in both themes at 1000x600 and 1420x880 into `docs/design/`. Text contrast is checked by `tests/test_ui_tokens.py`.
 
 ## Effects browser, previews and styles
 
@@ -90,10 +98,16 @@ The application resolves bundled tile images, the demo clip, and default output 
   never creates a keyframe silently. Pressing the diamond keys a static property too.
 - The preview is an editor as well: a bounding box with eight scale handles, a rotation
   knob, the visible anchor crosshair, the motion path, warp pins and snap guides. Drag the
-  picture to move (Shift constrains to one axis), the handles to scale (Shift forces a
-  free ratio, the "Uniform scale" switch is the default), the knob to rotate (Shift snaps
-  to 15 degrees), the crosshair to move the anchor without moving the picture. Arrow keys
-  nudge by one project pixel (Shift: ten). Each drag is exactly one undo step.
+  picture to move (Shift constrains to one axis), a handle to resize, the knob to rotate
+  (Shift snaps to 15 degrees), the crosshair to move the anchor without moving the
+  picture. A corner drag is a free transform: width and height change independently and
+  the opposite corner stays exactly where it is, even on a rotated, already-stretched or
+  re-anchored clip. Hold Ctrl while resizing to keep the picture's proportions, Shift to
+  resize from the centre (both stay pinned under the opposite corner), Ctrl+Shift for a
+  proportional centre resize. Side handles change one axis only. The scale box never
+  flips or collapses: it stops at a three-pixel minimum, and "Lock Scale X/Y" in the
+  inspector stays the numeric-scrub lock. Arrow keys nudge by one project pixel (Shift:
+  ten). Each drag is exactly one undo step.
 - Snapping guides light up at the frame edges and centre, and the overlay is editing-only:
   it is painted on top of the preview widget and can never reach the exported frames.
   Coordinates are always converted through the project frame, so a 4K project previewed at

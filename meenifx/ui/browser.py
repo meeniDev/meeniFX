@@ -175,13 +175,24 @@ class BrowserCard(QFrame):
         painter.end()
         self.thumb.setPixmap(pixmap)
 
+    _ICON_FOR = {"audio_gain": "volume", "audio_fade": "volume", "audio_pan": "volume",
+                 "audio_compressor": "volume", "audio_limiter": "volume",
+                 "posterize_time": "clock", "stutter": "clock", "echo": "clock"}
+
     def _words_fallback(self):
-        """Spell the effect's name on the tile when no picture can be shown."""
-        words = str(self.item.get("name") or self.item["id"]).split()
-        self.thumb.setText("\n".join(words[:2]).upper())
-        self.thumb.setWordWrap(True)
-        self.thumb.setStyleSheet(
-            f"color:{tokens.COLORS['muted']};font-size:10px;font-weight:600;")
+        """Draw a themed icon on the tile when no picture can be shown."""
+        name = self._ICON_FOR.get(self.item["id"], "music")
+        size = self.thumb.size()
+        self._placeholder()
+        pixmap = QPixmap(self.thumb.pixmap())
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        side = min(28.0, size.height() * 0.6)
+        paint_icon(painter, name, QRectF((size.width() - side) / 2.0,
+                                         (size.height() - side) / 2.0, side, side),
+                   tokens.COLORS["accent"])
+        painter.end()
+        self.thumb.setPixmap(pixmap)
 
     def _tracker_preview(self):
         """Fallback for trackers: the reference picture plus a detection-reticle plate.

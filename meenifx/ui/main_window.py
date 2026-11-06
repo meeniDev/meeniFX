@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 from PyQt6.QtCore import QObject, QPoint, QRunnable, Qt, QThreadPool, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QActionGroup, QKeySequence
-from PyQt6.QtWidgets import (QAbstractSpinBox, QDockWidget, QLineEdit, QMainWindow,
+from PyQt6.QtWidgets import (QAbstractButton, QAbstractSpinBox, QDockWidget, QLineEdit, QMainWindow,
                              QMessageBox, QProgressDialog, QPlainTextEdit, QStyle, QTextEdit,
                              QToolBar)
 
@@ -197,6 +197,10 @@ class MainWindow(QMainWindow):
         # CPU path, and a slow OpenCL driver can never make the first preview slower.
         render_backend.benchmark_async()
         self._sync_transport()
+        # Icon-only buttons get a screen-reader name from their tooltip.
+        for button in self.findChildren(QAbstractButton):
+            if not button.accessibleName() and not button.text() and button.toolTip():
+                button.setAccessibleName(button.toolTip().split(" (")[0])
 
     def _connect_model(self):
         session=self.engine.session
