@@ -257,6 +257,33 @@ file dialogs; no status bar, hints live in tooltips; fading toasts for the few m
 that matter; a crash guard that logs an exception from a Qt slot instead of aborting the
 application; docks that persist their layout.
 
+## Shape generator
+
+Shapes are the second kind of generated clip (the first is text) and follow exactly the same
+rules: a shape clip carries a `shape` settings dict instead of a source file, and the engine draws
+it into a transparent full-frame layer whenever it is needed. The transform, handles, keyframes,
+blend modes, effects, fades, split, clipboard and export therefore treat a shape as an ordinary
+picture with no special cases.
+
+The toolbar's shape dropdown offers Rectangle, Rounded Rectangle, Ellipse, Polygon, Star and Line;
+*Add > Shape* offers the same six. Dragging in the preview draws the shape live (Shift = circle or
+square, Alt = from the centre, Esc = cancel), and releasing creates a five-second clip at the
+playhead on the topmost clear video track. Properties then shows a Shape card with the fill and
+stroke paint, the geometry for that kind (radius, sides, star points/inner radius, line caps and
+arrowheads) and the shared transform values, so position, rotation and opacity are the same
+numbers as everywhere else.
+
+Nothing is rasterised at creation time. `meenifx/processing/shapes.py` builds a tile around the
+shape's bounds at 2x supersampling, draws the path and its stroke there (center, inside and outside
+alignment are measured from the outline, so the ring really is the requested width), downsamples
+with area averaging and blits it into the frame, cached by the parameter set. A small shape costs
+a small tile even on a 4K frame, and a 35 % preview draws the same geometry as the export.
+
+`tests/test_shapes.py` covers every kind, circles/squares, transparency, stroke alignment, both
+render scales, keyframes, colour keys, split, copy/paste, effects, undo and a save/reopen;
+`tests/test_shape_ui.py` drives the toolbar, the drag, the modifiers, Escape, the inspector and a
+corner resize in the real window.
+
 ## 4. The Keyframe Editor and Graph Editor today
 
 Animation has two clearly labelled views over the same channels. The **Keyframe Editor**

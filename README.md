@@ -34,6 +34,16 @@ The application resolves bundled tile images, the demo clip, and default output 
 - Mosaic, ASCII Art, Face Tracker, Hand Tracker and Blob Tracker plus the new Glitch, Stylize, Light, Time and LUT packs and one-click **Looks** (see *Compositing, effects and looks*); per-clip **blend modes**, **adjustment layers** and a **Mix** slider on every effect card. Every effect declares the media types it can process (`MEDIA_TYPES` on the effect class), and the browser, the timeline drop target and the engine all read that one declaration: on an audio clip the visual effects are listed greyed as *"(video only)"* and cannot be added, a drag or double-click is refused with a status message, and an effect loaded from an older project onto the wrong media type is switched off (kept, with an explanation in its card) instead of crashing or rendering. Each effect publishes a parameter table (range, unit, default, pixel-based or not) that the properties panel and the parameter audit test both build from, so a control can never write a value the effect does not read.
 - Keyframes on every numeric effect parameter: the stopwatch turns animation on and is accent-coloured while active, the value follows the playhead, the diamond is filled exactly on a keyframe and hollow between, and the previous/next buttons jump between them (the cluster only appears for animated parameters). The timeline stays clip-focused: a clip with animation shows one compact `◆ 12 keys` badge, and clicking it opens the dedicated **Keyframe Editor** instead of packing property rows inside the clip. See *Keyframe workflow* below for timing/value editing, the envelopes, clip opacity and the text animation presets.
 - One numeric widget everywhere (`ScrubField`: fixed label column, a compact value with its unit, optional stopwatch and keyframe cluster): Transform, text, audio gain, every effect parameter including Mix, clip speed, fades, the Animation card, the export dialog, playback FPS and track height. The value is the handle: drag it sideways to scrub (right = up), Shift for a tenth of the speed, Ctrl for ten times, Alt to land between the field's steps; click once (or double-click, or just start typing) to type an exact number, Enter applies, Esc puts the previous value back; the arrow keys step, Page Up/Down jump ten steps, and the arrows that appear beside the value on hover step it too; double-clicking the label resets the default. A whole drag is one undo step and a typed edit is one step. Units (`px`, `%`, `°`, `dB`, `f`, `s`, `fps`) are drawn dimmed beside the number and accepted when typed, with both `,` and `.` as the decimal separator.
+- **Vector shape clips**: Rectangle, Rounded Rectangle, Ellipse, Polygon, Star and Line, drawn
+  with the shape tool (pick one in the toolbar dropdown, then drag in the preview) or added from
+  *Add > Shape*. Shift draws a circle/square, Alt draws from the centre, Esc cancels, and the new
+  clip is selected with its transform handles ready. A shape is a real clip on a video track - the
+  same transform, handles, keyframes, effects, fades, blend modes, split, copy/paste and export as
+  a picture - rendered from its parameters at every resolution (never a bitmap upscale), with
+  fill/stroke colour and opacity, stroke width and centre/inside/outside alignment, corner radius,
+  sides, star points and inner radius, line caps and arrowheads. Geometry and colours are
+  keyframeable (`shape.*` channels), and the inspector groups them in a Shape card that only
+  appears while a shape is selected. See *Shape generator* below.
 - Whole-project or loop-region video/GIF/image export (the chosen range is written from frame 0) and Save Frame; frame processing and export run off the UI thread with progress and cancellation.
 
 ## Design system
@@ -395,6 +405,30 @@ The application resolves bundled tile images, the demo clip, and default output 
   with an effect chain usable.
 - Filters and reverb/delay are built from the clip's first frame's parameters (they are
   time-invariant by nature); gain, fades and pan follow their curves over the whole clip.
+
+## Shape generator
+
+- The toolbar's shape dropdown (next to Text) picks one of six shapes: Rectangle, Rounded
+  Rectangle, Ellipse, Polygon, Star, Line. The button re-arms the last choice; *Add > Shape* has
+  the same six commands and drops a default-sized shape in the middle of the frame.
+- Drag in the preview to draw it: the outline follows the pointer live, Shift constrains to a
+  circle/square, Alt draws from the centre, Esc cancels without creating anything. On release the
+  clip is created at the playhead (on the topmost clear video lane, or a new one) with a default
+  five-second duration and is selected with its transform handles, exactly like a picture.
+- It is a clip like any other: move, trim, split, duplicate, copy/paste, reorder, blend modes,
+  effects, fades, keyframes and undo/redo all work, it saves in `.mfxpf`, and it uses the same free
+  transform as images and text (no modifier = non-uniform corner resize with the opposite corner
+  pinned, Ctrl = proportional).
+- Rendering is native vector work, not a bitmap: the geometry, colours and stroke are drawn by
+  OpenCV at the render resolution of the moment, at 2x supersampling with antialiased edges and a
+  transparent background. A 35 % preview and a 100 % export are the same picture, at any project
+  size. Only a tile around the shape is drawn, it is cached per parameter set, and the inspector's
+  opacity/colour/stroke values are ordinary `shape.*` channels, so a small shape stays cheap.
+- The Shape card in Properties holds the type, fill colour and opacity, stroke on/off, colour,
+  width, opacity and alignment, width, height, corner radius (rounded rectangle), sides (polygon),
+  points and inner radius (star), caps and arrowheads (line), plus position, rotation and the
+  clip's own opacity from the shared transform. Colours are keyed like text words (held, not
+  interpolated), so fill and stroke colour can change over time without a numeric fudge.
 
 ## Text generator
 

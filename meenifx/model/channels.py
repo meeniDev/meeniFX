@@ -15,6 +15,7 @@ any surface and every other surface sees it immediately.
 from __future__ import annotations
 
 from . import animation as ANIM
+from . import shape as SHAPE
 from . import text as TXT
 from . import transform as T
 from .keyframes import AnimatedValue, Keyframe
@@ -42,6 +43,10 @@ def text_content_channel():
     return TXT.content_channel()
 
 
+def shape_channel(name):
+    return SHAPE.shape_channel(name)
+
+
 def effect_channel(effect_id, name):
     return f"fx.{effect_id}.{name}"
 
@@ -59,6 +64,8 @@ def parse(channel):
         return "audio", None, text[len(AUDIO_PREFIX):]
     if text.startswith(TXT.TEXT_PREFIX):
         return "text", None, text[len(TXT.TEXT_PREFIX):]
+    if text.startswith(SHAPE.SHAPE_PREFIX):
+        return "shape", None, text[len(SHAPE.SHAPE_PREFIX):]
     if text.startswith("fx."):
         rest = text[3:]
         effect_id, _sep, tail = rest.partition(".")
@@ -122,6 +129,10 @@ def stored(clip, channel):
         if name == TXT.CONTENT:
             return TXT.content_at(clip, 0)
         return TXT.stored(clip, name)
+    if kind == "shape":
+        if name in SHAPE.COLOR_FIELDS:
+            return SHAPE.color_at(clip, name, 0)
+        return SHAPE.stored(clip, name)
     entry = _entry(clip, effect_id)
     if entry is None:
         return None
@@ -139,6 +150,10 @@ def value_at(clip, channel, frame):
         if name == TXT.CONTENT:
             return TXT.content_at(clip, frame)
         return TXT.value_at(clip, name, frame)
+    if kind == "shape":
+        if name in SHAPE.COLOR_FIELDS:
+            return SHAPE.color_at(clip, name, frame)
+        return SHAPE.value_at(clip, name, frame)
     if kind == "audio":
         raw = getattr(clip, GAIN, ANIM.GAIN_DEFAULT_DB)
         return raw.value_at(frame) if isinstance(raw, AnimatedValue) else raw
@@ -194,6 +209,10 @@ def is_animated(clip, channel):
         if name == TXT.CONTENT:
             return bool(TXT.content_keys(clip))
         return TXT.is_animated(clip, name)
+    if kind == "shape":
+        if name in SHAPE.COLOR_FIELDS:
+            return SHAPE.color_is_animated(clip, name)
+        return SHAPE.is_animated(clip, name)
     return isinstance(stored(clip, channel), AnimatedValue)
 
 
@@ -208,6 +227,10 @@ def set_value(clip, channel, value, frame=0, auto_key=False):
         if name == TXT.CONTENT:
             return TXT.set_content(clip, value, frame, auto_key)
         return TXT.set_value(clip, name, value, frame, auto_key)
+    if kind == "shape":
+        if name in SHAPE.COLOR_FIELDS:
+            return SHAPE.set_color(clip, name, value, frame, auto_key)
+        return SHAPE.set_value(clip, name, value, frame, auto_key)
     entry = _entry(clip, effect_id)
     if entry is None:
         return False
@@ -285,6 +308,13 @@ def animate(clip, channel, frame):
         return animated
     if kind == "text":
         return TXT.animate(clip, name, frame)
+    if kind == "shape":
+        if name in SHAPE.COLOR_FIELDS:
+            if SHAPE.color_is_animated(clip, name):
+                return SHAPE.color_at(clip, name, frame)
+            SHAPE.set_color(clip, name, SHAPE.color_at(clip, name, frame), frame, True)
+            return SHAPE.color_at(clip, name, frame)
+        return SHAPE.animate(clip, name, frame)
     entry = _entry(clip, effect_id)
     if entry is None:
         return None
@@ -323,6 +353,12 @@ def unanimate(clip, channel, frame):
         return
     if kind == "text":
         return TXT.unanimate(clip, name, frame)
+    if kind == "shape":
+        if name in SHAPE.COLOR_FIELDS:
+            colour = SHAPE.color_at(clip, name, frame)
+            SHAPE.ensure_shape(clip)[name] = colour
+            return
+        return SHAPE.unanimate(clip, name, frame)
     entry = _entry(clip, effect_id)
     if entry is None:
         return
@@ -344,6 +380,10 @@ def key_times(clip, channel):
         if name == TXT.CONTENT:
             return TXT.content_keys(clip)
         return TXT.key_times(clip, name)
+    if kind == "shape":
+        if name in SHAPE.COLOR_FIELDS:
+            return SHAPE.color_keys(clip, name)
+        return SHAPE.key_times(clip, name)
     raw = stored(clip, channel)
     return [key.time for key in raw.keyframes] if isinstance(raw, AnimatedValue) else []
 
@@ -354,6 +394,10 @@ def has_key(clip, channel, frame):
         if name == TXT.CONTENT:
             return TXT.has_content_key(clip, frame)
         return int(frame) in TXT.key_times(clip, name)
+    if kind == "shape":
+        if name in SHAPE.COLOR_FIELDS:
+            return SHAPE.has_color_key(clip, name, frame)
+        return int(frame) in SHAPE.key_times(clip, name)
     raw = stored(clip, channel)
     return isinstance(raw, AnimatedValue) and raw.key_at(int(frame)) is not None
 
@@ -365,6 +409,11 @@ def ensure_key(clip, channel, frame):
         if TXT.has_content_key(clip, frame):
             return False
         TXT.toggle_content_key(clip, frame)
+        return True
+    if kind == "shape" and name in SHAPE.COLOR_FIELDS:
+        if SHAPE.has_color_key(clip, name, frame):
+            return False
+        SHAPE.toggle_color_key(clip, name, frame)
         return True
     frame = max(0, int(frame))
     raw = stored(clip, channel)
@@ -382,6 +431,8 @@ def remove_key(clip, channel, frame):
     kind, _effect_id, name = parse(channel)
     if kind == "text" and name == TXT.CONTENT:
         return TXT.remove_content_key(clip, frame)
+    if kind == "shape" and name in SHAPE.COLOR_FIELDS:
+        return SHAPE.remove_color_key(clip, name, frame)
     raw = stored(clip, channel)
     return bool(isinstance(raw, AnimatedValue) and raw.remove_keyframe(frame))
 
@@ -395,6 +446,10 @@ def toggle_key(clip, channel, frame):
         if name == TXT.CONTENT:
             return TXT.toggle_content_key(clip, frame)
         return TXT.toggle_key(clip, name, frame)
+    if kind == "shape":
+        if name in SHAPE.COLOR_FIELDS:
+            return SHAPE.toggle_color_key(clip, name, frame)
+        return SHAPE.toggle_key(clip, name, frame)
     frame = int(frame)
     raw = stored(clip, channel)
     if not isinstance(raw, AnimatedValue):
@@ -413,6 +468,10 @@ def set_key_time(clip, channel, old_time, new_time):
         if name == TXT.CONTENT:
             return TXT.move_content_key(clip, old_time, new_time)
         return TXT.set_key_time(clip, name, old_time, new_time)
+    if kind == "shape":
+        if name in SHAPE.COLOR_FIELDS:
+            return SHAPE.move_color_key(clip, name, old_time, new_time)
+        return SHAPE.set_key_time(clip, name, old_time, new_time)
     raw = stored(clip, channel)
     if not isinstance(raw, AnimatedValue):
         return None
@@ -455,6 +514,16 @@ def spec(clip, channel, resolver=None):
         return {"label": label, "unit": unit, "minimum": minimum, "maximum": maximum,
                 "step": step, "decimals": decimals, "group": "Text", "kind": "float",
                 "qty": span}
+    if kind == "shape":
+        if name in SHAPE.COLOR_FIELDS:
+            label = "Fill Color" if name == "fill_color" else "Stroke Color"
+            return {"label": label, "unit": "", "minimum": 0, "maximum": 0, "step": 1,
+                    "decimals": 0, "group": "Shape", "kind": "color"}
+        label, unit, minimum, maximum, step, decimals, span = SHAPE.SPECS.get(
+            name, (name.replace("_", " ").title(), "", -1e9, 1e9, 1.0, 2, 100.0))
+        return {"label": label, "unit": unit, "minimum": minimum, "maximum": maximum,
+                "step": step, "decimals": decimals, "group": "Shape", "kind": "float",
+                "qty": span}
     runtime = resolver.get(effect_id) if isinstance(resolver, dict) else (
         resolver(effect_id) if callable(resolver) else None)
     effect_name = getattr(runtime, "name", effect_id.replace("_", " ").title())
@@ -476,6 +545,20 @@ def spec(clip, channel, resolver=None):
 def list_channels(clip, resolver=None, include_static_effects=False):
     """Every channel of a clip, transform first, then effects in pipeline order."""
     rows = []
+    if getattr(clip, "is_shape", False):
+        for name in SHAPE.NUMERIC:
+            channel = SHAPE.shape_channel(name)
+            meta = spec(clip, channel, resolver)
+            rows.append({**meta, "id": channel, "name": name,
+                         "animated": SHAPE.is_animated(clip, name),
+                         "value": SHAPE.value_at(clip, name, 0)})
+        for name in SHAPE.COLOR_FIELDS:
+            if not SHAPE.color_keys(clip, name):
+                continue
+            channel = SHAPE.shape_channel(name)
+            meta = spec(clip, channel, resolver)
+            rows.append({**meta, "id": channel, "name": name, "animated": True,
+                         "value": SHAPE.color_at(clip, name, 0)})
     if getattr(clip, "is_text", False):
         for name in TXT.NUMERIC:
             channel = TXT.text_channel(name)
@@ -550,6 +633,9 @@ def key_records(clip, channel):
     if kind == "text" and name == TXT.CONTENT:
         return [(int(time), TXT.content_at(clip, int(time)), "hold", None, None)
                 for time in TXT.content_keys(clip)]
+    if kind == "shape" and name in SHAPE.COLOR_FIELDS:
+        return [(int(time), SHAPE.color_at(clip, name, int(time)), "hold", None, None)
+                for time in SHAPE.color_keys(clip, name)]
     raw = stored(clip, channel)
     if not isinstance(raw, AnimatedValue):
         return []
@@ -569,6 +655,10 @@ def replace_keys(clip, channel, records, base_value=None):
         data = TXT.ensure_text(clip)
         data["keys"] = {int(row[0]): str(row[1]) for row in ordered}
         return
+    if kind == "shape" and name in SHAPE.COLOR_FIELDS:
+        SHAPE.ensure_shape(clip)[name] = {"keys": {int(row[0]): str(row[1])
+                                                   for row in ordered}}
+        return
     keys = [Keyframe(int(row[0]), row[1],
                      str(row[2]) if len(row) > 2 and row[2] else "linear",
                      in_value_handle=row[3] if len(row) > 3 else None,
@@ -586,6 +676,9 @@ def replace_keys(clip, channel, records, base_value=None):
         return
     if kind == "text":
         TXT.ensure_text(clip)[name] = animated
+        return
+    if kind == "shape":
+        SHAPE.ensure_shape(clip)[name] = animated
         return
     entry = _entry(clip, effect_id)
     if entry is None:
@@ -615,6 +708,10 @@ def set_static(clip, channel, value):
             data["text"] = "" if value is None else str(value)
             return
         TXT.ensure_text(clip)[name] = float(value)
+        return
+    if kind == "shape":
+        SHAPE.ensure_shape(clip)[name] = (str(value) if name in SHAPE.COLOR_FIELDS
+                                         else float(value))
         return
     entry = _entry(clip, effect_id)
     if entry is None:

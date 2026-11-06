@@ -436,6 +436,11 @@ class MainWindow(QMainWindow):
             lambda on:self.engine.session.set_double_click_opens_graph(on))
         add_menu=bar.addMenu("Add")
         self._add_action(add_menu,"Adjustment Layer",None,self.add_adjustment_layer)
+        from ..model import shape as SHAPE
+        shape_menu=add_menu.addMenu("Shape")
+        for kind in SHAPE.KINDS:
+            self._add_action(shape_menu,SHAPE.LABELS[kind],None,
+                             lambda k=kind:self.add_shape(k))
         text_menu=bar.addMenu("Text")
         self._add_action(text_menu,"Add Text Clip","Ctrl+T",self.add_text_clip)
         self._add_action(text_menu,"Add or Remove Text Keyframe at Playhead","Ctrl+Shift+T",
@@ -527,7 +532,7 @@ class MainWindow(QMainWindow):
         return False
 
     def _build_toolbar(self):
-        from PyQt6.QtWidgets import QPushButton,QSizePolicy,QToolButton,QWidget
+        from PyQt6.QtWidgets import QMenu,QPushButton,QSizePolicy,QToolButton,QWidget
         from .. import tokens
         from ..icons import icon
         toolbar=QToolBar("Main",self); toolbar.setMovable(False); toolbar.setObjectName("mainToolbar")
@@ -561,6 +566,23 @@ class MainWindow(QMainWindow):
         self.text_button.setToolTip("Add a text clip at the playhead (Ctrl+T)")
         self.text_button.clicked.connect(lambda _=False:self.add_text_clip())
         toolbar.addWidget(self.text_button)
+        # Shape tool: the main button re-arms the last shape, the menu picks another. Both
+        # only arm the tool - the shape itself is drawn where the user drags.
+        from ..model import shape as SHAPE
+        self._shape_kind="rectangle"
+        self.shape_button=QToolButton(); self.shape_button.setProperty("role","icon")
+        self.shape_button.setIcon(icon(SHAPE.ICONS["rectangle"]))
+        self.shape_button.setFixedSize(tokens.CONTROL_H,tokens.CONTROL_H)
+        self.shape_button.setCheckable(True)
+        self.shape_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self.shape_button.setToolTip("Shape tool: pick a shape, then drag in the preview to draw it")
+        shape_picker=QMenu(self.shape_button)
+        for kind in SHAPE.KINDS:
+            shape_picker.addAction(icon(SHAPE.ICONS[kind]),SHAPE.LABELS[kind],
+                                   lambda _checked=False,k=kind:self._start_shape_tool(k))
+        self.shape_button.setMenu(shape_picker)
+        self.shape_button.clicked.connect(lambda _=False:self._start_shape_tool(self._shape_kind))
+        toolbar.addWidget(self.shape_button)
         self.captions_button=QToolButton(); self.captions_button.setProperty("role","icon")
         self.captions_button.setIcon(icon("captions")); self.captions_button.setFixedSize(tokens.CONTROL_H,tokens.CONTROL_H)
         self.captions_button.setToolTip("Generate Auto Captions from the audio")
@@ -595,6 +617,7 @@ class MainWindow(QMainWindow):
                     (self.path_button,"path"),(self.autokey_button,"auto_key")]
         def refresh_icons(_toolbar):
             for button,name in icon_names: button.setIcon(icon(name))
+            self.shape_button.setIcon(icon(SHAPE.ICONS.get(self._shape_kind,"shape_rectangle")))
             self.record_button.setIcon(icon("record",tokens.COLORS["red"]))
         from .themed import bind_theme
         bind_theme(toolbar,refresh_icons)
@@ -1947,6 +1970,31 @@ class MainWindow(QMainWindow):
         self._request_preview()
         return clip_id
 
+    def _start_shape_tool(self, kind="rectangle"):
+        """Arm the shape tool: the next drag in the preview draws that shape."""
+        from ..model import shape as SHAPE
+        from ..icons import icon
+        if kind not in SHAPE.KINDS:
+            kind="rectangle"
+        self._shape_kind=kind
+        if hasattr(self,"shape_button"):
+            self.shape_button.setIcon(icon(SHAPE.ICONS[kind]))
+        self.overlay.shape_kind=kind
+        self._set_overlay_mode("shape")
+        self.preview_panel.view.setFocus()
+        self.bridge.status.emit(
+            f"Shape tool: drag in the preview for a {SHAPE.LABELS[kind].lower()} "
+            f"(Shift constrains, Alt draws from the centre, Esc cancels)")
+
+    def add_shape(self, kind="rectangle"):
+        """Add a shape at its default size in the middle of the frame (Add menu)."""
+        clip_id=self.engine.session.add_shape_clip(kind)
+        if clip_id is None:
+            return None
+        self._set_overlay_mode("transform")
+        self._refresh_panels(); self._request_preview()
+        return clip_id
+
     def add_text_clip(self):
         """Add a generated text clip at the playhead and select it for editing."""
         from ..model import text as TXT
@@ -2171,7 +2219,8 @@ class MainWindow(QMainWindow):
         self.overlay.mode=mode
         for button,name in ((getattr(self,"select_tool_button",None),"select"),
                             (getattr(self,"transform_tool_button",None),"transform"),
-                            (getattr(self,"puppet_tool_button",None),"puppet")):
+                            (getattr(self,"puppet_tool_button",None),"puppet"),
+                            (getattr(self,"shape_button",None),"shape")):
             if button is not None:
                 button.blockSignals(True); button.setChecked(name==mode); button.blockSignals(False)
         if mode=="puppet": self._ensure_puppet_effect()

@@ -333,6 +333,11 @@ class PreviewWidget(QWidget):
         overlay = self.overlay
         if overlay is not None:
             key = event.key()
+            # Escape always means "abandon this": a shape being drawn leaves the draft
+            # behind and puts the normal tool back.
+            if key == Qt.Key.Key_Escape and overlay.cancel_shape():
+                event.accept()
+                return
             step = 1.0
             if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
                 step = 10.0

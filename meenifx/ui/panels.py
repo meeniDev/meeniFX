@@ -29,6 +29,7 @@ from ..model import looks as LOOKS
 from ..model import channels as CH
 from ..model import preset_library as LIB
 from ..model import presets as PM
+from ..model import shape as SHAPE
 from ..model import text as TXT
 from ..model import transform as T
 from ..model.keyframes import AnimatedValue, parameter_value_at
@@ -517,6 +518,14 @@ class EffectsPanel(QWidget):
         flags = (bool(transform.get("uniform")), bool(transform.get("flip_h")),
                  bool(transform.get("flip_v")))
         gain = isinstance(clip.gain, AnimatedValue)
+        shape_key = ()
+        if clip.is_shape:
+            # The shape card is rebuilt when the kind changes or a switch (stroke, caps,
+            # arrowheads) flips; its numeric values are rows that follow the playhead.
+            shape_key = tuple(sorted(
+                (name, isinstance(value, AnimatedValue),
+                 str(value) if isinstance(value, (str, dict)) else value)
+                for name, value in SHAPE.ensure_shape(clip).items()))
         text_animation = ()
         if clip.is_text:
             animation = (clip.text or {}).get("animation") or {}
@@ -528,7 +537,7 @@ class EffectsPanel(QWidget):
                              (row.get("knobs") or {}).get("unit"))
                             for row in PM.instances(clip)) if hasattr(clip, "presets") else ()
         return (tuple(sorted(c.id for c in clips)), clip.id, clip.name, effects, animated, flags,
-                gain, text_animation, preset_rows)
+                gain, text_animation, shape_key, preset_rows)
 
     def refresh_properties(self):
         """Rebuild only when the shape changed; otherwise just follow the playhead."""
@@ -555,6 +564,8 @@ class EffectsPanel(QWidget):
         if clip.track is not None and clip.track.type == "video":
             if clip.is_text:
                 self._text_card(clip)
+            elif clip.is_shape:
+                self._shape_card(clip)
             self._transform_card(clip)
             self._animation_card(clip)
         elif clip.track is not None and clip.track.type == "audio":
@@ -733,6 +744,166 @@ class EffectsPanel(QWidget):
     def _set_anchor_preset(self, clip, preset):
         keep = bool(self.engine.session.keep_anchor_position.get())
         self.engine.session.set_anchor_preset(clip.id, preset, keep)
+        self.refresh_properties()
+
+    # --------------------------------------------------------------------- shape
+    def _shape_card(self, clip):
+        """The shape generator: geometry, paint and the same transform as every clip.
+
+        Colours are held keys (like text words) so they can be keyed without pretending
+        to be a number; every numeric control is an ordinary ``shape.<name>`` channel and
+        gets the same stopwatch and diamonds as the transform.
+        """
+        settings = SHAPE.ensure_shape(clip)
+        frame = self._clip_frame(clip)
+        kind = str(settings.get("kind") or "rectangle")
+        card, outer = self._card("shape")
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        title = QLabel("Shape")
+        title.setStyleSheet(f"font-size: {tokens.FONT_TITLE}px; font-weight: 600;")
+        header.addWidget(title)
+        header.addStretch(1)
+        outer.addLayout(header)
+        body, form = self._form()
+
+        kinds = QComboBox()
+        for key, label in SHAPE.LABELS.items():
+            kinds.addItem(icon(SHAPE.ICONS.get(key, "shape_rectangle")), label, key)
+        kinds.setCurrentIndex(max(0, kinds.findData(kind)))
+        kinds.currentIndexChanged.connect(
+            lambda _index, c=clip, box=kinds: self._set_shape_kind(c, box.currentData()))
+        form.addWidget(self._labelled("Type", kinds,
+                                      "The shape this clip draws; the change is undoable and "
+                                      "keeps the clip's transform, effects and keys"))
+
+        self._section_label(form, "Fill")
+        fill_row = QWidget()
+        fill_layout = QHBoxLayout(fill_row)
+        fill_layout.setContentsMargins(0, 0, 0, 0)
+        fill_layout.setSpacing(tokens.SP2)
+        self._shape_swatch(fill_layout, clip, "fill_color")
+        fill_layout.addStretch(1)
+        form.addWidget(self._labelled("Color", fill_row,
+                                      "Fill colour; keyframe it to animate the colour"))
+        self._channel_row(form, clip, SHAPE.shape_channel("fill_opacity"))
+
+        self._section_label(form, "Stroke")
+        stroke = QCheckBox("Stroke this shape")
+        stroke.setChecked(bool(settings.get("stroke_enabled")))
+        stroke.toggled.connect(lambda on, c=clip: self._set_shape_static(
+            c, "stroke_enabled", bool(on), "Shape stroke"))
+        form.addWidget(stroke)
+        stroke_row = QWidget()
+        stroke_layout = QHBoxLayout(stroke_row)
+        stroke_layout.setContentsMargins(0, 0, 0, 0)
+        stroke_layout.setSpacing(tokens.SP2)
+        self._shape_swatch(stroke_layout, clip, "stroke_color")
+        stroke_layout.addStretch(1)
+        form.addWidget(self._labelled("Color", stroke_row, "Stroke colour"))
+        for name in ("stroke_width", "stroke_opacity"):
+            self._channel_row(form, clip, SHAPE.shape_channel(name))
+        align = QComboBox()
+        align.addItems([name.title() for name in SHAPE.ALIGNMENTS])
+        align.setCurrentText(str(settings.get("stroke_align") or "center").title())
+        align.currentTextChanged.connect(lambda text, c=clip: self._set_shape_static(
+            c, "stroke_align", text.lower(), "Stroke alignment"))
+        form.addWidget(self._labelled("Align", align,
+                                      "Where the stroke sits relative to the outline"))
+
+        self._section_label(form, "Geometry")
+        for name in ("width", "height"):
+            self._channel_row(form, clip, SHAPE.shape_channel(name))
+        if kind == "rounded_rectangle":
+            self._channel_row(form, clip, SHAPE.shape_channel("radius"))
+        if kind == "polygon":
+            self._channel_row(form, clip, SHAPE.shape_channel("sides"))
+        if kind == "star":
+            for name in ("points", "inner_ratio"):
+                self._channel_row(form, clip, SHAPE.shape_channel(name))
+        if kind == "line":
+            cap = QComboBox()
+            cap.addItems([name.title() for name in SHAPE.CAPS])
+            cap.setCurrentText(str(settings.get("cap") or "round").title())
+            cap.currentTextChanged.connect(lambda text, c=clip: self._set_shape_static(
+                c, "cap", text.lower(), "Line caps"))
+            form.addWidget(self._labelled("Caps", cap, "How the ends of the line are drawn"))
+            arrows = QWidget()
+            arrow_row = QHBoxLayout(arrows)
+            arrow_row.setContentsMargins(0, 0, 0, 0)
+            arrow_row.setSpacing(tokens.SP2)
+            for name, label in (("arrow_start", "Start"), ("arrow_end", "End")):
+                box = QCheckBox(label)
+                box.setChecked(bool(settings.get(name)))
+                box.toggled.connect(lambda on, c=clip, n=name: self._set_shape_static(
+                    c, n, bool(on), "Line arrowheads"))
+                arrow_row.addWidget(box)
+            arrow_row.addStretch(1)
+            form.addWidget(self._labelled("Arrows", arrows, "Optional arrowheads"))
+
+        # Position, rotation and the clip's own opacity are the shared transform values:
+        # the same rows as the Transform section, never a second set of numbers.
+        self._section_label(form, "Transform (shared with the Transform section)")
+        for name in ("position_x", "position_y", "rotation", "opacity"):
+            self._channel_row(form, clip, CH.transform_channel(name))
+        outer.addWidget(body)
+        self.properties_layout.addWidget(card)
+
+    def _shape_swatch(self, layout, clip, name):
+        frame = self._clip_frame(clip)
+        button = _swatch_button(SHAPE.color_at(clip, name, frame),
+                                "Pick this shape colour")
+        button.clicked.connect(lambda _=False, c=clip, n=name: self._pick_shape_color(c, n))
+        layout.addWidget(button)
+        key = _tool("key", "Add or remove a colour keyframe at the playhead", checkable=True)
+        key.setChecked(SHAPE.has_color_key(clip, name, frame))
+        key.clicked.connect(lambda _=False, c=clip, n=name: self._toggle_shape_color_key(c, n))
+        layout.addWidget(key)
+        self._rows.append({"kind": "shape_color", "clip_id": clip.id, "name": name,
+                           "button": button, "key": key})
+
+    def _pick_shape_color(self, clip, name):
+        frame = self._clip_frame(clip)
+        chosen = QColorDialog.getColor(QColor(SHAPE.color_at(clip, name, frame)), self,
+                                       "Shape colour")
+        if not chosen.isValid():
+            return
+        channel = SHAPE.shape_channel(name)
+        auto = bool(self.engine.session.auto_keyframe.get())
+
+        def action():
+            target = self.engine.timeline.find_clip(clip.id)
+            if target is not None:
+                CH.set_value(target, channel, chosen.name(), frame, auto)
+        self.engine.session.stack.run("Shape colour", action)
+        self._notify()
+        self.refresh_properties()
+
+    def _toggle_shape_color_key(self, clip, name):
+        self.engine.session.toggle_channel_key(clip, SHAPE.shape_channel(name))
+        self._notify()
+        self.refresh_properties()
+
+    def _set_shape_static(self, clip, name, value, label):
+        def action():
+            target = self.engine.timeline.find_clip(clip.id)
+            if target is not None:
+                SHAPE.ensure_shape(target)[name] = value
+        self.engine.session.stack.run(label, action)
+        self._notify()
+        self.refresh_properties()
+
+    def _set_shape_kind(self, clip, kind):
+        """Switch the shape's type in place, keeping transform, effects and keys."""
+        if not kind or kind == (clip.shape or {}).get("kind"):
+            return
+
+        def action():
+            target = self.engine.timeline.find_clip(clip.id)
+            if target is not None:
+                SHAPE.ensure_shape(target)["kind"] = str(kind)
+        self.engine.session.stack.run("Change shape type", action)
+        self._notify()
         self.refresh_properties()
 
     # ---------------------------------------------------------------------- text

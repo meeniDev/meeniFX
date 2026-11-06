@@ -10,6 +10,7 @@ interpolation names survive a save/load round trip untouched.
 import copy
 import itertools
 
+from ..model import shape as shape_model
 from ..model import text as text_model
 from ..model import transform as transforms
 from ..model.keyframes import AnimatedValue, Keyframe
@@ -18,7 +19,7 @@ from ..model.timeline import Clip, Marker, Timeline, Track
 CLIP_COLUMNS = ("id", "track", "media", "name", "start", "dur", "src_in", "src_out", "src_min", "src_max",
                 "src_fps", "tl_fps", "speed", "reverse", "loop", "freeze", "offset", "volume",
                 "fade_in", "fade_out", "fade_in_curve", "fade_out_curve", "stream", "link",
-                "transform", "meta", "text", "gain", "presets", "blend", "adjust")
+                "transform", "meta", "text", "shape", "gain", "presets", "blend", "adjust")
 KF_FIELDS = ("in_influence", "out_influence", "in_value_handle", "out_value_handle")
 PIN_KEYS = ("id", "src", "locked")
 RESERVED_EFFECT_KEYS = ("effect_id", "enabled", "params", "pins")
@@ -81,6 +82,24 @@ def timeline_to_sections(timeline, media_id_for):
                                        for frame, words in (settings.get("keys") or {}).items()}
                 for name, animated in text_animated.items():
                     add_owner("text", clip_index, name, animated)
+            shape_column = None
+            if c.is_shape:
+                settings = shape_model.ensure_shape(c)
+                shape_column, shape_animated = _split_animated(
+                    {name: value for name, value in settings.items()
+                     if name not in shape_model.COLOR_FIELDS})
+                for name in shape_model.COLOR_FIELDS:
+                    value = settings.get(name)
+                    if isinstance(value, dict):
+                        # Held keys, in the same {"keys": {frame: value}} shape the loader
+                        # and the rest of the model use - a bare mapping would load empty.
+                        shape_column[name] = {"keys": {
+                            str(int(frame)): str(colour)
+                            for frame, colour in (value.get("keys") or {}).items()}}
+                    else:
+                        shape_column[name] = value
+                for name, animated in shape_animated.items():
+                    add_owner("shape", clip_index, name, animated)
             gain_static = c.gain
             if isinstance(gain_static, AnimatedValue):
                 # Animated gain is stored once, as an owner row named "gain" on the clip.
@@ -92,7 +111,7 @@ def timeline_to_sections(timeline, media_id_for):
                     c.source_fps, c.timeline_fps, c.speed, c.reverse, c.loop, c.freeze, c.source_offset,
                     c.volume, c.fade_in, c.fade_out, c.fade_in_curve, c.fade_out_curve,
                     c.stream, c.link_id, transform_static, c.transform_meta or {}, text_column,
-                    gain_static, copy.deepcopy(getattr(c, "presets", []) or []),
+                    shape_column, gain_static, copy.deepcopy(getattr(c, "presets", []) or []),
                     getattr(c, "blend", "normal"), bool(getattr(c, "adjustment", False)))):
                 cols[key].append(val)
             for effect in c.effects:
@@ -171,6 +190,7 @@ def sections_to_timeline(sections, fps, path_for_media):
     per_owner = _keyframes_per_owner(sections)
     transform_owners = []
     text_owners = []
+    shape_owners = []
     gain_owners = []
     for owner, (row, name, base) in enumerate(owners):
         kind = kinds[owner] if owner < len(kinds) else "effect"
@@ -187,6 +207,8 @@ def sections_to_timeline(sections, fps, path_for_media):
             transform_owners.append((int(row), name, AnimatedValue(keys, base)))
         elif kind == "text":
             text_owners.append((int(row), name, AnimatedValue(keys, base)))
+        elif kind == "shape":
+            shape_owners.append((int(row), name, AnimatedValue(keys, base)))
         elif kind == "gain":
             gain_owners.append((int(row), name, AnimatedValue(keys, base)))
 
@@ -201,12 +223,16 @@ def sections_to_timeline(sections, fps, path_for_media):
     transform_column = c.get("transform") or [{} for _ in range(count)]
     meta_column = c.get("meta") or [{} for _ in range(count)]
     text_column = c.get("text") or [None for _ in range(count)]
+    shape_column = c.get("shape") or [None for _ in range(count)]
     transform_by_clip = {}
     for clip_index, name, animated in transform_owners:
         transform_by_clip.setdefault(clip_index, {})[name] = animated
     text_by_clip = {}
     for clip_index, name, animated in text_owners:
         text_by_clip.setdefault(clip_index, {})[name] = animated
+    shape_by_clip = {}
+    for clip_index, name, animated in shape_owners:
+        shape_by_clip.setdefault(clip_index, {})[name] = animated
     gain_by_clip = {}
     for clip_index, _name, animated in gain_owners:
         gain_by_clip[clip_index] = animated
@@ -224,7 +250,8 @@ def sections_to_timeline(sections, fps, path_for_media):
                     c["fade_in_curve"][i], c["fade_out_curve"][i],
                     link_id=int(streams["link"][i] or 0), stream=streams["stream"][i] or None,
                     transform=transform_column[i] or None, transform_meta=meta_column[i] or None,
-                    text=text_column[i] or None, gain=gain_column[i],
+                    text=text_column[i] or None, shape=shape_column[i] or None,
+                    gain=gain_column[i],
                     presets=presets_column[i] or None, blend=blend_column[i],
                     adjustment=bool(adjust_column[i]))
         track.clips.append(clip)
@@ -240,6 +267,16 @@ def sections_to_timeline(sections, fps, path_for_media):
             settings["keys"] = {int(frame): str(words)
                                 for frame, words in (settings.get("keys") or {}).items()}
             for name, animated in text_by_clip.get(i, {}).items():
+                settings[name] = animated
+        if clip.shape:
+            # Shape colour keys come back from the container with string frames.
+            settings = shape_model.ensure_shape(clip)
+            for name in shape_model.COLOR_FIELDS:
+                value = settings.get(name)
+                if isinstance(value, dict):
+                    settings[name] = {"keys": {int(frame): str(colour) for frame, colour
+                                               in (value.get("keys") or {}).items()}}
+            for name, animated in shape_by_clip.get(i, {}).items():
                 settings[name] = animated
 
     timeline._clip_ids = itertools.count(max(tdata.get("max_clip", 0), max(c["id"], default=0)) + 1)

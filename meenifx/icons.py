@@ -292,6 +292,31 @@ def _draw(name, p, color):
     elif name == "image":
         p.drawRoundedRect(QRectF(2.4, 3.2, 11.2, 9.6), 2, 2)
         p.drawPolyline(_pts(3.2, 11.2, 6.4, 7.6, 8.8, 10, 10.4, 8.6, 12.8, 11.2))
+    elif name in ("shape_rectangle", "shape_rounded", "shape_ellipse", "shape_polygon",
+                  "shape_star", "shape_line"):
+        # One family of shape-tool icons: same bounding box, one silhouette each, so the
+        # dropdown reads as a set of shapes rather than a set of unrelated glyphs.
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        if name == "shape_rounded":
+            p.drawRoundedRect(QRectF(2.5, 3.5, 11, 9), 2.6, 2.6)
+        elif name == "shape_ellipse":
+            p.drawEllipse(QRectF(2.5, 3.5, 11, 9))
+        elif name == "shape_polygon":
+            p.drawPolygon(QPolygonF([QPointF(8 + 5.4 * math.cos(math.radians(-90 + i * 60)),
+                                            8 + 5.4 * math.sin(math.radians(-90 + i * 60)))
+                                     for i in range(6)]))
+        elif name == "shape_star":
+            points = []
+            for step in range(10):
+                radius = 5.6 if step % 2 == 0 else 2.4
+                angle = math.radians(-90 + step * 36)
+                points.append(QPointF(8 + radius * math.cos(angle),
+                                      8.2 + radius * math.sin(angle)))
+            p.drawPolygon(QPolygonF(points))
+        elif name == "shape_line":
+            p.drawLine(QPointF(3, 12.4), QPointF(13, 3.6))
+        else:
+            p.drawRect(QRectF(2.5, 3.5, 11, 9))
     elif name == "trash":
         p.drawLine(QPointF(3, 4.8), QPointF(13, 4.8))
         p.drawPolyline(_pts(6.2, 4.6, 6.2, 3, 9.8, 3, 9.8, 4.6))

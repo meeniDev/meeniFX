@@ -33,8 +33,10 @@ from .model.session import TimelineSession
 from .model.timeline import Timeline
 from .model.values import Value
 from .model import presets as preset_model
+from .model import shape as shape_model
 from .model import text as text_model
 from .processing import layers as layer_ops
+from .processing import shapes as shape_render
 from .processing import text as text_render
 from .processing import text_units as text_unit_render
 from .processing.mosaic import build_palette
@@ -344,7 +346,8 @@ class EditorEngine:
             for clip in track.sorted_clips():
                 # Adjustment layers carry no picture but occupy their track: they are part
                 # of the stack so their effects can see everything composited below them.
-                if ((clip.source_path or clip.is_text or getattr(clip, "adjustment", False))
+                if ((clip.source_path or clip.is_text or clip.is_shape
+                        or getattr(clip, "adjustment", False))
                         and clip.timeline_start <= frame_no < clip.end):
                     stack.append(clip)
                     break
@@ -356,6 +359,18 @@ class EditorEngine:
         `unit_poses` is the preset layer's per-text-unit animation; `spec` lets the caller
         (which already needed the text layout) pass the resolved text in.
         """
+        if clip.is_shape:
+            # A shape is generated, like text, straight into a full-frame transparent
+            # layer, so the transform moves/scales it exactly like any other picture. The
+            # geometry is drawn from parameters at the render resolution, so a 35 %
+            # preview and the 100 % export are the same picture and nothing is upscaled.
+            width, height = layer_ops.render_size(self.project_size(), scale)
+            spec = shape_model.resolve(clip, frame_no - clip.timeline_start)
+            layer = shape_render.render(spec, width, height, scale)
+            if layer is None:
+                return None, None
+            return layer, (0.0, 0.0, float(self.project_size()[0]),
+                           float(self.project_size()[1]))
         if clip.is_text:
             # Text lives in project space, so its layer is the whole frame: the transform
             # then moves/scales it exactly like a fitted picture.
@@ -656,7 +671,7 @@ class EditorEngine:
 
     def has_media(self):
         clips = self.timeline.all_clips()
-        return (any(c.source_path for c in clips) or any(c.is_text for c in clips)) and self.source_width > 0
+        return (any(c.source_path for c in clips) or any(c.is_text or c.is_shape for c in clips)) and self.source_width > 0
 
     @staticmethod
     def normalize_even_size(width, height):

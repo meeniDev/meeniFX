@@ -1185,6 +1185,7 @@ class TimelineSession:
                       "fade_in_curve": source.fade_in_curve,
                       "fade_out_curve": source.fade_out_curve},
             "text": copy.deepcopy(source.text) if source.is_text else None,
+            "shape": copy.deepcopy(source.shape) if source.is_shape else None,
         }
         self.status.emit(f"Copied effects from {source.name}")
         return True
@@ -1935,6 +1936,62 @@ class TimelineSession:
         self.set_selection({clip.id})
         self.reveal_requested.emit(clip.timeline_start)
         self.status.emit("Text clip added")
+        return clip.id
+
+    def add_shape_clip(self, kind="rectangle", box=None, start=None, duration=None,
+                       track=None, rotation=0.0):
+        """Create a vector shape clip on a video track and select it.
+
+        `box` is (x, y, w, h) in project pixels - the rectangle the user dragged in the
+        preview. Without it the shape takes its default size in the middle of the frame.
+        The clip is an ordinary timeline clip: transform, effects, keyframes, fades,
+        split, copy/paste and the export all treat it like a picture.
+        """
+        from . import shape as SHAPE
+
+        tl = self.timeline
+        start = max(0, int(self.playhead if start is None else start))
+        duration = max(1, int(duration if duration is not None else round(tl.fps * 5)))
+        settings = SHAPE.blank(kind)
+        pw, ph = self.project_size
+        if box is not None:
+            x, y, width, height = (float(value) for value in box)
+            width, height = max(3.0, width), max(3.0, height)
+            settings["width"], settings["height"] = width, height
+            position = (x + width / 2.0 - (pw - 1) / 2.0,
+                        y + height / 2.0 - (ph - 1) / 2.0)
+        else:
+            position = (0.0, 0.0)
+        transform = T.default_transform()
+        transform["position_x"], transform["position_y"] = position
+        transform["rotation"] = float(rotation or 0.0)
+        holder = {}
+
+        def free_track():
+            # Shapes belong above the picture, so take the topmost video lane that is
+            # clear at that time; otherwise add a new video track (the top layer).
+            for lane in tl.tracks_of_type("video"):
+                busy = any(not (clip.end <= start or clip.timeline_start >= start + duration)
+                           for clip in lane.clips)
+                if not busy and not lane.locked:
+                    return lane
+            return tl.add_track("video")
+
+        def action():
+            target = track
+            if target is None or target.type != "video":
+                target = free_track()
+            holder["clip"] = tl.new_clip(
+                name=SHAPE.LABELS.get(kind, "Shape"), source_path="", track=target,
+                start=start, duration=duration, transform=transform, shape=settings)
+
+        self.stack.run("Add shape", action)
+        clip = holder.get("clip")
+        if clip is None:
+            return None
+        self.set_selection({clip.id})
+        self.reveal_requested.emit(clip.timeline_start)
+        self.status.emit(f"{SHAPE.LABELS.get(kind, 'Shape')} added")
         return clip.id
 
     def add_media(self, entries, start=None, track=None, find_free=False, reveal=True,

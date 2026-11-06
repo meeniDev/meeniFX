@@ -85,7 +85,11 @@ class PreviewOverlay:
         self.enabled = True
         self.show_motion_path = True
         self.show_mesh = False
-        self.mode = "select"          # select | transform | puppet | corner | mesh
+        self.mode = "select"          # select | transform | puppet | corner | mesh | shape
+        # While the shape tool is armed the next press starts a draft rectangle; it is
+        # painted as a live outline and only becomes a clip on release.
+        self.shape_kind = "rectangle"
+        self._shape_draft = None
         self._drag = None
         self._guides = []
         self._hover = None
@@ -168,8 +172,8 @@ class PreviewOverlay:
         return T.evaluate(clip, self.local_frame(clip))
 
     def image_size(self, clip):
-        if getattr(clip, "is_text", False):
-            # A text layer is generated at project size, so its picture is the frame.
+        if getattr(clip, "is_text", False) or getattr(clip, "is_shape", False):
+            # Text and shapes are generated at project size, so their picture is the frame.
             return self.project_size()
         size = self.engine.media.source_size(clip.source_path)
         return size or self.project_size()
@@ -297,7 +301,7 @@ class PreviewOverlay:
             for clip in track.sorted_clips():
                 if not (clip.timeline_start <= frame < clip.end):
                     continue
-                if not clip.source_path and not clip.is_text:
+                if not clip.source_path and not clip.is_text and not clip.is_shape:
                     continue
                 width, height = self.image_size(clip)
                 source = T.invert(project, self.state(clip), self.project_size(), (width, height))
@@ -452,6 +456,8 @@ class PreviewOverlay:
         painter.setRenderHint(painter.RenderHint.Antialiasing, True)
         for clip in self.video_clips():
             self._paint_clip(painter, clip)
+        if self._shape_draft is not None:
+            self._paint_shape_draft(painter)
         clip = self.primary()
         if clip is not None:
             if self.show_motion_path and CH.key_times(clip, "transform.position_x"):
@@ -501,6 +507,76 @@ class PreviewOverlay:
         painter.drawLine(QPointF(anchor.x() - 9, anchor.y()), QPointF(anchor.x() + 9, anchor.y()))
         painter.drawLine(QPointF(anchor.x(), anchor.y() - 9), QPointF(anchor.x(), anchor.y() + 9))
         painter.restore()
+
+    def _paint_shape_draft(self, painter):
+        """The outline of the shape being drawn, constrained exactly like the result."""
+        draft = self._shape_draft
+        box = self._shape_box(draft)
+        if box is None:
+            return
+        x, y, width, height, rotation = box
+        corners = [self.to_widget(x, y), self.to_widget(x + width, y),
+                   self.to_widget(x + width, y + height), self.to_widget(x, y + height)]
+        colour = QColor(tokens.COLORS["accent"])
+        painter.save()
+        painter.setPen(QPen(colour, 1.4, Qt.PenStyle.DashLine))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        if draft.get("kind") == "line":
+            start, end = self._shape_line_points(x, y, width, height, rotation)
+            painter.drawLine(self.to_widget(*start), self.to_widget(*end))
+        elif draft.get("kind") == "ellipse":
+            painter.drawPolygon(QPolygonF([self.to_widget(*corner) for corner in
+                                           self._ellipse_points(x, y, width, height)]))
+        else:
+            painter.drawPolygon(QPolygonF(corners))
+        painter.restore()
+
+    @staticmethod
+    def _ellipse_points(x, y, width, height, steps=48):
+        cx, cy = x + width / 2.0, y + height / 2.0
+        return [(cx + width / 2.0 * math.cos(2 * math.pi * i / steps),
+                 cy + height / 2.0 * math.sin(2 * math.pi * i / steps)) for i in range(steps)]
+
+    @staticmethod
+    def _shape_line_points(x, y, width, height, rotation):
+        cx, cy = x + width / 2.0, y + height / 2.0
+        angle = math.radians(rotation)
+        dx, dy = math.cos(angle) * width / 2.0, math.sin(angle) * width / 2.0
+        return (cx - dx, cy - dy), (cx + dx, cy + dy)
+
+    def _shape_box(self, draft):
+        """(x, y, w, h, rotation) in project pixels for a shape draft, or None.
+
+        Shift constrains to a circle/square, Alt (or the press point) draws from the
+        centre. A line keeps the exact drag: its box is as long as the drag and the
+        rotation carries its direction, so squeezing a handle later still works.
+        """
+        start = draft["start"]
+        current = draft["current"]
+        dx = current[0] - start[0]
+        dy = current[1] - start[1]
+        kind = draft.get("kind") or "rectangle"
+        mods = draft.get("modifiers", Qt.KeyboardModifier.NoModifier)
+        if kind == "line":
+            length = math.hypot(dx, dy)
+            if length < 3.0:
+                return None
+            rotation = math.degrees(math.atan2(dy, dx))
+            thickness = 3.0
+            return (start[0] + dx / 2.0 - length / 2.0,
+                    start[1] + dy / 2.0 - thickness / 2.0, length, thickness, rotation)
+        if mods & Qt.KeyboardModifier.ShiftModifier:
+            side = max(abs(dx), abs(dy))
+            dx = math.copysign(side, dx or 1.0)
+            dy = math.copysign(side, dy or 1.0)
+        if bool(draft.get("from_centre")) or mods & Qt.KeyboardModifier.AltModifier:
+            x0, y0, x1, y1 = start[0] - dx, start[1] - dy, start[0] + dx, start[1] + dy
+        else:
+            x0, y0, x1, y1 = start[0], start[1], start[0] + dx, start[1] + dy
+        width, height = abs(x1 - x0), abs(y1 - y0)
+        if width < 2.0 and height < 2.0:
+            return None                       # a click is not a drag
+        return min(x0, x1), min(y0, y1), width, height, 0.0
 
     def _paint_guides(self, painter):
         if not self._guides:
@@ -639,6 +715,15 @@ class PreviewOverlay:
         pos = event.position()
         self._last_pos = pos
         self.widget.setFocus()
+        if self.mode == "shape":
+            project = self.to_project(pos)
+            if project is None:
+                return False
+            self._shape_draft = {"kind": self.shape_kind or "rectangle", "start": project,
+                                 "current": project, "from_centre": False,
+                                 "modifiers": event.modifiers()}
+            self.widget.update()
+            return True
         clip = self.primary()
         # Warp handles win over the transform handles: corner-pin corners and mesh
         # nodes sit exactly on the box corners and centre, where the box handles would
@@ -820,8 +905,21 @@ class PreviewOverlay:
             return False
         pos = event.position()
         self._last_pos = pos
+        if self._shape_draft is not None:
+            project = self.to_project(pos)
+            if project is not None:
+                self._shape_draft["current"] = project
+                self._shape_draft["modifiers"] = event.modifiers()
+                self._shape_draft["from_centre"] = bool(
+                    event.modifiers() & Qt.KeyboardModifier.AltModifier)
+            self.widget.update()
+            return True
         drag = self._drag
         if drag is None:
+            if self.mode == "shape":
+                self._hover = None
+                self.widget.setCursor(Qt.CursorShape.CrossCursor)
+                return False
             clip = self.primary()
             self._hover = self._handle_at_priority(clip, pos) if clip is not None else None
             self.widget.setCursor(self._cursor_for(self._hover))
@@ -1195,6 +1293,20 @@ class PreviewOverlay:
 
     @crashlog.guard("preview overlay", fallback=False)
     def mouse_release(self, event):
+        if self._shape_draft is not None:
+            draft = self._shape_draft
+            self._shape_draft = None
+            box = self._shape_box(draft)
+            self.widget.update()
+            if box is not None:
+                self.session.add_shape_clip(draft.get("kind") or "rectangle", box[:4],
+                                            rotation=box[4])
+                # Hand the new clip straight to the transform tool: it is selected and
+                # its handles are live, exactly like a picture dropped into the frame.
+                self.mode = "transform"
+                self.widget.setCursor(Qt.CursorShape.ArrowCursor)
+                self._notify()
+            return True
         drag = self._drag
         if drag is None:
             return False
@@ -1208,6 +1320,16 @@ class PreviewOverlay:
                   "path_handle": "Adjust motion path"}
         self.session.commit_gesture(labels.get(drag.get("kind"), "Edit transform"))
         self._notify()
+        self.widget.update()
+        return True
+
+    def cancel_shape(self):
+        """Escape while drawing: drop the draft and leave the shape tool."""
+        if self._shape_draft is None and self.mode != "shape":
+            return False
+        self._shape_draft = None
+        self.mode = "select"
+        self.widget.setCursor(Qt.CursorShape.ArrowCursor)
         self.widget.update()
         return True
 

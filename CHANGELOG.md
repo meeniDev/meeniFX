@@ -2,6 +2,27 @@
 
 ## Unreleased (2026-11-05)
 
+### Vector shape clips
+
+- **Native shape layers.** Six shapes - Rectangle, Rounded Rectangle, Ellipse, Polygon, Star and
+  Line - are drawn in the preview (Shift = circle/square, Alt = from the centre, Esc = cancel) or
+  added centred from *Add > Shape*. A shape is an ordinary clip on a video track: same transform
+  and free-transform corner behaviour, handles, keyframes, effects, blend modes, fades, split,
+  copy/paste, undo and `.mfxpf` persistence; splitting, duplicating and pasting keep the settings.
+- **Drawn, never upscaled.** `processing/shapes.py` renders the geometry from parameters at the
+  render resolution, 2x supersampled and area-downsampled, in a bounded tile around the shape and
+  cached per parameter set, so a 35 % preview and the 100 % export are the same picture and a small
+  shape does not pay for the whole frame. Fill and stroke have their own colour and opacity, stroke
+  width supports centre/inside/outside alignment (real distance rings, not a clipped half stroke),
+  and each kind exposes its own geometry: corner radius, sides, star points and inner radius, line
+  caps and arrowheads.
+- **Animated like anything else.** Geometry numbers are `shape.*` channels with the usual
+  stopwatch, diamonds, timeline rows and Graph Editor curves; fill and stroke colour are held keys
+  (like text words) so they can be keyed without pretending to be a number.
+- `tests/test_shapes.py` and `tests/test_shape_ui.py` cover every kind, transparency, antialiasing,
+  stroke alignment, preview/export parity, keyframes, colour keys, split, paste, effects, undo,
+  save/reopen, the toolbar, the live drag, the modifiers and an inspector corner resize.
+
 ### Preview free transform
 
 - **Corner handles now behave like a free transform.** A corner drag scaled about the
