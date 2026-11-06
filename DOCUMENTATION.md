@@ -123,7 +123,13 @@ corner pin, colour, blur, glow, plus audio effects (filter, compressor, limiter,
 reverb, pan). Every effect declares which media types it can process, so a video-only
 effect cannot be added to audio and an old project that has one is switched off with an
 explanation instead of rendering wrongly. Each effect publishes its parameter table, which
-the properties panel builds itself from. Face, Hand and Blob Tracker share one overlay
+the properties panel builds itself from: a parameter may name a group (`ParamSpec.group`),
+and the card renders those as collapsible **Detection**, **Visualization**, **Labels**,
+**Connectors** and **Face Effects** sections instead of one long list. Detection and
+Visualization start open, the rest stay folded, the open/closed state is remembered per
+effect, and a group is only created when the effect declares members for it - so no card
+shows an empty heading and effects without groups are unchanged. Advanced technical values
+sit in the card's *Advanced* fold at the end. Face, Hand and Blob Tracker share one overlay
 language: box, corner brackets or ellipse, contour/hull, sampled points, labels, tracking
 numbers, opacity, glow and connectors (nearest, all within range, or in track order, with
 a range and link cap). Named looks cover common setups; choosing one copies its values

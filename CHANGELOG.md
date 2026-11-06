@@ -2,6 +2,21 @@
 
 ## Unreleased (2026-11-05)
 
+### Properties panel and effect browser
+
+- **Grouped property cards:** effect parameters can declare a group (`ParamSpec.group`),
+  and the inspector renders those as collapsible **Detection**, **Visualization**,
+  **Labels**, **Connectors** and **Face Effects** sections. Detection and Visualization
+  start open, the rest stay folded, and the state is remembered per effect and group
+  across rebuilds. A group is only created when the effect declares members, so no card
+  grows an empty heading (there is no Sprite Attachment setting in this build) and
+  effects without groups render exactly as before. The *Advanced* fold now always sits at
+  the end of the card, after the groups.
+- **Tracker previews:** Face and Hand Tracker cards used to show only a word placeholder.
+  They now fall back to the bundled `figure_cafe.png` reference picture with the tracker's
+  own reticle icon on top - never a fake detection, since the still life has no face or
+  hand. Audio and time effects keep the readable name fallback.
+
 ### Keyframe editing
 
 - **Clean timeline, dedicated editor:** clips with animation now show one compact key-count

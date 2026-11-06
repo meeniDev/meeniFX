@@ -89,11 +89,22 @@ def test_browser_toggle_icons_are_real_shared_vectors(panel_and_clip):
                    for y in range(image.height()))
 
 
-def test_tracker_cards_are_labelled_instead_of_blank(panel_and_clip):
+def test_tracker_cards_fall_back_to_the_reference_picture_and_an_icon(panel_and_clip):
+    """A tracker cannot detect anything in a still life, so its card shows the bundled
+    reference picture with the tracker's own icon - never a blank tile and never a
+    detection that did not happen."""
     panel, _engine, _clip = panel_and_clip
+    browser = panel.browser
     card = cards(panel)["face_tracker"]
-    assert card.thumb.text().replace("\n", " ") == "FACE TRACKER"
+    assert card.thumb.text() == "", "a picture fallback replaces the word placeholder"
+    pixmap = card.thumb.pixmap()
+    assert pixmap is not None and not pixmap.isNull()
+    image = pixmap.toImage()
+    colours = {image.pixel(x, y) for x in range(0, image.width(), 7)
+               for y in range(0, image.height(), 7)}
+    assert len(colours) > 8, "the tile shows the real reference picture"
     assert "no face or hand" in card.toolTip()
+    assert not browser._thumb_entries(card.item), "no fake detection render is scheduled"
 
 
 def test_animation_cards_carry_a_real_preview(panel_and_clip):

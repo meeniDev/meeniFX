@@ -45,8 +45,11 @@ The application resolves bundled tile images, the demo clip, and default output 
 - Every tile is a **real preview rendered by the same pipeline the export uses**: a private
   effect instance runs on the reference picture through the same blend and compositor as a
   clip, at the card's device pixel ratio and the chosen preview quality. Effects that have
-  no meaningful still (audio effects, Posterize Time, Stutter, Echo, Face Tracker, Hand
-  Tracker) show an icon and a description instead. Rendering runs on background workers
+  no meaningful still fall back in that order: a real render, then the bundled
+  `figure_cafe.png` reference picture with the effect's own icon on top (Face and Hand
+  Tracker - a still life has no face or hand, so no detection is drawn and the tile never
+  pretends one was found), then the effect's name. Audio and time effects use the name.
+  Rendering runs on background workers
   behind a shared cache keyed by effect, parameters, picture and quality, so scrolling
   never blocks the UI; only the cards in view are rendered, and the cache is dropped when
   the preview settings change.
@@ -57,6 +60,13 @@ The application resolves bundled tile images, the demo clip, and default output 
   is global, is never written into a project, and falls back to `figure_cafe.png` when the
   custom image cannot be read. Transparency is kept, the aspect ratio is letterboxed rather
   than stretched, and the picture is scaled with smooth filtering.
+- **Grouped property cards**: a tracker's settings fold into **Detection**, **Visualization**,
+  **Labels**, **Connectors** and **Face Effects**. Detection and Visualization are open,
+  the rest are one click away, and the open/closed state survives a rebuild. The sections
+  come from the effect's own parameter table (`ParamSpec.group`), so a card only shows a
+  heading it actually implements - no Sprite Attachment placeholder, and an effect with
+  no groups (Mosaic, Glow, audio) still renders flat. Technical values stay in the card's
+  *Advanced* fold, which now sits at the end of the card below the groups.
 - **Double-click applies**; double-clicking a card whose effect is already on the selected
   clip removes it again. Applied effects carry a check mark, and when a clip holds several
   instances of one effect the browser asks which one to remove. Every apply and remove is a

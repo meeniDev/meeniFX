@@ -39,6 +39,10 @@ MAX_DISK_FILES = 400
 # time effects change *which* source frame is shown (the engine decides that, not the
 # effect). Their cards use an icon and a one-line description instead of a misleading
 # picture - see the browser's card builder.
+# Trackers whose subject is missing from the reference picture get the reference image
+# with their own icon on top: an honest fallback that never draws a fake detection.
+TRACKERS = {"face_tracker", "hand_tracker"}
+
 ICON_ONLY = {
     "audio_gain", "audio_fade", "audio_eq", "audio_lowpass", "audio_highpass",
     "audio_compressor", "audio_limiter", "audio_reverb", "audio_delay", "audio_pan",

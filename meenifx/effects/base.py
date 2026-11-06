@@ -41,6 +41,10 @@ class ParamSpec:
     area: bool = False          # value is a pixel area (scales with quality^2)
     help: str = ""
     advanced: bool = False      # raw technical value: shown under the "Advanced" fold
+    # Optional collapsible section inside the effect card ("Detection", "Labels"...).
+    # Empty means the parameter sits directly in the card; a group is only rendered when
+    # the effect really declares members for it, so no card grows empty headings.
+    group: str = ""
 
     def choice_items(self):
         """[(key, label)] for a choice parameter, labels falling back to a tidied key."""
@@ -234,13 +238,18 @@ class LayerEffect(EffectBase):
 class TrackerColorMixin:
     COLOR_PARAMS = (
         ParamSpec("color_mode", "Color mode", "choice", choices=("solid", "random", "palette"),
-                  default="solid", help="How each tracked object is coloured"),
-        ParamSpec("color_r", "Red", "int", 0, 255, 52, help="Red channel of the solid colour"),
-        ParamSpec("color_g", "Green", "int", 0, 255, 188, help="Green channel of the solid colour"),
-        ParamSpec("color_b", "Blue", "int", 0, 255, 255, help="Blue channel of the solid colour"),
+                  default="solid", help="How each tracked object is coloured",
+                  group="Visualization"),
+        ParamSpec("color_r", "Red", "int", 0, 255, 52, help="Red channel of the solid colour",
+                  group="Visualization"),
+        ParamSpec("color_g", "Green", "int", 0, 255, 188, help="Green channel of the solid colour",
+                  group="Visualization"),
+        ParamSpec("color_b", "Blue", "int", 0, 255, 255, help="Blue channel of the solid colour",
+                  group="Visualization"),
         ParamSpec("palette_text", "Palette", "text",
                   default="#ffae00,#28c9ff,#65f4a3,#f26d6d",
-                  help="Comma-separated colours used when the mode is palette"),
+                  help="Comma-separated colours used when the mode is palette",
+                  group="Visualization"),
     )
 
     # One set of visibility controls shared by every tracker.  The visual language must
@@ -254,41 +263,50 @@ class TrackerColorMixin:
                   default="custom",
                   help="A coherent starting style; Custom uses the controls below"),
         ParamSpec("show_box", "Box", "bool", default=True,
-                  help="Draw a box, corner brackets or an ellipse around each detection"),
+                  help="Draw a box, corner brackets or an ellipse around each detection",
+                  group="Visualization"),
         ParamSpec("box_style", "Box style", "choice",
                   choices=("rectangle", "corners", "ellipse"),
                   choice_labels=("Rectangle", "Corner brackets", "Ellipse"),
-                  default="rectangle"),
+                  default="rectangle", group="Visualization"),
         ParamSpec("show_contour", "Outline", "bool", default=False,
-                  help="Draw the detected contour or hull when the detector provides one"),
+                  help="Draw the detected contour or hull when the detector provides one",
+                  group="Visualization"),
         ParamSpec("show_circle", "Circle", "bool", default=False,
-                  help="Draw a circle enclosing each detection"),
+                  help="Draw a circle enclosing each detection", group="Visualization"),
         ParamSpec("show_points", "Points", "bool", default=False,
-                  help="Draw sampled contour points (box corners when there is no contour)"),
+                  help="Draw sampled contour points (box corners when there is no contour)",
+                  group="Visualization"),
         ParamSpec("show_labels", "Labels", "bool", default=False,
-                  help="Name each detection; tracking numbers are a separate control"),
+                  help="Name each detection; tracking numbers are a separate control",
+                  group="Labels"),
         ParamSpec("show_numbers", "Numbers", "bool", default=False,
-                  help="Draw a separate tracking number"),
+                  help="Draw a separate tracking number", group="Labels"),
         ParamSpec("label_text", "Label text", "text", default="",
-                  help="Text drawn by Labels; leave empty to draw no label. Numbers is separate"),
+                  help="Text drawn by Labels; leave empty to draw no label. Numbers is separate",
+                  group="Labels"),
         ParamSpec("connector_mode", "Connectors", "choice",
                   choices=("none", "nearest", "distance", "sequential"),
                   choice_labels=("None", "Nearest neighbour", "All within range",
                                  "Join in track order"),
-                  default="none", help="Lines between detections in the same frame"),
+                  default="none", help="Lines between detections in the same frame",
+                  group="Connectors"),
         ParamSpec("connector_distance", "Connector range", "int", 5, 100, 25, unit=" %",
-                  help="Longest connector, as a percentage of the longer frame edge"),
+                  help="Longest connector, as a percentage of the longer frame edge",
+                  group="Connectors"),
         ParamSpec("max_connections", "Max links", "int", 1, 6, 2,
-                  help="How many neighbours each detection may link to"),
+                  help="How many neighbours each detection may link to",
+                  group="Connectors"),
         ParamSpec("glow", "Glow", "bool", default=False,
-                  help="Add a soft glow under the tracking lines"),
+                  help="Add a soft glow under the tracking lines", group="Visualization"),
         ParamSpec("opacity", "Opacity", "int", 20, 100, 100, unit=" %",
-                  help="Opacity of the tracking overlay"),
+                  help="Opacity of the tracking overlay", group="Visualization"),
         ParamSpec("tracking_quality", "Detection quality", "choice",
                   choices=("fast", "balanced", "precise"),
                   choice_labels=("Fast", "Balanced", "Precise"),
                   default="balanced",
-                  help="Detect on a smaller working image for speed; boxes are scaled back"),
+                  help="Detect on a smaller working image for speed; boxes are scaled back",
+                  group="Detection"),
     )
 
     TRACKING_LABEL = "Object"

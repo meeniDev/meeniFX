@@ -216,16 +216,21 @@ class FaceTrackerEffect(TrackerColorMixin, EffectBase):
 
     PARAMS = (
         ParamSpec("confidence", "Confidence", "int", 1, 99, 50, unit="%",
-                  help="How sure the detector must be before a face is accepted"),
+                  help="How sure the detector must be before a face is accepted",
+                  group="Detection"),
         ParamSpec("min_size", "Smallest face", "int", 12, 240, 30, unit=" px", pixels=True,
-                  help="Smallest face to accept, in project pixels"),
-        ParamSpec("thickness", "Line thickness", "int", 1, 8, 2, unit=" px", pixels=True),
+                  help="Smallest face to accept, in project pixels", group="Detection"),
+        ParamSpec("thickness", "Line thickness", "int", 1, 8, 2, unit=" px", pixels=True,
+                  group="Visualization"),
         ParamSpec("blur_faces", "Blur faces", "bool", default=False,
-                  help="Blur the detected face region before drawing its overlay"),
+                  help="Blur the detected face region before drawing its overlay",
+                  group="Face Effects"),
         ParamSpec("blur_amount", "Blur strength", "int", 5, 100, 35, unit=" %",
-                  help="Blur radius as a percentage of the smaller face edge"),
+                  help="Blur radius as a percentage of the smaller face edge",
+                  group="Face Effects"),
         ParamSpec("blur_feather", "Blur feather", "int", 0, 80, 10, unit=" px", pixels=True,
-                  help="Soften the blur edge so it does not leave a hard rectangle"),
+                  help="Soften the blur edge so it does not leave a hard rectangle",
+                  group="Face Effects"),
     ) + TrackerColorMixin.COLOR_PARAMS + FACE_VIS_PARAMS
 
     def __init__(self, app):
@@ -358,13 +363,16 @@ class HandTrackerEffect(TrackerColorMixin, EffectBase):
     TRACKING_LABEL = "Hand"
 
     PARAMS = (
-        ParamSpec("max_hands", "Max hands", "int", 1, 6, 2),
+        ParamSpec("max_hands", "Max hands", "int", 1, 6, 2, group="Detection"),
         ParamSpec("min_area", "Smallest hand", "int", 200, 40000, 2500, unit=" px²", area=True, advanced=True,
-                  help="Ignore skin-coloured regions smaller than this (area in project pixels)"),
+                  help="Ignore skin-coloured regions smaller than this (area in project pixels)",
+                  group="Detection"),
         ParamSpec("max_area", "Largest hand", "int", 5000, 400000, 180000, unit=" px²", area=True,
                   advanced=True,
-                  help="Ignore skin-coloured regions larger than this (area in project pixels)"),
-        ParamSpec("thickness", "Line thickness", "int", 1, 12, 2, unit=" px", pixels=True),
+                  help="Ignore skin-coloured regions larger than this (area in project pixels)",
+                  group="Detection"),
+        ParamSpec("thickness", "Line thickness", "int", 1, 12, 2, unit=" px", pixels=True,
+                  group="Visualization"),
     ) + TrackerColorMixin.COLOR_PARAMS + HAND_VIS_PARAMS
 
     def __init__(self, app):
@@ -421,15 +429,18 @@ class BlobTrackerEffect(TrackerColorMixin, EffectBase):
     TRACKING_LABEL = "Blob"
 
     PARAMS = (
-        ParamSpec("max_blobs", "Max blobs", "int", 1, 80, 12),
+        ParamSpec("max_blobs", "Max blobs", "int", 1, 80, 12, group="Detection"),
         ParamSpec("min_area", "Smallest blob", "int", 1, 20000, 80, unit=" px²", area=True, advanced=True,
-                  help="Ignore blobs with a smaller area than this (project pixels)"),
+                  help="Ignore blobs with a smaller area than this (project pixels)",
+                  group="Detection"),
         ParamSpec("max_area", "Largest blob", "int", 200, 80000, 18000, unit=" px²", area=True, advanced=True,
-                  help="Ignore blobs with a larger area than this (project pixels)"),
+                  help="Ignore blobs with a larger area than this (project pixels)",
+                  group="Detection"),
         ParamSpec("threshold", "Brightness cutoff", "int", 0, 255, 165, advanced=True,
-                  help="Brightness cut-off for a pixel to belong to a blob"),
-        ParamSpec("invert", "Invert mask", "bool", default=False),
-        ParamSpec("thickness", "Line thickness", "int", 1, 12, 2, unit=" px", pixels=True),
+                  help="Brightness cut-off for a pixel to belong to a blob", group="Detection"),
+        ParamSpec("invert", "Invert mask", "bool", default=False, group="Detection"),
+        ParamSpec("thickness", "Line thickness", "int", 1, 12, 2, unit=" px", pixels=True,
+                  group="Visualization"),
     ) + TrackerColorMixin.COLOR_PARAMS + BLOB_VIS_PARAMS
 
     def __init__(self, app):

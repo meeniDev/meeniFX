@@ -43,6 +43,10 @@ CATEGORY_ORDER = ("Video Effects", "Looks", "Glitch & Distortion", "Stylize", "C
                   "Distortion & Warp", "Warp", "Text Effects", "Audio Effects",
                   "Blur and Sharpen", "Color", "Distort", "Tracking")
 LABEL_W = 88
+# Property groups an effect card opens by default. The everyday controls live here;
+# everything else (Labels, Connectors, Face Effects...) starts folded so a tracker card
+# stays short without hiding a group the user can reach in one click.
+OPEN_PROPERTY_GROUPS = ("Detection", "Visualization")
 ROTATE_STEP = 15.0      # degrees per step when rotation snapping is on
 COLOR_NAMES = ("color_r", "color_g", "color_b")
 # Every effect card carries this control; it is not part of an effect's own PARAMS table
@@ -180,6 +184,9 @@ class EffectsPanel(QWidget):
         # Style groups and their members start collapsed; these remember what was opened.
         self._opened_groups = set()
         self._opened_members = set()
+        # {(effect key, group title): open}; kept across card rebuilds so a playhead tick
+        # never folds a section the user just opened.
+        self._property_groups = {}
         self._clipboard = None
         self.refresh_effect_list()
 
@@ -1747,84 +1754,108 @@ class EffectsPanel(QWidget):
 
     # ---------------------------------------------------------- effect controls
     def _effect_fields(self, form, clip, effect, entry):
-        advanced_box = None
-        advanced_form = None
-        color_done = False
+        """Effect controls in collapsible groups, with Advanced last.
+
+        Sections come from ``ParamSpec.group``: a card only shows groups the effect really
+        declares, so an audio effect grows no headings and no card has an empty one.
+        Trackers therefore open on Detection and Visualization while Labels, Connectors
+        and Face Effects stay folded until they are needed.
+        """
         self._mix_row(form, clip, effect, entry)
+        sections = {}
+        color_done = False
+
+        def target_for(spec):
+            if not spec.group:
+                return form
+            body = sections.get(spec.group)
+            if body is None:
+                body = self._property_group(form, effect.key, spec.group)
+                sections[spec.group] = body
+            return body
+
         for spec in effect.param_specs():
-            target = form
             if spec.advanced:
-                if advanced_box is None:
-                    advanced_box, advanced_form = self._advanced_fold(form)
-                target = advanced_form
+                continue
+            target = target_for(spec)
             if spec.name in COLOR_NAMES:
                 if not color_done:
                     color_done = True
                     self._color_row(target, clip, effect, entry)
                 continue
-            stored = entry.get("params", {}).get(spec.name, spec.default)
-            animated = isinstance(stored, AnimatedValue)
-            # Coerce through the parameter's own rules: a value the spec cannot express
-            # (text in a number, NaN from an older project) becomes the default instead
-            # of reaching a spin box, which used to take the process down.
-            current = spec.clamp(parameter_value_at(stored, self._clip_frame(clip)))
-            tip = spec.help or spec.label
-            if spec.kind in ("int", "float"):
-                field = ScrubField(spec.label, current, spec.minimum, spec.maximum,
-                                    default=spec.default, step=spec.step, unit=spec.unit,
-                                    decimals=0 if spec.kind == "int" else 2,
-                                    label_width=LABEL_W, tooltip=tip)
-                field.interaction_started.connect(self._begin_edit)
-                field.edited.connect(lambda value, c=clip, e=entry, n=spec.name:
-                                     self._set_param(c, e, n, value, live=True))
-                field.committed.connect(lambda value, c=clip, e=entry, n=spec.name:
-                                        self._commit_param(c, e, n, value))
-                stopwatch = self._stopwatch(clip, entry, spec.name, animated)
-                field.add_trailing(stopwatch)
-                cluster = self._key_cluster(clip, entry, spec.name)
-                cluster.setVisible(animated)
-                field.add_trailing(cluster)
-                self._rows.append({"kind": "param", "clip_id": clip.id, "entry": entry,
-                                   "name": spec.name, "field": field, "stopwatch": stopwatch,
-                                   "cluster": cluster, "effect": effect, "spec": spec})
-                target.addWidget(field)
-            elif spec.kind == "bool":
-                box = QCheckBox(spec.label)
-                box.setChecked(bool(current))
-                box.setToolTip(tip)
-                box.toggled.connect(lambda value, c=clip, e=entry, n=spec.name, s=spec:
-                                    self._commit_choice(c, e, n, bool(value), s))
-                self._rows.append({"kind": "toggle", "clip_id": clip.id, "entry": entry,
-                                   "name": spec.name, "box": box, "effect": effect,
-                                   "spec": spec})
-                target.addWidget(box)
-            elif spec.kind == "choice":
-                target.addWidget(self._choice_row(clip, entry, spec, current, tip))
-            elif spec.name == "palette_text":
-                self._palette_row(target, clip, entry, spec, str(current or ""))
-            else:
-                edit = QLineEdit("" if current is None else str(current))
-                clear = edit.addAction(icon("close", tokens.COLORS["muted"]),
-                                       QLineEdit.ActionPosition.TrailingPosition)
-                clear.setObjectName("clearText")
-                clear.setToolTip(f"Clear {spec.label.lower()}")
-                # The global toolbutton rule gives every button a 26 px minimum.  The
-                # line edit's action button then hangs below its 28 px field, which is
-                # the off-centre X the user sees.  Keep this one inside the field.
-                clear_button = next((child for child in edit.findChildren(QToolButton)
-                                     if child.defaultAction() is clear), None)
-                if clear_button is not None:
-                    clear_button.setFixedSize(18, 18)
-                    clear_button.setStyleSheet(
-                        "QToolButton { min-width: 18px; max-width: 18px; min-height: 18px; "
-                        "max-height: 18px; padding: 0; margin: 0; border: 0; background: transparent; }")
-                clear.triggered.connect(lambda _checked=False, c=clip, e=entry, n=spec.name,
-                                        w=edit, s=spec: self._clear_text(c, e, n, w, s))
-                edit.editingFinished.connect(lambda c=clip, e=entry, n=spec.name, w=edit, s=spec:
-                                             self._commit_choice(c, e, n, w.text(), s))
-                self._rows.append({"kind": "text_param", "clip_id": clip.id, "entry": entry,
-                                   "name": spec.name, "field": edit, "spec": spec})
-                target.addWidget(self._labelled(spec.label, edit, tip))
+            self._param_row(target, clip, effect, entry, spec)
+        # Advanced is one folded section at the very end of the card, after every group.
+        advanced = [spec for spec in effect.param_specs() if spec.advanced]
+        if advanced:
+            _box, advanced_form = self._advanced_fold(form)
+            for spec in advanced:
+                self._param_row(advanced_form, clip, effect, entry, spec)
+
+    def _param_row(self, target, clip, effect, entry, spec):
+        """One parameter control (numeric, switch, choice or text) in `target`."""
+        stored = entry.get("params", {}).get(spec.name, spec.default)
+        animated = isinstance(stored, AnimatedValue)
+        # Coerce through the parameter's own rules: a value the spec cannot express
+        # (text in a number, NaN from an older project) becomes the default instead
+        # of reaching a spin box, which used to take the process down.
+        current = spec.clamp(parameter_value_at(stored, self._clip_frame(clip)))
+        tip = spec.help or spec.label
+        if spec.kind in ("int", "float"):
+            field = ScrubField(spec.label, current, spec.minimum, spec.maximum,
+                                default=spec.default, step=spec.step, unit=spec.unit,
+                                decimals=0 if spec.kind == "int" else 2,
+                                label_width=LABEL_W, tooltip=tip)
+            field.interaction_started.connect(self._begin_edit)
+            field.edited.connect(lambda value, c=clip, e=entry, n=spec.name:
+                                 self._set_param(c, e, n, value, live=True))
+            field.committed.connect(lambda value, c=clip, e=entry, n=spec.name:
+                                    self._commit_param(c, e, n, value))
+            stopwatch = self._stopwatch(clip, entry, spec.name, animated)
+            field.add_trailing(stopwatch)
+            cluster = self._key_cluster(clip, entry, spec.name)
+            cluster.setVisible(animated)
+            field.add_trailing(cluster)
+            self._rows.append({"kind": "param", "clip_id": clip.id, "entry": entry,
+                               "name": spec.name, "field": field, "stopwatch": stopwatch,
+                               "cluster": cluster, "effect": effect, "spec": spec})
+            target.addWidget(field)
+        elif spec.kind == "bool":
+            box = QCheckBox(spec.label)
+            box.setChecked(bool(current))
+            box.setToolTip(tip)
+            box.toggled.connect(lambda value, c=clip, e=entry, n=spec.name, s=spec:
+                                self._commit_choice(c, e, n, bool(value), s))
+            self._rows.append({"kind": "toggle", "clip_id": clip.id, "entry": entry,
+                               "name": spec.name, "box": box, "effect": effect,
+                               "spec": spec})
+            target.addWidget(box)
+        elif spec.kind == "choice":
+            target.addWidget(self._choice_row(clip, entry, spec, current, tip))
+        elif spec.name == "palette_text":
+            self._palette_row(target, clip, entry, spec, str(current or ""))
+        else:
+            edit = QLineEdit("" if current is None else str(current))
+            clear = edit.addAction(icon("close", tokens.COLORS["muted"]),
+                                   QLineEdit.ActionPosition.TrailingPosition)
+            clear.setObjectName("clearText")
+            clear.setToolTip(f"Clear {spec.label.lower()}")
+            # The global toolbutton rule gives every button a 26 px minimum.  The
+            # line edit's action button then hangs below its 28 px field, which is
+            # the off-centre X the user sees.  Keep this one inside the field.
+            clear_button = next((child for child in edit.findChildren(QToolButton)
+                                 if child.defaultAction() is clear), None)
+            if clear_button is not None:
+                clear_button.setFixedSize(18, 18)
+                clear_button.setStyleSheet(
+                    "QToolButton { min-width: 18px; max-width: 18px; min-height: 18px; "
+                    "max-height: 18px; padding: 0; margin: 0; border: 0; background: transparent; }")
+            clear.triggered.connect(lambda _checked=False, c=clip, e=entry, n=spec.name,
+                                    w=edit, s=spec: self._clear_text(c, e, n, w, s))
+            edit.editingFinished.connect(lambda c=clip, e=entry, n=spec.name, w=edit, s=spec:
+                                         self._commit_choice(c, e, n, w.text(), s))
+            self._rows.append({"kind": "text_param", "clip_id": clip.id, "entry": entry,
+                               "name": spec.name, "field": edit, "spec": spec})
+            target.addWidget(self._labelled(spec.label, edit, tip))
 
     def _mix_row(self, form, clip, effect, entry):
         """The Mix slider every effect card gets (animatable like any other parameter)."""
@@ -1931,6 +1962,46 @@ class EffectsPanel(QWidget):
         note = menu.addAction("Applies to the whole clip \u00b7 no keyframes")
         note.setEnabled(False)
         menu.exec(button.mapToGlobal(QPoint(0, button.height())))
+
+    def _property_group(self, form, effect_key, title):
+        """A collapsible section inside an effect card (Detection, Labels, Connectors...).
+
+        The section is only created when the effect declares members for it, so no card
+        shows an empty heading. Whether it is open is remembered per effect and group, and
+        starts open only for :data:`OPEN_PROPERTY_GROUPS`.
+        """
+        state_key = (effect_key, title)
+        expanded = self._property_groups.get(state_key, title in OPEN_PROPERTY_GROUPS)
+        holder = QWidget()
+        column = QVBoxLayout(holder)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(tokens.SP1)
+        toggle = QToolButton()
+        toggle.setText(title)
+        toggle.setIcon(icon("chevron_down" if expanded else "chevron_right"))
+        toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        toggle.setCheckable(True)
+        toggle.setChecked(expanded)
+        toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        toggle.setToolTip(f"{title}: click to fold or unfold this group")
+        toggle.setStyleSheet("QToolButton { border: 0; background: transparent; "
+                             "font-weight: 600; padding: 2px 0; }")
+        body, inner = self._form()
+        body.setVisible(expanded)
+
+        def flip(on, b=body, t=toggle, key=state_key):
+            b.setVisible(bool(on))
+            t.setIcon(icon("chevron_down" if on else "chevron_right"))
+            self._property_groups[key] = bool(on)
+        toggle.toggled.connect(flip)
+        column.addWidget(toggle, 0, Qt.AlignmentFlag.AlignLeft)
+        column.addWidget(body)
+        form.addWidget(holder)
+        # Exposed for tests and for the panel's own state queries.
+        holder.group_toggle = toggle
+        holder.group_body = body
+        holder.group_title = title
+        return inner
 
     def _advanced_fold(self, form):
         toggle = QToolButton()

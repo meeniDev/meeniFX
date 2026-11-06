@@ -256,6 +256,12 @@ def _draw(name, p, color):
     elif name == "close":
         p.drawLine(QPointF(4, 4), QPointF(12, 12))
         p.drawLine(QPointF(12, 4), QPointF(4, 12))
+    elif name == "tracking":
+        # Detection reticle: four corner brackets around a point.
+        for sx, sy in ((1, 1), (-1, 1), (1, -1), (-1, -1)):
+            cx, cy = (2.5 if sx > 0 else 13.5), (2.5 if sy > 0 else 13.5)
+            p.drawPolyline(_pts(cx, cy + sy * 3.2, cx, cy, cx + sx * 3.2, cy))
+        p.drawEllipse(QPointF(8, 8), 2.3, 2.3)
     elif name == "clean":
         # Two sparkles: the usual "tidy this up" glyph, still readable at 16 px.
         p.setBrush(fill); p.setPen(Qt.PenStyle.NoPen)

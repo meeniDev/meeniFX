@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel
 from .. import thumbnails as THUMBS
 from .. import tokens
 from ..constants import EFFECT_MIME
-from ..icons import icon
+from ..icons import icon, paint as paint_icon
 from ..model import animation_families as FAMILIES
 from ..model import looks as LOOKS
 
@@ -114,18 +114,19 @@ class BrowserCard(QFrame):
             self.thumb.setFixedSize(*LIST_THUMB)
         self._placeholder()
         if item.get("kind") == "effect" and item["id"] in THUMBS.ICON_ONLY:
-            # Some effects have no meaningful still preview (audio, time effects, and
-            # trackers whose subject is not in the reference picture). The card used to
-            # leave an empty tile; a readable, effect-specific label is the fallback the
-            # browser promises. It never pretends a detection happened.
-            words = str(item.get("name") or item["id"]).split()
-            self.thumb.setText("\n".join(words[:2]).upper())
-            self.thumb.setWordWrap(True)
-            self.thumb.setStyleSheet(
-                f"color:{tokens.COLORS['muted']};font-size:10px;font-weight:600;")
-            if item["id"] in ("face_tracker", "hand_tracker"):
-                self.setToolTip(item["name"] + " (live tracking; the reference still has "
-                                "no face or hand to detect)")
+            # Some effects have no meaningful still preview (audio and time effects).
+            # The card used to leave an empty tile; a readable, effect-specific label is
+            # the last fallback the browser promises.
+            if item["id"] in THUMBS.TRACKERS:
+                # A tracker on a still life would look like the untouched picture, so the
+                # card shows the bundled reference image with the tracker's own icon on
+                # top. It never pretends a detection happened.
+                self._tracker_preview()
+                self.setToolTip(
+                    item["name"] + " (live tracking: the reference picture has no face or "
+                    "hand to detect, so the card shows the effect icon instead)")
+            else:
+                self._words_fallback()
 
         self.name = QLabel(item["name"], self)
         self.name.setStyleSheet("font-weight: 600;")
@@ -171,6 +172,41 @@ class BrowserCard(QFrame):
         painter.setBrush(QColor(tokens.COLORS["panel_soft"]))
         painter.drawRoundedRect(QRectF(0.5, 0.5, size.width() - 1, size.height() - 1),
                                 tokens.RADIUS, tokens.RADIUS)
+        painter.end()
+        self.thumb.setPixmap(pixmap)
+
+    def _words_fallback(self):
+        """Spell the effect's name on the tile when no picture can be shown."""
+        words = str(self.item.get("name") or self.item["id"]).split()
+        self.thumb.setText("\n".join(words[:2]).upper())
+        self.thumb.setWordWrap(True)
+        self.thumb.setStyleSheet(
+            f"color:{tokens.COLORS['muted']};font-size:10px;font-weight:600;")
+
+    def _tracker_preview(self):
+        """Fallback for trackers: the reference picture plus a detection-reticle plate.
+
+        Nothing is drawn over the face of the reference - there is nothing detected - so
+        the icon plate is the only addition and the card cannot be mistaken for a result.
+        """
+        size = self.thumb.size()
+        try:
+            image = THUMBS.reference_preview(max(16, size.width()), max(16, size.height()))
+        except Exception:          # a broken custom preview must not empty the tile
+            image = None
+        if image is None or image.isNull():
+            self._words_fallback()
+            return
+        pixmap = QPixmap.fromImage(image)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        plate = QRectF((pixmap.width() - 32) / 2.0, (pixmap.height() - 24) / 2.0, 32, 24)
+        painter.setPen(QPen(QColor(tokens.COLORS["border"]), 1))
+        painter.setBrush(QColor(11, 13, 16, 200))
+        painter.drawRoundedRect(plate, tokens.RADIUS + 1, tokens.RADIUS + 1)
+        paint_icon(painter, "tracking",
+                   QRectF(plate.center().x() - 8, plate.center().y() - 8, 16, 16),
+                   tokens.COLORS["accent"])
         painter.end()
         self.thumb.setPixmap(pixmap)
 
