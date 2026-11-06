@@ -380,6 +380,33 @@ def test_one_drag_is_one_undo_step_and_auto_keyframe_writes_keys(editor):
     assert restored.transform["position_x"] == 0.0
 
 
+def test_preview_and_export_agree_after_a_corner_drag(editor):
+    window = editor
+    clip = add_still(window)
+    before = window.engine.render_frame(0, 1.0)[1].copy()
+    start = grab(window, clip, "se")
+    slide(window, start, -80, -70)
+    full = window.engine.render_frame(0, 1.0)[1]
+    preview = window.engine.render_frame(0, 0.5)[1]
+    assert preview.shape[:2] == (full.shape[0] // 2, full.shape[1] // 2)
+    reduced = cv2.resize(full, (preview.shape[1], preview.shape[0]),
+                         interpolation=cv2.INTER_AREA)
+    difference = np.abs(reduced.astype(np.int16) - preview.astype(np.int16)).mean()
+    assert difference < 6.0, "the preview and the export show different pictures"
+    # The exported frame itself must carry the dragged geometry: the picture now ends
+    # before the pinned-to-opposite-corner box' far edge, leaving the background there.
+    corners = corners_of(window, clip)
+    background = np.asarray(window.engine.background_bgr, dtype=np.int16)
+    height, width = full.shape[:2]
+    right = min(width - 1, int(max(point[0] for point in corners)) + 8)
+    bottom = min(height - 1, int(max(point[1] for point in corners)) + 8)
+    outside = full[bottom, right].astype(np.int16)
+    assert np.abs(outside - background).max() <= 3, "the export kept the old, larger bounds"
+    moved = np.abs(full.astype(np.int16) - before.astype(np.int16)).mean()
+    assert moved > 0.2, "the exported frame ignored the drag"
+    assert float(full[:, :4].mean()) >= 0.0     # the pinned corner keeps its content
+
+
 def test_dragging_inside_moves_without_resizing(editor):
     window = editor
     clip = add_still(window)
