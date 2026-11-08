@@ -25,6 +25,8 @@ import sys
 import threading
 import traceback
 
+from .version import diagnostics
+
 LOG_NAME = "crash.log"
 MAX_BYTES = 512 * 1024
 # A broken paint can fail on every frame; without a cap the user would get a dialog storm.
@@ -83,7 +85,9 @@ def record(context, exc_info=None):
     try:
         _rotate()
         with open(path(), "a", encoding="utf-8") as handle:
-            handle.write(f"\n== {context} ==\n{text}")
+            # The version and platform make a pasted log actionable: which alpha, on which
+            # Windows and Python, is the first question every report raises.
+            handle.write(f"\n== {context} | {diagnostics()} ==\n{text}")
     except OSError:
         return path()
     return path()

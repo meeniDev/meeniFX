@@ -12,8 +12,9 @@ else:
     PROJECT_ROOT = ASSETS_ROOT
 
 APP_TITLE = "meeniFX Studios"
-# Shown in the About box; keep in step with packaging/version_info.txt.
-APP_VERSION = "1.3.0"
+# One authoritative version, shared by the About box, Preferences, the update service,
+# the crash log and the generated packaging resources.
+from .version import CHANNEL as APP_CHANNEL, VERSION as APP_VERSION  # noqa: E402
 
 # Brand artwork lives in assets/ and is resolved through ASSETS_ROOT, so the same paths
 # work when the app runs from source and from a frozen PyInstaller bundle.

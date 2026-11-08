@@ -7,6 +7,8 @@ assets = [(f'assets/mosaic/{name}', 'assets/mosaic') for name in ('black.png', '
 assets += [('flight-reacts-flight.gif', '.')]
 # Brand artwork: the window icon, the taskbar sizes and the About wordmark.
 assets += [('assets', 'assets')]
+# Bundled user-facing release notes power the offline What's New dialog.
+assets += [('docs/releases', 'docs/releases')]
 datas, binaries, hiddenimports = list(assets), [], []
 # Pillow draws text clips (fonts, stroke, shadow), imageio/cv2 handle media and Qt is the UI.
 for package in ('PyQt6', 'cv2', 'imageio', 'imageio_ffmpeg', 'PIL', 'yt_dlp'):
