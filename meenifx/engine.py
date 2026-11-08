@@ -64,6 +64,12 @@ class EditorEngine:
     def __init__(self, fps=30):
         self.timeline = Timeline(fps=fps)
         self.root_timeline = self.timeline
+        # Rendering a nested composition swaps the engine's active timeline. Preview
+        # workers and the exporter can run at the same time, so the swap and its
+        # restore must be serialised or one chain restores another chain's context
+        # (which left the window pointed at a composition after a preview).
+        from threading import RLock
+        self.render_lock = RLock()
         self.compositions = CompositionLibrary()
         self.timeline.compositions = self.compositions
         self.media = MediaCache()
@@ -73,6 +79,9 @@ class EditorEngine:
         self.hardware_encode = "auto"
         self.last_export_encoder = "mp4v"
         self.session = TimelineSession(self.timeline, self.media)
+        # The library belongs to the project, not to whichever timeline is being edited.
+        self.session.compositions = self.compositions
+        self.session.root_timeline = self.root_timeline
         self.tile_images = load_default_tiles()
         self.palette_cache = {}
         self.effects = [kind(self) for kind in self.EFFECT_TYPES]
@@ -508,10 +517,16 @@ class EditorEngine:
         effect, preset, text layout and transform then runs through the exact same code
         as the parent timeline, with no second compositor to drift out of sync.
         """
+        lock = getattr(self, "render_lock", None)
+        if lock is None:
+            from threading import RLock
+            lock = self.render_lock = RLock()
+        lock.acquire()
         stack = getattr(self, "_composition_render_stack", None)
         if stack is None:
             stack = self._composition_render_stack = set()
         if comp.id in stack:
+            lock.release()
             return None
         stack.add(comp.id)
         old = (self.timeline, self.source_width, self.source_height, self.source_fps,
@@ -531,6 +546,7 @@ class EditorEngine:
              self.background_bgr, project_size) = old
             self.session.project_size = project_size
             stack.discard(comp.id)
+            lock.release()
 
     def compose_frame(self, frame_no, scale=1.0):
         """Composite the visible video layers into one frame at `frame_no`.

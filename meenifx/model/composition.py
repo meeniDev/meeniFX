@@ -19,7 +19,7 @@ class Composition:
     """One reusable composition definition."""
 
     def __init__(self, comp_id=None, name="Composition", width=1920, height=1080,
-                 fps=30, background=(0, 0, 0), declared_duration=0):
+                 fps=30, background=(0, 0, 0), declared_duration=0, bin_folder=""):
         self.id = str(comp_id or f"comp-{uuid.uuid4().hex}")
         self.name = str(name or "Composition")
         self.width = max(1, int(width or 1920))
@@ -31,6 +31,9 @@ class Composition:
         # A pre-composition covers the range it was created from even when its contents
         # end before that range (a trailing gap is still part of the composition).
         self.declared_duration = max(0, int(declared_duration or 0))
+        # Compositions live in the same virtual project folders as media, so the Project
+        # panel can organise both without a second folder model.
+        self.bin_folder = str(bin_folder or "")
         self.timeline = Timeline(self.fps)
 
     @property
@@ -39,11 +42,12 @@ class Composition:
 
     def snapshot(self):
         return (self.id, self.name, self.width, self.height, self.fps, self.background,
-                self.declared_duration, self.timeline.snapshot())
+                self.declared_duration, self.timeline.snapshot(), self.bin_folder)
 
     def restore(self, snap):
         (self.id, self.name, self.width, self.height, self.fps, self.background,
-         self.declared_duration, timeline_snap) = snap
+         self.declared_duration, timeline_snap) = snap[:8]
+        self.bin_folder = str(snap[8]) if len(snap) > 8 else ""
         self.timeline.restore(timeline_snap)
 
     def __repr__(self):
@@ -79,9 +83,10 @@ class CompositionLibrary:
         return comp
 
     def new(self, name="Composition", width=1920, height=1080, fps=30,
-            background=(0, 0, 0), declared_duration=0):
+            background=(0, 0, 0), declared_duration=0, bin_folder=""):
         return self.add(Composition(name=name, width=width, height=height, fps=fps,
-                                    background=background, declared_duration=declared_duration))
+                                    background=background, declared_duration=declared_duration,
+                                    bin_folder=bin_folder))
 
     def remove(self, comp_id):
         return self.items.pop(str(comp_id or ""), None)
@@ -97,10 +102,45 @@ class CompositionLibrary:
         source = self.get(comp_id)
         if source is None:
             return None
-        clone = copy.deepcopy(source)
-        clone.id = f"comp-{uuid.uuid4().hex}"
-        clone.name = f"{source.name} copy"
+        # Snapshot/restore copies the timeline without tripping over its itertools
+        # counters (deepcopy cannot pickle those) and keeps ids unique to the clone.
+        clone = Composition(None, f"{source.name} copy", source.width, source.height,
+                            source.fps, source.background, source.declared_duration,
+                            source.bin_folder)
+        clone.timeline.restore(source.timeline.snapshot())
         return self.add(clone)
+
+    def reference_count(self, comp_id, root_timeline=None):
+        """How many clips point at `comp_id`, in the root and in every composition."""
+        comp_id = str(comp_id or "")
+        timelines = [root_timeline] if root_timeline is not None else []
+        timelines += [comp.timeline for comp in self.items.values()]
+        count = 0
+        for timeline in timelines:
+            for clip in timeline.all_clips():
+                if getattr(clip, "is_composition", False) \
+                        and str(getattr(clip, "composition_id", "")) == comp_id:
+                    count += 1
+        return count
+
+    def referrers(self, comp_id, root_timeline=None):
+        """Human names of the places that use `comp_id` (for the delete warning)."""
+        comp_id = str(comp_id or "")
+        names = []
+        root = root_timeline
+        if root is not None and any(
+                getattr(clip, "is_composition", False)
+                and str(getattr(clip, "composition_id", "")) == comp_id
+                for clip in root.all_clips()):
+            names.append("the main timeline")
+        for comp in self.items.values():
+            if comp.id == comp_id:
+                continue
+            if any(getattr(clip, "is_composition", False)
+                   and str(getattr(clip, "composition_id", "")) == comp_id
+                   for clip in comp.timeline.all_clips()):
+                names.append(comp.name)
+        return names
 
     # --------------------------------------------------------------- nesting
     def references(self, comp_id):

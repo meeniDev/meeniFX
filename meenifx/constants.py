@@ -67,6 +67,7 @@ ZOOM_STOPS = ("Fit", "25%", "50%", "100%", "200%", "400%")
 # Internal drag-and-drop payload: media-library ids, never bare file paths, so a drop
 # refers to the media the project already imported instead of importing it again.
 MEDIA_MIME = "application/x-meenifx-media"
+COMPOSITION_MIME = "application/x-meenifx-composition"
 EFFECT_MIME = "application/x-meenifx-effect"
 PRESET_MIME = "application/x-meenifx-preset"
 

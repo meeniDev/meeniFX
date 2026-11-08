@@ -169,6 +169,11 @@ class MainWindow(QMainWindow):
         self._shown_frame=-1
         self._auto_scale=None
         self._cache_dir=""
+        # Composition editing context: the path of composition ids below the main
+        # timeline. The undo stack stays on the root timeline, whose snapshot includes
+        # every definition, so undo behaves the same at any nesting depth.
+        self._composition_path=[]
+        self._root_render_state=None
         self._prerender_dialog=None
         self._prerender_failed=False
         self._layout_ready=False; self._pending_default_sizes=False; self._shown=False
@@ -222,7 +227,7 @@ class MainWindow(QMainWindow):
         self.bridge.selection_changed.connect(lambda _ids:self._refresh_panels())
 
     def _build_ui(self):
-        self._build_actions(); self._build_toolbar()
+        self._build_actions(); self._build_toolbar(); self._build_composition_bar()
         self.preview_panel=PreviewPanel(lambda:self.preview_scale()*100.0)
         self.effects_panel=EffectsPanel(self.engine)
         # One browser: its Effects / Animations / Styles tabs cover what used to be a
@@ -275,6 +280,10 @@ class MainWindow(QMainWindow):
         self.timeline_panel.canvas.files_dropped.connect(self.import_paths)
         self.timeline_panel.canvas.media_dropped.connect(self._media_ids_dropped)
         self.timeline_panel.canvas.media_lookup = self._media_entries_for
+        self.timeline_panel.canvas.composition_open_requested.connect(
+            self.open_composition_clip)
+        self.timeline_panel.canvas.composition_dropped.connect(
+            self._composition_dropped)
         # Selecting keys on a clip selects them in the Graph Editor; double-clicking one
         # (or "Open in Graph Editor") shows the curve there. Both read the shared
         # session keyframe selection, so the two views can never disagree.
@@ -390,6 +399,21 @@ class MainWindow(QMainWindow):
         self.engine.session.clip_selected.connect(lambda _ids:self._refresh_link_actions())
         self.engine.session.changed.connect(self._refresh_link_actions)
         self._refresh_link_actions()
+        comp_menu = bar.addMenu("Composition")
+        # Ctrl+Shift+C already copies keyframes, so pre-composing gets its own chord.
+        self._add_action(comp_menu, "Precompose Selected Clips...", "Ctrl+Alt+C",
+                         self.show_precompose_dialog)
+        self._add_action(comp_menu, "Back to Parent Composition", None, self.back_to_parent)
+        self._add_action(comp_menu, "Composition Settings...", None,
+                         self.show_composition_settings)
+        comp_menu.addSeparator()
+        self._open_comp_menu = comp_menu.addMenu("Open Composition")
+        self._open_comp_menu.aboutToShow.connect(self._populate_open_composition_menu)
+        comp_menu.addSeparator()
+        self._add_action(comp_menu, "Render Composition", None,
+                         lambda: self.render_preview(False))
+        self._add_action(comp_menu, "Rebuild Composition Cache", None,
+                         self.rebuild_composition_cache)
         edit.addSeparator()
         self._add_action(edit,"Delete Gap",None,self.delete_gap)
         self._add_action(edit,"Copy Effects",None,self.copy_effects)
@@ -729,11 +753,12 @@ class MainWindow(QMainWindow):
     def _refresh_audio(self):
         """Rebuild the mixer snapshot from the timeline and start missing decodes."""
         timeline=self.engine.timeline; library=self.waveforms.library
-        for path in missing_audio_paths(timeline,library.cached):
+        compositions=getattr(self.engine,"compositions",None)
+        for path in missing_audio_paths(timeline,library.cached,compositions):
             if path in self.engine.missing_paths:continue
             # Decode first: cached waveform peaks must never stand in for playable audio.
             library.request(path)
-        self.audio.set_segments(build_segments(timeline,library.cached,library.sample_rate,self.engine.runtime_effects))
+        self.audio.set_segments(build_segments(timeline,library.cached,library.sample_rate,self.engine.runtime_effects,compositions=compositions))
 
     def _on_waveform_ready(self,_path):
         self.timeline_panel.canvas.update()
@@ -881,7 +906,7 @@ class MainWindow(QMainWindow):
 
     def _invalidate_preview_cache(self):
         """Drop only the cached frames of clips whose contribution actually changed."""
-        current=timeline_digests(self.engine.timeline)
+        current=timeline_digests(self.engine.timeline,getattr(self.engine,"compositions",None))
         ranges=changed_ranges(self._clip_digests,current)
         self._clip_digests=current
         if not ranges:
@@ -1791,7 +1816,7 @@ class MainWindow(QMainWindow):
     def _start_export(self,settings):
         self.stop_playback(); self._cancel_export=threading.Event()
         library=self.waveforms.library
-        settings=dict(settings,audio_segments=build_segments(self.engine.timeline,library.cached,library.sample_rate,self.engine.runtime_effects),
+        settings=dict(settings,audio_segments=build_segments(self.engine.timeline,library.cached,library.sample_rate,self.engine.runtime_effects,compositions=getattr(self.engine,"compositions",None)),
                       audio_rate=library.sample_rate)
         self._export_dialog=QProgressDialog("Preparing export...","Cancel",0,100,self); self._export_dialog.setWindowTitle("Export")
         self._export_dialog.setWindowModality(Qt.WindowModality.ApplicationModal); self._export_dialog.canceled.connect(self._cancel_export.set); self._export_dialog.show()
@@ -2078,6 +2103,273 @@ class MainWindow(QMainWindow):
         if save:
             settings.save()
 
+    # --------------------------------------------------------- composition editing
+    @property
+    def editing_composition(self):
+        """The composition currently open for editing, or None at the main timeline."""
+        if not self._composition_path:
+            return None
+        return self.engine.compositions.get(self._composition_path[-1])
+
+    def _composition_chain(self):
+        return [comp for comp in (self.engine.compositions.get(cid)
+                                  for cid in self._composition_path) if comp is not None]
+
+    def _remember_root_state(self):
+        """Capture what the main timeline renders with before entering a composition."""
+        if self._composition_path:
+            return
+        self._root_render_state = {
+            "source_width": self.engine.source_width,
+            "source_height": self.engine.source_height,
+            "source_fps": self.engine.source_fps,
+            "background_bgr": self.engine.background_bgr,
+            "project_size": self.engine.session.project_size,
+        }
+
+    def _build_composition_bar(self):
+        """A breadcrumb above the panels: the user always knows what is being edited."""
+        from PyQt6.QtWidgets import QLabel, QToolBar
+        bar = QToolBar("Composition", self)
+        bar.setObjectName("compositionBar")
+        bar.setMovable(False)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, bar)
+        self.composition_bar = bar
+        self.frame_cache.changed.connect(self._update_composition_cache_label)
+        self._sync_composition_bar()
+
+    def _sync_composition_bar(self):
+        from PyQt6.QtWidgets import QLabel
+        bar = getattr(self, "composition_bar", None)
+        if bar is None:
+            return
+        bar.clear()
+        chain = self._composition_chain()
+        # `clear()` drops widget actions, so the labels are rebuilt with the breadcrumb.
+        label = QLabel("Editing: " + (chain[-1].name if chain else "Main Timeline"))
+        label.setContentsMargins(6, 0, 6, 0)
+        label.setToolTip("The timeline every panel, the preview and the export use right now")
+        bar.addWidget(label)
+        self.composition_context_label = label
+        bar.addSeparator()
+        root = bar.addAction("Main Timeline")
+        root.setToolTip("Go back to the main timeline")
+        root.triggered.connect(self._go_to_root)
+        for index, comp in enumerate(chain):
+            bar.addAction(" / ")
+            crumb = bar.addAction(comp.name)
+            crumb.setToolTip(f"Editing {comp.name} ({comp.width}x{comp.height}, {comp.fps} fps)")
+            crumb.triggered.connect(lambda _checked=False, i=index:
+                                    self._go_to_composition_index(i))
+        if chain:
+            bar.addSeparator()
+            back = bar.addAction("Back to Parent")
+            back.setToolTip("Leave this composition and return to the one that contains it")
+            back.triggered.connect(self.back_to_parent)
+            settings_action = bar.addAction("Settings...")
+            settings_action.triggered.connect(self.show_composition_settings)
+        bar.addSeparator()
+        cache_label = QLabel("")
+        cache_label.setProperty("quiet", True)
+        cache_label.setToolTip("Preview frames cached for this timeline")
+        bar.addWidget(cache_label)
+        self.composition_cache_label = cache_label
+        self._update_composition_cache_label()
+        self.setWindowTitle(f"{APP_TITLE} - {chain[-1].name}" if chain else APP_TITLE)
+
+    def _update_composition_cache_label(self):
+        label = getattr(self, "composition_cache_label", None)
+        if label is None:
+            return
+        stats = self.frame_cache.stats()
+        cached = int(stats.get("ram_frames", 0)) + int(stats.get("disk_frames", 0))
+        pending = int(stats.get("pending", 0))
+        label.setText(f"{cached} cached" + (f" - {pending} rendering" if pending else ""))
+
+    def open_composition(self, comp_id):
+        """Open a composition for editing, keeping the path back to the parent."""
+        comp = self.engine.compositions.get(comp_id)
+        if comp is None:
+            self.toast_message("That composition no longer exists", kind="error")
+            return False
+        if str(comp.id) in self._composition_path:
+            self.toast_message("That composition is already open", duration_ms=1600)
+            return False
+        self._remember_root_state()
+        self._composition_path.append(comp.id)
+        self._apply_edit_context()
+        self.toast_message(f"Editing composition: {comp.name}", duration_ms=1600)
+        return True
+
+    def open_composition_clip(self, clip_id):
+        clip = self.engine.timeline.find_clip(clip_id)
+        if clip is None or not getattr(clip, "is_composition", False):
+            return False
+        return self.open_composition(clip.composition_id)
+
+    def back_to_parent(self):
+        if not self._composition_path:
+            return False
+        self._composition_path.pop()
+        self._apply_edit_context()
+        return True
+
+    def _go_to_root(self):
+        if not self._composition_path:
+            return False
+        self._composition_path = []
+        self._apply_edit_context()
+        return True
+
+    def _go_to_composition_index(self, index):
+        if index < 0 or index >= len(self._composition_path):
+            return False
+        self._composition_path = self._composition_path[:index + 1]
+        self._apply_edit_context()
+        return True
+
+    def _apply_edit_context(self):
+        """Point every panel, the preview and the audio at the timeline being edited."""
+        session = self.engine.session
+        self.stop_playback()
+        self.renderer.cancel_interactive()
+        self.renderer.cancel_background()
+        comp = self.editing_composition
+        if comp is None:
+            timeline = self.engine.root_timeline
+            state = self._root_render_state or {}
+            if state:
+                self.engine.source_width = state["source_width"]
+                self.engine.source_height = state["source_height"]
+                self.engine.source_fps = state["source_fps"]
+                self.engine.background_bgr = state["background_bgr"]
+                session.project_size = state["project_size"]
+        else:
+            timeline = comp.timeline
+            self.engine.source_width, self.engine.source_height = comp.width, comp.height
+            self.engine.source_fps = float(comp.fps)
+            self.engine.background_bgr = tuple(comp.background)
+            session.project_size = (comp.width, comp.height)
+        # Wait for any in-flight nested render to restore its context before pointing the
+        # engine at another timeline, and hold the lock while every panel follows.
+        with self.engine.render_lock:
+            self.engine.timeline = timeline
+            session.timeline = timeline
+            session.root_timeline = self.engine.root_timeline
+            session.compositions = self.engine.compositions
+            # The canvas caches the timeline it was built with; without this it would keep
+            # drawing the main timeline while the breadcrumb said otherwise.
+            canvas = self.timeline_panel.canvas
+            canvas.timeline = timeline
+            canvas.session = session
+            canvas._hover_clip = None
+            canvas._drag = None
+            canvas._ghost = None
+            canvas._band = None
+        session.set_selection(set())
+        session.clear_key_selection()
+        session.set_playhead(0)
+        # Frame numbers now belong to another timeline: cached pictures must not leak
+        # across the switch, and in-flight renders are already stale.
+        self._content_revision += 1
+        self._shown_frame = -1
+        self.frame_cache.clear(disk=False)
+        self._clip_digests = timeline_digests(timeline, self.engine.compositions)
+        self._open_cache_folder()
+        self._on_cache_changed()
+        self.project_panel.rebuild(force=True)
+        self.effects_panel.refresh_properties()
+        self.keyframe_editor.refresh()
+        self.graph_editor.refresh()
+        session.changed.emit()
+        self._sync_composition_bar()
+        self._request_preview()
+        self._refresh_audio()
+
+    def _composition_dropped(self, composition_ids, frame, track):
+        """A composition dragged from the Project panel becomes one nested clip."""
+        placed = 0
+        at = max(0, int(frame or 0))
+        # `engine.timeline` is briefly a composition while a nested preview renders;
+        # the session's timeline is the one the user is editing.
+        timeline = self.engine.session.timeline
+        for comp_id in composition_ids:
+            clip_id = self.engine.session.insert_composition(comp_id, at, track)
+            if clip_id is None:
+                continue
+            clip = timeline.find_clip(clip_id)
+            if clip is not None:
+                at = int(clip.end)
+            placed += 1
+        if placed:
+            self._request_preview()
+            self._refresh_audio()
+        return placed
+
+    def _populate_open_composition_menu(self):
+        menu = getattr(self, "_open_comp_menu", None)
+        if menu is None:
+            return
+        menu.clear()
+        comps = sorted(self.engine.compositions.all(), key=lambda comp: comp.name.lower())
+        if not comps:
+            entry = menu.addAction("No compositions yet - use Precompose")
+            entry.setEnabled(False)
+            return
+        for comp in comps:
+            entry = menu.addAction(comp.name)
+            entry.setCheckable(True)
+            entry.setChecked(comp.id in self._composition_path)
+            entry.triggered.connect(lambda _checked=False, cid=comp.id:
+                                    self.open_composition(cid))
+
+    def show_precompose_dialog(self):
+        """Name the new composition, then move the selected clips into it."""
+        session = self.engine.session
+        problem = session.precompose_problem()
+        if problem:
+            self.toast_message(problem, kind="error", duration_ms=3000)
+            return None
+        clips = session._clips_for(None)
+        start = min(int(clip.timeline_start) for clip in clips)
+        end = max(int(clip.end) for clip in clips)
+        from .composition_dialogs import PrecomposeDialog
+        dialog = PrecomposeDialog(self, name="Composition", clip_count=len(clips),
+                                  range_text=f"frames {start}-{end}")
+        if dialog.exec():
+            nested = session.precompose(dialog.values()["name"])
+            if nested is not None:
+                self._request_preview()
+                self._refresh_audio()
+            return nested
+        return None
+
+    def show_composition_settings(self):
+        """Edit the open composition, or the one referenced by the selected clip."""
+        target = self.editing_composition
+        if target is None:
+            for clip_id in self.engine.session.selected:
+                clip = self.engine.timeline.find_clip(clip_id)
+                if clip is not None and getattr(clip, "is_composition", False):
+                    target = self.engine.compositions.get(clip.composition_id)
+                    break
+        if target is None:
+            self.toast_message("Open a composition or select a composition clip first",
+                               kind="error", duration_ms=2600)
+            return None
+        from .composition_dialogs import CompositionSettingsDialog
+        dialog = CompositionSettingsDialog(self, target)
+        if dialog.exec():
+            self.engine.session.set_composition_settings(target.id, **dialog.values())
+            self._apply_edit_context()
+            return True
+        return None
+
+    def rebuild_composition_cache(self):
+        """Throw the cached frames away and render this timeline again from scratch."""
+        self.clear_preview_cache()
+        return self.render_preview(False)
+
     def _cache_folder(self):
         """<project>/Cache/preview, or the configured folder when one is set."""
         project=getattr(self.projects,"project",None)
@@ -2087,7 +2379,12 @@ class MainWindow(QMainWindow):
             name=(project.name if project is not None else "preview") or "preview"
             return os.path.join(base,name)
         if project is not None and getattr(project,"folder",""):
-            return os.path.join(project.folder,"Cache","preview")
+            base=os.path.join(project.folder,"Cache","preview")
+            # Each editing context gets its own folder: frame numbers belong to one
+            # timeline, so a composition's cache can never be mistaken for the root's.
+            if self._composition_path:
+                return os.path.join(base,self._composition_path[-1])
+            return base
         return ""
 
     def _open_cache_folder(self):
@@ -2096,12 +2393,24 @@ class MainWindow(QMainWindow):
             return
         self._cache_dir=folder
         self.frame_cache.open_folder(folder,fingerprint(
-            self.engine.timeline,self.engine.project_size(),self.engine.background_bgr))
+            self.engine.timeline,self.engine.project_size(),self.engine.background_bgr,
+            getattr(self.engine,"compositions",None)))
         self._on_cache_changed()
 
     def _on_project_changed(self):
         """A project was opened, saved or closed: re-point and validate the disk cache."""
-        self._clip_digests=timeline_digests(self.engine.timeline)
+        # Opening or closing a project always returns to the main timeline: the old
+        # composition objects are gone with the previous project.
+        if self._composition_path:
+            self._composition_path=[]
+        self._root_render_state=None
+        self.engine.session.root_timeline=self.engine.root_timeline
+        self.engine.session.timeline=self.engine.timeline
+        self.engine.session.compositions=getattr(self.engine,"compositions",None)
+        # A loaded project replaces the timeline's contents; the canvas must follow.
+        self.timeline_panel.canvas.timeline=self.engine.timeline
+        self._clip_digests=timeline_digests(self.engine.timeline,getattr(self.engine,"compositions",None))
+        self._sync_composition_bar()
         self._open_cache_folder()
         self._on_cache_changed()
         self._prefetch_timer.start()
@@ -2113,7 +2422,8 @@ class MainWindow(QMainWindow):
         """Stamp the cache folder so a later open can reuse these frames."""
         if self.frame_cache.folder:
             self.frame_cache.write_manifest(fingerprint(
-                self.engine.timeline,self.engine.project_size(),self.engine.background_bgr),
+                self.engine.timeline,self.engine.project_size(),self.engine.background_bgr,
+                getattr(self.engine,"compositions",None)),
                 {"fps":self.engine.timeline.fps})
 
     # ------------------------------------------------------------ transform tools

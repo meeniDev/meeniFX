@@ -30,6 +30,7 @@ while a text or numeric field has focus.
 | `C` or `S` | Split at the playhead |
 | `Ctrl+L` / `Ctrl+Shift+L` | Link / unlink video and audio |
 | `Ctrl+Shift+K` | Toggle linked selection |
+| `Ctrl+Alt+C` | Precompose the selected clips |
 | `F2` | Rename the selected marker |
 | `Ctrl+T` | Add a text clip |
 | `Ctrl+Shift+T` | Key the current text |

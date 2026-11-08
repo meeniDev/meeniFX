@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLa
 from .. import tokens
 from ..audio import processed_waveform
 from ..audio.waveform import envelope
-from ..constants import EFFECT_MIME, MEDIA_MIME, PRESET_MIME
+from ..constants import COMPOSITION_MIME, EFFECT_MIME, MEDIA_MIME, PRESET_MIME
 from ..icons import icon
 from ..model import animation as ANIM
 from ..model import channels as CH
@@ -152,6 +152,10 @@ class TimelineCanvas(QWidget):
     # The compact animation badge asks for the dedicated Keyframe Editor instead of
     # expanding a dense set of property rows inside the clip.
     keyframe_editor_requested = pyqtSignal(list)
+    # Double-clicking a composition clip asks the window to open that composition.
+    composition_open_requested = pyqtSignal(object)
+    # A composition dragged from the Project panel becomes one nested clip.
+    composition_dropped = pyqtSignal(list, int, object)
 
     HEADER_W = 156
     TOP_H = 0           # the old "Timeline | timecode" row is gone; the timecode lives in the preview
@@ -3481,6 +3485,11 @@ class TimelineCanvas(QWidget):
                 # Double-clicking a grip clears that fade, like Vegas.
                 self.session.reset_clip_fades(clip.id, edge)
                 return
+            _track, nested = self._clip_at(x, y)
+            if nested is not None and getattr(nested, "is_composition", False):
+                # Double-clicking the body of a nested clip opens it for editing.
+                self.composition_open_requested.emit(nested.id)
+                return
         if event.button() == Qt.MouseButton.LeftButton and x < self.HEADER_W and y >= self.TRACKS_TOP:
             track = self._header_track_at(y)
             if track is not None:
@@ -3897,6 +3906,11 @@ class TimelineCanvas(QWidget):
             self.update()
             event.acceptProposedAction()
             return
+        if mime.hasFormat(COMPOSITION_MIME):
+            self._drop_highlight = True
+            self.update()
+            event.acceptProposedAction()
+            return
         event.ignore()
 
     def dragMoveEvent(self, event):
@@ -3910,7 +3924,7 @@ class TimelineCanvas(QWidget):
             self.update()
             event.acceptProposedAction()
             return
-        if mime.hasUrls():
+        if mime.hasUrls() or mime.hasFormat(COMPOSITION_MIME):
             event.acceptProposedAction()
             return
         event.ignore()
@@ -3936,6 +3950,22 @@ class TimelineCanvas(QWidget):
                 return
             self.media_dropped.emit(media_ids, frame, track)
             event.acceptProposedAction()
+            return
+        if mime.hasFormat(COMPOSITION_MIME):
+            composition_ids = [line.strip() for line in
+                               bytes(mime.data(COMPOSITION_MIME)).decode("utf-8").splitlines()
+                               if line.strip()]
+            self._drop_highlight = False
+            self.update()
+            if composition_ids:
+                if track is not None and track.locked:
+                    self.session.status.emit(f"{track.name} is locked - nothing was inserted")
+                    event.ignore()
+                    return
+                self.composition_dropped.emit(composition_ids, frame, track)
+                event.acceptProposedAction()
+            else:
+                event.ignore()
             return
         if mime.hasFormat(PRESET_MIME):
             payload = bytes(mime.data(PRESET_MIME)).decode("utf-8")

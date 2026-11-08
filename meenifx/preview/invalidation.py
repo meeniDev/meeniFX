@@ -100,10 +100,38 @@ def _presets(clip):
     return preset_model.cache_key(clip)
 
 
-def clip_digest(clip):
+def composition_digest(comp, compositions=None, seen=None):
+    """Digest of one composition definition, including everything nested inside it.
+
+    A composition clip's own properties never change when the user edits the definition,
+    so the parent timeline would keep showing stale frames without this. `seen` breaks
+    cycles defensively (the model already refuses to create them).
+    """
+    if comp is None:
+        return "missing"
+    seen = set(seen or ())
+    if comp.id in seen:
+        return f"cycle:{comp.id}"
+    seen.add(comp.id)
+    parts = [str(comp.id), str(comp.name), f"{comp.width}x{comp.height}",
+             str(comp.fps), ",".join(str(part) for part in comp.background),
+             str(int(getattr(comp, "declared_duration", 0) or 0))]
+    nested = timeline_digests(comp.timeline, compositions, seen)
+    parts.extend(f"{clip_id}:{nested[clip_id][0]}" for clip_id in sorted(nested))
+    return hashlib.blake2b("|".join(parts).encode("utf-8", "replace"),
+                           digest_size=12).hexdigest()
+
+
+def clip_digest(clip, compositions=None, seen=None):
     """One string that changes exactly when this clip's rendered contribution changes."""
     if clip is None:
         return ""
+    comp_note = ""
+    if getattr(clip, "is_composition", False):
+        library = compositions if compositions is not None else getattr(clip, "compositions", None)
+        comp = library.get(clip.composition_id) if library is not None else None
+        comp_note = "comp:" + str(clip.composition_id) + ":" + composition_digest(
+            comp, library, seen)
     raw = "|".join((
         str(getattr(clip, "source_path", "") or ""),
         str(getattr(clip, "name", "")),
@@ -129,12 +157,17 @@ def clip_digest(clip):
         # How the layer is composited changes the picture just as much as its effects.
         str(getattr(clip, "blend", "normal")),
         str(bool(getattr(clip, "adjustment", False))),
+        comp_note,
     ))
     return hashlib.blake2b(raw.encode("utf-8", "replace"), digest_size=12).hexdigest()
 
 
-def timeline_digests(timeline):
-    """{clip_id: (digest, first_frame, last_frame)} for every clip on the timeline."""
+def timeline_digests(timeline, compositions=None, seen=None):
+    """{clip_id: (digest, first_frame, last_frame)} for every clip on the timeline.
+
+    `compositions` makes a nested clip's digest follow its definition, so editing a
+    composition invalidates exactly the parent frames that show it.
+    """
     # A transition changes the picture/audio of both clips in its overlap, even though
     # neither clip's own properties moved. Fold its settings into both digests so a
     # curve change invalidates exactly those cached frames.
@@ -148,7 +181,7 @@ def timeline_digests(timeline):
         quiet = getattr(track, "muted", False) and track.type == "audio"
         hidden = not bool(getattr(track, "visible", True))
         for clip in track.clips:
-            digest = clip_digest(clip)
+            digest = clip_digest(clip, compositions, seen)
             notes = transition_notes.get(clip.id)
             if notes:
                 digest += ":T[" + ";".join(sorted(notes)) + "]"
@@ -184,14 +217,14 @@ def changed_ranges(old, new):
     return ranges
 
 
-def fingerprint(timeline, project_size=None, background=None):
+def fingerprint(timeline, project_size=None, background=None, compositions=None):
     """Stable hash of the timeline and output format, for validating a disk cache on reopen.
 
     The same timeline rendered at another project size is a different picture, so the
     project dimensions (and the background behind transparent areas) are part of the
     fingerprint rather than only of the preview scale key.
     """
-    digests = timeline_digests(timeline)
+    digests = timeline_digests(timeline, compositions)
     raw = "|".join(f"{clip_id}:{digests[clip_id][0]}" for clip_id in sorted(digests))
     if project_size is not None:
         raw += f"|size={int(project_size[0])}x{int(project_size[1])}"

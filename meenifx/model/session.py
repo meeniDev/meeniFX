@@ -24,8 +24,15 @@ class TimelineSession:
                     "Push neighbours": "push"}
 
     def __init__(self, timeline=None, media=None):
-        self.timeline = timeline or Timeline()
+        # Never use `timeline or Timeline()`: a Timeline with no clips is falsy, and the
+        # session would silently own a different timeline than the engine and the panels.
+        self.timeline = timeline if timeline is not None else Timeline()
         self.media = media
+        # The composition library is a project-level registry, not a property of whichever
+        # timeline is in front: editing a nested composition must still be able to
+        # pre-compose (which creates a sibling), so the session keeps its own reference.
+        self.root_timeline = self.timeline
+        self.compositions = getattr(self.timeline, "compositions", None)
         self.stack = CommandStack(self.timeline)
         # Logical project resolution, published by the engine when a project is opened or
         # resized. Frame-space operations (Fill Frame) read it from here instead of
@@ -417,7 +424,7 @@ class TimelineSession:
             more = "..." if len(overlapping) > 3 else ""
             return (f"Select every clip that overlaps {start}-{end} first; otherwise "
                     f"{names}{more} would be left behind")
-        if getattr(self.timeline, "compositions", None) is None:
+        if getattr(self, "compositions", None) is None:
             return "This project has no composition library"
         return ""
 
@@ -440,7 +447,7 @@ class TimelineSession:
         holder = {}
 
         def action():
-            comp = self.timeline.compositions.precompose(
+            comp = self.compositions.precompose(
                 self.timeline, [clip.id for clip in clips], name, start, end,
                 width, height, background)
             holder["comp"] = comp
@@ -459,6 +466,141 @@ class TimelineSession:
         self.reveal_requested.emit(nested.timeline_start)
         self.status.emit(f"Pre-composed {len(clips)} clip(s) into {holder['comp'].name}")
         return nested.id
+
+    # ------------------------------------------------------ composition commands
+    def composition_reference_count(self, comp_id):
+        library = getattr(self, "compositions", None)
+        if library is None:
+            return 0
+        return library.reference_count(comp_id, getattr(self, "root_timeline", None))
+
+    def insert_composition(self, comp_id, frame=None, track=None):
+        """Place one nested clip that references `comp_id` on the current timeline."""
+        library = getattr(self, "compositions", None)
+        comp = library.get(comp_id) if library is not None else None
+        if comp is None:
+            self.status.emit("That composition no longer exists")
+            return None
+        start = max(0, int(self.playhead if frame is None else frame))
+        holder = {}
+
+        def action():
+            target = track
+            if (target is None or getattr(target, "type", "") != "video"
+                    or target.locked):
+                lanes = [lane for lane in self.timeline.tracks_of_type("video")
+                         if not lane.locked]
+                target = lanes[0] if lanes else self.timeline.add_track("video")
+            holder["clip"] = self.timeline.new_clip(
+                comp.name, "", target, start, comp.duration, source_out=comp.duration,
+                source_fps=comp.fps, stream="video", composition_id=comp.id)
+
+        self.stack.run("Insert composition", action)
+        clip = holder.get("clip")
+        if clip is not None:
+            self.set_selection({clip.id})
+            self.reveal_requested.emit(clip.timeline_start)
+            self.status.emit(f"Inserted composition {comp.name}")
+        return None if clip is None else clip.id
+
+    def _composition_name_sync(self, comp_id, name):
+        """Keep every referencing clip's label in step with the composition's name."""
+        library = getattr(self, "compositions", None)
+        if library is None:
+            return
+        timelines = [getattr(self, "root_timeline", self.timeline)]
+        timelines += [comp.timeline for comp in library.items.values()]
+        for timeline in timelines:
+            for clip in timeline.all_clips():
+                if getattr(clip, "is_composition", False) \
+                        and str(getattr(clip, "composition_id", "")) == str(comp_id):
+                    clip.name = name
+
+    def rename_composition(self, comp_id, name):
+        """Rename a composition and every nested clip that references it (undoable)."""
+        library = getattr(self, "compositions", None)
+        comp = library.get(comp_id) if library is not None else None
+        name = str(name or "").strip()
+        if comp is None or not name or name == comp.name:
+            return False
+
+        def action():
+            library.rename(comp.id, name)
+            self._composition_name_sync(comp.id, name)
+
+        self.stack.run("Rename composition", action)
+        return True
+
+    def set_composition_settings(self, comp_id, **changes):
+        """Change name/size/rate/background/duration as one undoable edit."""
+        library = getattr(self, "compositions", None)
+        comp = library.get(comp_id) if library is not None else None
+        if comp is None:
+            return False
+        allowed = {key: value for key, value in changes.items()
+                   if key in ("name", "width", "height", "fps", "background",
+                              "declared_duration") and value is not None}
+        if not allowed:
+            return False
+        name = str(allowed.get("name", comp.name) or "").strip() or comp.name
+
+        def action():
+            if "name" in allowed:
+                library.rename(comp.id, name)
+                self._composition_name_sync(comp.id, name)
+            if "width" in allowed:
+                comp.width = max(1, int(allowed["width"]))
+            if "height" in allowed:
+                comp.height = max(1, int(allowed["height"]))
+            if "fps" in allowed:
+                comp.fps = max(1, int(round(float(allowed["fps"]))))
+                comp.timeline.fps = comp.fps
+            if "background" in allowed:
+                comp.background = tuple(int(part) for part in allowed["background"])[:3]
+            if "declared_duration" in allowed:
+                comp.declared_duration = max(0, int(allowed["declared_duration"]))
+
+        self.stack.run("Composition settings", action)
+        self.changed.emit()
+        return True
+
+    def duplicate_composition(self, comp_id):
+        """Copy a composition definition (undoable); its clips keep referencing theirs."""
+        library = getattr(self, "compositions", None)
+        if library is None or library.get(comp_id) is None:
+            return None
+        holder = {}
+
+        def action():
+            holder["comp"] = library.duplicate(comp_id)
+
+        self.stack.run("Duplicate composition", action)
+        return holder.get("comp")
+
+    def delete_composition(self, comp_id):
+        """Delete a definition and the nested clips that referenced it (undoable)."""
+        library = getattr(self, "compositions", None)
+        comp = library.get(comp_id) if library is not None else None
+        if comp is None:
+            return False
+        removed = 0
+
+        def action():
+            nonlocal removed
+            timelines = [getattr(self, "root_timeline", self.timeline)]
+            timelines += [other.timeline for other in library.items.values()]
+            for timeline in timelines:
+                ids = [clip.id for clip in timeline.all_clips()
+                       if getattr(clip, "is_composition", False)
+                       and str(getattr(clip, "composition_id", "")) == str(comp.id)]
+                if ids:
+                    timeline.delete_clips(ids)
+                    removed += len(ids)
+            library.remove(comp.id)
+
+        self.stack.run("Delete composition", action)
+        self.changed.emit()
+        return True
 
     def add_clip(self, path, name, duration, track=None, start=None, source_in=0):
         tl = self.timeline

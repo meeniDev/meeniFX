@@ -3,6 +3,34 @@
 All notable changes to meeniFX Studios. The current public build is an **Alpha**: it is
 usable and tested, but unfinished, and some features are still experimental.
 
+## Unreleased
+
+### Added
+
+- **Pre-compositions**: select clips and choose *Composition > Precompose Selected Clips*
+  (`Ctrl+Alt+C`) or the timeline context menu. The clips move into a reusable composition
+  with their timing, effects, keyframes, source offsets, linked audio and track order, and a
+  composition clip replaces them in place. The operation is one undo step.
+- Compositions in the Project panel: their own stacked-frames icon, folders, search, rename,
+  drag to any timeline, **Duplicate Composition**, and **Delete Composition** with a warning
+  that counts the nested clips which will be removed.
+- Composition navigation: double-click a composition clip to open it, with a breadcrumb bar
+  above the panels showing the main timeline and every composition up to the one being
+  edited, plus **Back to Parent**, **Composition Settings** and an **Open Composition** menu.
+- Nested audio routing: a composition's children are mixed into the parent at the right time,
+  scaled by the composition clip's volume and fades, and played exactly once.
+- **Render Composition** and **Rebuild Composition Cache**, a cache-status readout in the
+  breadcrumb bar, and a separate disk cache folder per editing context.
+
+### Improved
+
+- Preview cache digests now include nested composition contents, so editing inside a
+  composition invalidates the parent frames that show it instead of leaving them stale.
+- Posterize Time's **Frame Rate** field keeps three decimals: 23.976, 29.97 and 59.94 stay
+  exact (24000/1001 and 30000/1001) instead of becoming 23.98, and 24/25/30/50/60 remain
+  exact fractions.
+- Long property names such as **Frame Rate** widen the label column instead of being elided.
+
 ## 0.1.0-alpha.1 - 8 November 2026
 
 First public Alpha, and the first build with Windows packaging and in-app updates.

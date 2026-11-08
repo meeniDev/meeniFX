@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QHBoxLayout, QInpu
                              QStackedLayout, QToolButton, QVBoxLayout, QWidget)
 
 from .. import tokens
-from ..constants import AUDIO_EXT, IMAGE_EXT, MEDIA_MIME, VIDEO_EXT
+from ..constants import AUDIO_EXT, COMPOSITION_MIME, IMAGE_EXT, MEDIA_MIME, VIDEO_EXT
 from ..icons import icon as glyph, paint as paint_glyph
 from ..project import io as project_io
 from ..project.media import media_type_for, norm_path
@@ -214,7 +214,7 @@ class _MediaList(QListWidget):
             if moved >= QApplication.startDragDistance():
                 item = self.itemAt(self._drag_press)
                 self._drag_press = None
-                if item is not None and self._kind(item) == "item":
+                if item is not None and self._kind(item) in ("item", "comp"):
                     self.start_media_drag(item)
                     return
         super().mouseMoveEvent(event)
@@ -229,8 +229,8 @@ class _MediaList(QListWidget):
         return data[0] if data else ""
 
     def drag_items(self, item):
-        """Every selected media item, or just the one under the pointer."""
-        chosen = [i for i in self.selectedItems() if self._kind(i) == "item"]
+        """Every selected media/composition item, or just the one under the pointer."""
+        chosen = [i for i in self.selectedItems() if self._kind(i) in ("item", "comp")]
         return chosen if item in chosen else [item]
 
     def start_media_drag(self, item):
@@ -272,14 +272,18 @@ class _MediaList(QListWidget):
 
     def mimeData(self, items):
         data = QMimeData()
-        ids, urls = [], []
+        ids, comp_ids, urls = [], [], []
         for item in items:
             kind, key, path = item.data(Qt.ItemDataRole.UserRole)
             if kind == "item":
                 ids.append(key)
                 if path and os.path.isfile(path):
                     urls.append(QUrl.fromLocalFile(path))
+            elif kind == "comp":
+                # Compositions travel as references, never as media files.
+                comp_ids.append(key)
         data.setData(MEDIA_MIME, "\n".join(ids).encode("utf-8"))
+        data.setData(COMPOSITION_MIME, "\n".join(comp_ids).encode("utf-8"))
         data.setUrls(urls)
         return data
 
@@ -503,6 +507,8 @@ class ProjectPanel(QWidget):
         signature = (self._current_bin, needle, self._grid, tuple(sorted(used)), len(self._thumbs),
                      tuple((i.id, i.name, i.bin, i.duration, i.width, i.path) for i in library.items.values()),
                      tuple((k, v, library.bin_parent(k)) for k, v in library.bins.items()),
+                     tuple((c.id, c.name, getattr(c, "bin_folder", ""), c.width, c.height,
+                            c.fps, c.duration) for c in self.engine.compositions.all()),
                      len(self.engine.missing_paths))
         if signature == self._signature and not force:
             return
@@ -543,6 +549,18 @@ class ProjectPanel(QWidget):
         kind = self.kind_filter.currentData()
         order = self.sort_box.currentData()
         shown = 0
+        # Compositions are project assets with their own icon; they are never mixed up
+        # with imported media because their kind is "comp" everywhere.
+        for comp in sorted(self.engine.compositions.all(), key=lambda item: item.name.lower()):
+            if needle:
+                if needle not in comp.name.lower():
+                    continue
+            elif getattr(comp, "bin_folder", "") != self._current_bin:
+                continue
+            if kind and kind != "video":
+                continue
+            shown += 1
+            self.list.addItem(self._make_composition_item(comp))
         for media in self._arrange(library.items.values(), kind, order):
             if needle:
                 if needle not in media.name.lower():
@@ -625,6 +643,47 @@ class ProjectPanel(QWidget):
             item.setForeground(QColor(tokens.COLORS["warning"]))
         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsDragEnabled)
         return item
+
+    def _make_composition_item(self, comp):
+        fps = float(comp.fps or 30)
+        detail = [f"{comp.width}x{comp.height}", f"{fps:g} fps",
+                  format_duration((comp.duration or 0) / max(1.0, fps))]
+        info = "  \u00b7  ".join(part for part in detail if part)
+        available = self._icon_size().width() + 24 if self._grid else max(160, self.list.width() - 80)
+        name = QFontMetrics(self.list.font()).elidedText(
+            comp.name, Qt.TextElideMode.ElideMiddle, max(40, available))
+        item = QListWidgetItem(name + (f"\n{info}" if info else ""))
+        item.setData(Qt.ItemDataRole.UserRole, ("comp", comp.id, ""))
+        item.setIcon(self._composition_icon())
+        item.setToolTip(f"{comp.name}\nComposition \u00b7 {info}"
+                        "\nDouble-click to open, or drag onto the timeline")
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsDragEnabled)
+        return item
+
+    def _composition_icon(self):
+        """Stacked frames: a composition reads as a nested timeline, not as media."""
+        size = self._icon_size()
+        canvas = self._canvas(size, QColor(tokens.COLORS["neutral_stage"]))
+        painter = QPainter(canvas)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        accent = QColor(tokens.COLORS["accent"])
+        w, h = float(size.width()), float(size.height())
+        fw, fh = w * 0.56, h * 0.60
+        painter.setPen(QPen(accent, max(1.0, h / 40)))
+        for index, offset in enumerate((0.0, 0.075, 0.15)):
+            painter.setBrush(accent.lighter(285 - index * 35))
+            rect = QRectF((w - fw) / 2 + w * 0.06 - w * offset * 0.5,
+                          (h - fh) / 2 - h * offset * 0.5 + h * 0.02, fw, fh)
+            painter.drawRoundedRect(rect, fh * 0.10, fh * 0.10)
+        # A play mark on the front frame says "this opens into its own timeline".
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#FFFFFF"))
+        cx, cy, side = w * 0.5, h * 0.5 + h * 0.01, min(w, h) * 0.16
+        painter.drawPolygon(QPoint(int(cx - side * 0.42), int(cy - side)),
+                            QPoint(int(cx - side * 0.42), int(cy + side)),
+                            QPoint(int(cx + side * 0.55), int(cy)))
+        painter.end()
+        return QIcon(canvas)
 
     def _icon_size(self):
         return GRID_ICON if self._grid else LIST_ICON
@@ -851,6 +910,8 @@ class ProjectPanel(QWidget):
         if kind == "bin":
             self._current_bin = key
             self.rebuild(force=True)
+        elif kind == "comp":
+            self.w.open_composition(key)
         elif kind == "up":
             self._current_bin = self.project.library.bin_parent(self._current_bin)
             self.rebuild(force=True)
@@ -872,6 +933,28 @@ class ProjectPanel(QWidget):
             menu.addAction("Open", lambda: self._double_clicked(item))
             menu.addAction("Rename...", lambda: self._rename_bin(key))
             menu.addAction("Delete Folder...", lambda: self._delete_bin(key))
+        elif kind == "comp":
+            comp = self.engine.compositions.get(key)
+            if comp is None:
+                return
+            menu.addAction("Open Composition", lambda: self.w.open_composition(comp.id))
+            menu.addAction("Insert at Playhead", lambda: self._insert_comp(comp.id))
+            menu.addAction("Duplicate Composition", lambda: self._duplicate_comp(comp.id))
+            menu.addAction("Rename...", lambda: self._rename_comp(comp.id))
+            library = self.project.library
+            if library.bins:
+                move = menu.addMenu("Move to Folder")
+                move.addAction("Project Root", lambda: self._move_comp(comp.id, ""))
+                for bin_id in library.bins:
+                    chain = library.bin_chain(bin_id)
+                    label = "    " * (len(chain) - 1) + library.bins.get(bin_id, "Folder")
+                    move.addAction(label, lambda _c=False, b=bin_id:
+                                   self._move_comp(comp.id, b))
+            menu.addSeparator()
+            references = self.engine.session.composition_reference_count(comp.id)
+            menu.addAction(f"Delete Composition ({references} nested clip"
+                           f"{'s' if references != 1 else ''})...",
+                           lambda: self._delete_comp(comp.id))
         elif kind == "up":
             menu.addAction("Back", self.go_back)
         elif kind == "item":
@@ -907,6 +990,64 @@ class ProjectPanel(QWidget):
         self.project.library.move_to_bin(ids, bin_id)
         self.w.projects.mark_dirty()
         self.rebuild(force=True)
+
+    # ---- composition assets -------------------------------------------------
+    def _insert_comp(self, comp_id):
+        clip_id = self.engine.session.insert_composition(
+            comp_id, self.engine.session.playhead, None)
+        if clip_id is not None:
+            self.w._request_preview()
+            self.w._refresh_audio()
+        return clip_id
+
+    def _rename_comp(self, comp_id):
+        comp = self.engine.compositions.get(comp_id)
+        if comp is None:
+            return
+        name, ok = QInputDialog.getText(self, "Rename Composition", "Name:", text=comp.name)
+        if ok and name.strip() and name.strip() != comp.name:
+            self.engine.session.rename_composition(comp_id, name.strip())
+            self.w.projects.mark_dirty()
+            self.rebuild(force=True)
+
+    def _duplicate_comp(self, comp_id):
+        comp = self.engine.session.duplicate_composition(comp_id)
+        if comp is not None:
+            self.w.projects.mark_dirty()
+            self.rebuild(force=True)
+            self.w.toast_message(f"Duplicated composition: {comp.name}")
+
+    def _move_comp(self, comp_id, bin_id):
+        comp = self.engine.compositions.get(comp_id)
+        if comp is None:
+            return
+        comp.bin_folder = bin_id or ""
+        self.w.projects.mark_dirty()
+        self.rebuild(force=True)
+
+    def _delete_comp(self, comp_id):
+        comp = self.engine.compositions.get(comp_id)
+        if comp is None:
+            return
+        references = self.engine.session.composition_reference_count(comp.id)
+        detail = (f"{references} nested clip uses it and will be removed."
+                  if references else "Nothing references it.")
+        answer = QMessageBox.question(
+            self, "Delete Composition",
+            f"Delete \"{comp.name}\"?\n\n{detail}\n\n"
+            "The clips inside it are deleted with it. This can be undone with Ctrl+Z.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        if comp_id in getattr(self.w, "_composition_path", []):
+            while getattr(self.w, "_composition_path", []) and self.w._composition_path[-1] != comp_id:
+                self.w.back_to_parent()
+            self.w.back_to_parent()
+        self.engine.session.delete_composition(comp_id)
+        self.w.projects.mark_dirty()
+        self.rebuild(force=True)
+        self.w._request_preview()
+        self.w._refresh_audio()
 
     def _show_in_folder(self, media):
         from .start_window import show_in_folder

@@ -30,7 +30,9 @@ applied effect removes it. Each apply or remove is one undo step.
   Skew/Shear.
 - **Keying and mattes** - Simple Choker, with support for shapes, text, transparent PNGs and
   alpha mattes.
-- **Time** - Posterize Time (a frame rate in fps), Stutter and Echo/Trail.
+- **Time** - Posterize Time (a **Frame Rate** in fps; 23.976, 29.97 and 59.94 are kept as
+  their exact 24000/1001 and 30000/1001 rates, and a keyframed rate never samples
+  backwards), Stutter and Echo/Trail.
 - **Tracking** - Face, Hand and Blob trackers.
 - **Audio** - Gain, fades, EQ, low/high-pass, compressor, limiter, reverb, delay and stereo
   pan, processed on the samples rather than on a decorative knob.

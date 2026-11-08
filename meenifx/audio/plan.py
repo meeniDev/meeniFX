@@ -3,11 +3,13 @@
 import os
 from collections import OrderedDict
 
+import numpy as np
+
 from ..constants import AUDIO_EXT, VIDEO_EXT
 from ..model.keyframes import AnimatedValue
 from . import dsp
 from .effects import apply_chain, chain_signature, has_audio_effects
-from .mix import Segment
+from .mix import Segment, fade_envelope
 
 AUDIO_CAPABLE = tuple(AUDIO_EXT) + tuple(VIDEO_EXT)
 
@@ -104,12 +106,17 @@ def audible_clips(timeline):
             if not track.visible or solo_audio:
                 continue
         for clip in track.clips:
-            if not clip.source_path:
+            # A nested composition is audible through its own contents, not through a
+            # source file: include it so build_segments can route the children.
+            if not getattr(clip, "is_composition", False) and not clip.source_path:
                 continue
             # A video clip that has a linked audio clip is silent itself: the sound lives on
             # the audio lane, so one source can never be heard twice. Clips loaded from older
-            # projects carry the "both" stream and still play their own audio.
-            if not getattr(clip, "carries_audio", True):
+            # projects carry the "both" stream and still play their own audio. A composition
+            # clip is an exception: its stream is "video" (it has no file) but its children's
+            # audio is exactly what the parent timeline should hear.
+            if not getattr(clip, "is_composition", False) \
+                    and not getattr(clip, "carries_audio", True):
                 continue
             gain = max(0.0, float(getattr(clip, "volume", 1.0))) * max(0.0, float(getattr(track, "volume", 1.0)))
             result.append((clip, gain))
@@ -147,7 +154,65 @@ def processed_samples(clip, samples, rate, resolver, fps):
     return processed
 
 
-def build_segments(timeline, audio_for, rate, resolver=None, only_ids=None):
+def _remap_nested_segment(segment, offset, speed, parent_gain, clip, parent_fps, rate):
+    """Rebase a composition's segment onto the parent timeline.
+
+    The child's own gain automation, fades and transition windows are preserved and the
+    parent composition clip's volume and fades are multiplied on top, so nested audio
+    respects every level's mixer settings and is heard exactly once.
+    """
+    speed = max(1e-6, float(speed or 1.0))
+    start = offset + segment.start_seconds / speed
+    end = offset + segment.end_seconds / speed
+    if end <= start:
+        return None
+    duration = end - start
+    step = max(1.0 / 40.0, duration / 20000.0)
+    times = np.arange(start, end + step * 0.5, step, dtype=np.float64)
+    if times.size == 0:
+        return None
+    nested_times = offset + (times - offset) * speed
+    base_gain = float(segment.gain)
+    if segment.gain_points:
+        base_gain = np.interp(nested_times,
+                              np.asarray([point[0] for point in segment.gain_points],
+                                         dtype=np.float64),
+                              np.asarray([point[1] for point in segment.gain_points],
+                                         dtype=np.float64))
+    nested_fade = 1.0
+    if segment.fade_in_seconds > 0 or segment.fade_out_seconds > 0:
+        nested_fade = fade_envelope(nested_times, segment.start_seconds, segment.end_seconds,
+                                    segment.fade_in_seconds, segment.fade_out_seconds,
+                                    segment.fade_in_curve, segment.fade_out_curve)
+    parent_fade = 1.0
+    fade_in = max(0.0, float(getattr(clip, "fade_in", 0) or 0)) / float(parent_fps or 30.0)
+    fade_out = max(0.0, float(getattr(clip, "fade_out", 0) or 0)) / float(parent_fps or 30.0)
+    if fade_in > 0 or fade_out > 0:
+        parent_fade = fade_envelope(times, start, end, fade_in, fade_out,
+                                    float(getattr(clip, "fade_in_curve", 0.0) or 0.0),
+                                    float(getattr(clip, "fade_out_curve", 0.0) or 0.0))
+    # `base_gain` is a scalar unless the child had gain automation; broadcasting it over
+    # the sampled times keeps both cases one array.
+    values = (np.asarray(base_gain, dtype=np.float64) * np.ones_like(times)
+              * nested_fade * parent_fade * float(parent_gain or 0.0))
+    points = tuple((float(t), float(v)) for t, v in zip(times, values))
+    return Segment(
+        start_seconds=float(start), end_seconds=float(end), source=segment.source,
+        rate=segment.rate, base_seconds=segment.base_seconds, speed=segment.speed,
+        direction=segment.direction, loop_start=segment.loop_start,
+        loop_length=segment.loop_length, gain=1.0, gain_points=points,
+        fade_in_seconds=0.0, fade_out_seconds=0.0,
+        transition_in=(tuple((bound + offset, end_, curve)
+                             for bound, end_, curve in (segment.transition_in,))
+                       if segment.transition_in else ()),
+        transition_out=(tuple((bound + offset, end_, curve)
+                              for bound, end_, curve in (segment.transition_out,))
+                        if segment.transition_out else ()),
+    )
+
+
+def build_segments(timeline, audio_for, rate, resolver=None, only_ids=None,
+                   compositions=None, _stack=()):
     """Build mixer segments for every audible clip that already has decoded audio.
 
     `resolver` is the engine's effect registry (``{key: effect}``); with it, a clip's
@@ -155,11 +220,37 @@ def build_segments(timeline, audio_for, rate, resolver=None, only_ids=None):
     effects audible in playback and present in the exported audio. `only_ids` restricts
     the result to those clips, which is how Auto Captions analyses one clip or one track
     instead of the whole mix.
+
+    A nested composition contributes its children's segments, shifted into the parent's
+    time by the composition clip's position, trimmed by its source in-point and scaled by
+    its speed. The composition clip is never also decoded as media, so its sound cannot
+    play twice.
     """
     allowed = set(only_ids) if only_ids is not None else None
+    stack = set(_stack or ())
     segments = []
     for clip, gain in audible_clips(timeline):
         if allowed is not None and clip.id not in allowed:
+            continue
+        if getattr(clip, "is_composition", False):
+            library = compositions
+            comp = library.get(clip.composition_id) if library is not None else None
+            if comp is None or comp.id in stack:
+                continue
+            speed = float(getattr(clip, "speed", 1.0) or 1.0)
+            if speed <= 0 or getattr(clip, "reverse", False):
+                # A reversed or frozen nested mix would need its whole child mix reversed;
+                # leaving it silent is honest, and the picture still renders.
+                continue
+            nested = build_segments(comp.timeline, audio_for, rate, resolver,
+                                    None, library, stack | {comp.id})
+            offset = clip.timeline_start / float(timeline.fps or 30.0)
+            offset -= (float(clip.source_in) / float(comp.fps or timeline.fps or 30.0)) / speed
+            for segment in nested:
+                remapped = _remap_nested_segment(segment, offset, speed, gain, clip,
+                                                 timeline.fps, rate)
+                if remapped is not None:
+                    segments.append(remapped)
             continue
         samples = audio_for(clip.source_path)
         samples = processed_samples(clip, samples, rate, resolver, timeline.fps)
@@ -170,10 +261,20 @@ def build_segments(timeline, audio_for, rate, resolver=None, only_ids=None):
     return segments
 
 
-def missing_audio_paths(timeline, audio_for):
+def missing_audio_paths(timeline, audio_for, compositions=None, _stack=()):
     """Audible sources whose audio has not been decoded yet (drives background loads)."""
     pending = []
+    stack = set(_stack or ())
     for clip, _gain in audible_clips(timeline):
+        if getattr(clip, "is_composition", False):
+            comp = compositions.get(clip.composition_id) if compositions is not None else None
+            if comp is None or comp.id in stack:
+                continue
+            for path in missing_audio_paths(comp.timeline, audio_for, compositions,
+                                            stack | {comp.id}):
+                if path not in pending:
+                    pending.append(path)
+            continue
         if wants_audio(clip.source_path) and audio_for(clip.source_path) is None:
             if clip.source_path not in pending:
                 pending.append(clip.source_path)
