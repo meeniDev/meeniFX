@@ -24,9 +24,9 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 MANIFEST = "manifest.json"
 # Bumped whenever the compositor's output changes for the same project, so frames rendered
-# by an older build are re-rendered instead of shown. 2: the picture covers its letterbox
-# rect exactly and warps no longer smear the transparent margin into a black band.
-CACHE_VERSION = 2
+# by an older build are re-rendered instead of shown. 3: generated text/shapes are
+# rasterised at their transformed density and animated text keeps BGRA channel order.
+CACHE_VERSION = 3
 
 
 def scale_key(scale):

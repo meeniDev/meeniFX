@@ -111,6 +111,44 @@ def apply_transform(layer, rect, state, project_size, scale=1.0):
                           borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
 
 
+def apply_transform_detail(layer, origin, detail, state, project_size, scale, output_size):
+    """Warp a high-detail generated crop into the output frame.
+
+    `layer` is a crop of a generated layer rasterised at `detail` pixels per project
+    unit; `origin` is the project-space point at its top-left pixel. The generated
+    content is therefore sampled at its destination density instead of being drawn at
+    the preview scale and then enlarged by the transform.
+    """
+    if layer is None:
+        return None
+    width, height = max(1, int(output_size[0])), max(1, int(output_size[1]))
+    detail = max(1e-6, float(detail))
+    if (layer.shape[1], layer.shape[0]) == (width, height) and state.is_identity() \
+            and abs(detail - float(scale)) < 1e-6 and abs(origin[0]) < 1e-6 \
+            and abs(origin[1]) < 1e-6:
+        return layer
+    pw, ph = float(project_size[0]), float(project_size[1])
+    theta = math.radians(state.rotation)
+    cos_t, sin_t = math.cos(theta), math.sin(theta)
+    sx = state.scale_x / 100.0 * (-1.0 if state.flip_h else 1.0)
+    sy = state.scale_y / 100.0 * (-1.0 if state.flip_v else 1.0)
+    if abs(sx) < 1e-4:
+        sx = 1e-4 if sx >= 0 else -1e-4
+    if abs(sy) < 1e-4:
+        sy = 1e-4 if sy >= 0 else -1e-4
+    center = np.array([(pw - 1.0) / 2.0, (ph - 1.0) / 2.0])
+    target = center + np.array([state.position_x, state.position_y])
+    anchor = center + np.array([state.anchor_x, state.anchor_y])
+    linear = np.array([[cos_t * sx, -sin_t * sy], [sin_t * sx, cos_t * sy]], dtype=np.float64)
+    offset = linear @ (np.array(origin, dtype=np.float64) - anchor) + target
+    factor = float(scale) / detail
+    matrix = np.array([[linear[0, 0] * factor, linear[0, 1] * factor, offset[0] * scale],
+                       [linear[1, 0] * factor, linear[1, 1] * factor, offset[1] * scale]],
+                      dtype=np.float64)
+    return gpu.warp_affine(layer, matrix, (width, height), flags=cv2.INTER_LINEAR,
+                          borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+
+
 def preset_look(layer, blur=0.0, hue=0.0, light=0.0):
     """Whole-clip preset post: blur, hue rotation and a brightness lift on a BGRA layer.
 

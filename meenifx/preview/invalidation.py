@@ -77,6 +77,23 @@ def _text(clip):
     return text_keys + "|" + settings
 
 
+def _shape(clip):
+    """Shape geometry, colours and their keys all change the generated pixels."""
+    data = getattr(clip, "shape", None)
+    if not isinstance(data, dict):
+        return ""
+    parts = []
+    for name in sorted(data):
+        value = data[name]
+        if isinstance(value, dict):
+            keys = value.get("keys") or {}
+            parts.append(f"{name}=" + ",".join(
+                f"{int(frame)}:{colour!r}" for frame, colour in sorted(keys.items())))
+        else:
+            parts.append(f"{name}={_animated(value)}")
+    return ";".join(parts)
+
+
 def _presets(clip):
     """The preset instances are part of the picture, so they are part of the digest."""
     from ..model import presets as preset_model
@@ -107,6 +124,7 @@ def clip_digest(clip):
         _transform(clip),
         _effects(clip),
         _text(clip),
+        _shape(clip),
         _presets(clip),
         # How the layer is composited changes the picture just as much as its effects.
         str(getattr(clip, "blend", "normal")),
@@ -166,8 +184,17 @@ def changed_ranges(old, new):
     return ranges
 
 
-def fingerprint(timeline):
-    """Stable hash of the whole timeline, used to validate a disk cache on reopen."""
+def fingerprint(timeline, project_size=None, background=None):
+    """Stable hash of the timeline and output format, for validating a disk cache on reopen.
+
+    The same timeline rendered at another project size is a different picture, so the
+    project dimensions (and the background behind transparent areas) are part of the
+    fingerprint rather than only of the preview scale key.
+    """
     digests = timeline_digests(timeline)
     raw = "|".join(f"{clip_id}:{digests[clip_id][0]}" for clip_id in sorted(digests))
+    if project_size is not None:
+        raw += f"|size={int(project_size[0])}x{int(project_size[1])}"
+    if background is not None:
+        raw += "|bg=" + ",".join(str(int(channel)) for channel in background)
     return hashlib.blake2b(raw.encode("utf-8"), digest_size=16).hexdigest()

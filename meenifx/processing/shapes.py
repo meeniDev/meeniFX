@@ -227,6 +227,46 @@ def _resize(mask, width, height):
     return cv2.resize(mask, (width, height), interpolation=interpolation)
 
 
+def bounds(spec, project_w, project_h):
+    """(x, y, width, height) of the shape's visible geometry in project pixels.
+
+    The rendered layer is intentionally full-frame, so the overlay cannot use the
+    picture's dimensions as the object's box. This is the actual drawn extent: the
+    shape's centred width/height box plus the stroke, cap or arrow that reaches beyond
+    it. It is pure geometry (no rasterisation), so painting the overlay stays cheap.
+    """
+    project_w, project_h = max(1.0, float(project_w)), max(1.0, float(project_h))
+    width = max(1.0, float(spec.get("width", 1.0)))
+    height = max(1.0, float(spec.get("height", 1.0)))
+    kind = str(spec.get("kind") or "rectangle")
+    stroke = float(spec.get("stroke_width", 0.0)) if spec.get("stroke_enabled") else 0.0
+    x = (project_w - width) / 2.0
+    y = (project_h - height) / 2.0
+
+    if kind == "line":
+        # A line is drawn along the middle of its box, not over the box's height.
+        thickness = max(0.5, stroke)
+        centre_y = y + height / 2.0
+        left, right = x, x + width
+        if spec.get("cap") in ("round", "square"):
+            left -= thickness / 2.0
+            right += thickness / 2.0
+        half = thickness / 2.0
+        if spec.get("arrow_start") or spec.get("arrow_end"):
+            # Arrowheads are wider than the line but stay inside its endpoints.
+            half = max(half, thickness * 1.35)
+        return left, centre_y - half, right - left, half * 2.0
+
+    if stroke > 0.0:
+        align = str(spec.get("align") or "center")
+        grow = stroke if align == "outside" else (0.0 if align == "inside" else stroke / 2.0)
+        x -= grow
+        y -= grow
+        width += grow * 2.0
+        height += grow * 2.0
+    return x, y, width, height
+
+
 def _cache_key(spec, project_w, project_h, scale):
     def clean(value):
         if isinstance(value, bool):
@@ -243,13 +283,32 @@ def clear_cache():
     _TILE_CACHE.clear()
 
 
-def render(spec, width, height, scale=1.0):
-    """A (height, width, 4) BGRA uint8 layer with the shape drawn on transparency."""
+def _view(width, height, crop):
+    """(x, y, w, h) of the part of a render we actually need."""
+    if not crop:
+        return 0, 0, width, height
+    try:
+        x, y, w, h = (int(round(float(value))) for value in crop)
+    except (TypeError, ValueError):
+        return 0, 0, width, height
+    x = max(0, min(width - 1, x))
+    y = max(0, min(height - 1, y))
+    return x, y, max(1, min(width - x, w)), max(1, min(height - y, h))
+
+
+def render(spec, width, height, scale=1.0, crop=None):
+    """A BGRA uint8 layer with the shape drawn on transparency.
+
+    `crop` selects a (x, y, w, h) window of the full render. A transformed generated
+    layer is rasterised at the density it will occupy on screen, but only over the
+    window that can reach the output: a 1000 % shape no longer allocates a 10x frame.
+    """
     width, height = max(1, int(width)), max(1, int(height))
-    canvas = np.zeros((height, width, 4), dtype=np.uint8)
+    view_x, view_y, canvas_w, canvas_h = _view(width, height, crop)
+    canvas = np.zeros((canvas_h, canvas_w, 4), dtype=np.uint8)
     if spec is None:
         return canvas
-    scale = max(0.02, min(1.0, float(scale)))
+    scale = max(0.02, float(scale))
     project_w = width / scale
     project_h = height / scale
     key = _cache_key(spec, project_w, project_h, scale)
@@ -264,9 +323,13 @@ def render(spec, width, height, scale=1.0):
     if tile is None:
         return canvas
     tile_h, tile_w = tile.shape[:2]
-    left = max(0, min(width - 1, int(left)))
-    top = max(0, min(height - 1, int(top)))
-    right = min(width, left + tile_w)
-    bottom = min(height, top + tile_h)
-    canvas[top:bottom, left:right] = tile[:bottom - top, :right - left]
+    src_x = max(0, view_x - int(left))
+    src_y = max(0, view_y - int(top))
+    dst_x = max(0, int(left) - view_x)
+    dst_y = max(0, int(top) - view_y)
+    span_w = min(tile_w - src_x, canvas_w - dst_x)
+    span_h = min(tile_h - src_y, canvas_h - dst_y)
+    if span_w > 0 and span_h > 0:
+        canvas[dst_y:dst_y + span_h, dst_x:dst_x + span_w] = \
+            tile[src_y:src_y + span_h, src_x:src_x + span_w]
     return canvas

@@ -1,5 +1,6 @@
 """Toolkit-independent media, effect, frame composition and export orchestration."""
 
+import math
 import os
 import threading
 
@@ -400,6 +401,105 @@ class EditorEngine:
             return None, None
         return layer_ops.fit_layer(src, self.project_size(), scale)
 
+    def _render_generated(self, clip, local, scale, state, effect, spec=None):
+        """Rasterise a shape/text at the density its transform will occupy.
+
+        Generated layers used to be drawn on a full frame at the preview scale and then
+        enlarged by ``apply_transform``. A 24 px title at 1000 % was therefore a 24 px
+        bitmap stretched to 240 px. This path keeps the geometry vector and renders only
+        the project-space window that can reach the output, at (up to) the destination
+        density, before the affine transform places it.
+        """
+        pw, ph = self.project_size()
+        render_w, render_h = layer_ops.render_size((pw, ph), scale)
+        if spec is None:
+            spec = (shape_model.resolve(clip, local) if clip.is_shape
+                    else text_model.resolve(clip, local))
+        if clip.is_shape:
+            box = shape_render.bounds(spec, pw, ph)
+            margin = max(4.0, float(spec.get("stroke_width", 0.0) or 0.0) * 2.0 + 4.0)
+        else:
+            box = text_render.bounds(spec, render_w, render_h, scale)
+            if box is None:
+                return None
+            box = (box[0] / scale, box[1] / scale, box[2] / scale, box[3] / scale)
+            margin = max(8.0, (abs(float(spec.get("shadow_offset_x", 0.0) or 0.0))
+                               + abs(float(spec.get("shadow_offset_y", 0.0) or 0.0))
+                               + float(spec.get("shadow_blur", 0.0) or 0.0) * 3.0
+                               + float(spec.get("blur", 0.0) or 0.0) * 3.0))
+        if box is None:
+            return None
+        x0 = max(0.0, float(box[0]) - margin)
+        y0 = max(0.0, float(box[1]) - margin)
+        x1 = min(float(pw), float(box[0]) + max(1.0, float(box[2])) + margin)
+        y1 = min(float(ph), float(box[1]) + max(1.0, float(box[3])) + margin)
+        if x1 - x0 < 1.0 or y1 - y0 < 1.0:
+            return None
+
+        # A rotation can move a shape's corners outside its untransformed box. Work
+        # backwards from the output frame instead of assuming the source box is enough:
+        # the source pixels that can reach the frame are the inverse transform of its
+        # four corners. Intersecting with the shape's own box keeps the crop small while
+        # preserving every corner that is still visible.
+        try:
+            theta = math.radians(float(state.rotation))
+            cos_t, sin_t = math.cos(theta), math.sin(theta)
+            sx_state = float(state.scale_x) / 100.0 * (-1.0 if state.flip_h else 1.0)
+            sy_state = float(state.scale_y) / 100.0 * (-1.0 if state.flip_v else 1.0)
+            if abs(sx_state) < 1e-4:
+                sx_state = 1e-4 if sx_state >= 0 else -1e-4
+            if abs(sy_state) < 1e-4:
+                sy_state = 1e-4 if sy_state >= 0 else -1e-4
+            centre = np.array([(pw - 1.0) / 2.0, (ph - 1.0) / 2.0])
+            target = centre + np.array([float(state.position_x), float(state.position_y)])
+            anchor = centre + np.array([float(state.anchor_x), float(state.anchor_y)])
+            linear = np.array([[cos_t * sx_state, -sin_t * sy_state],
+                               [sin_t * sx_state, cos_t * sy_state]], dtype=np.float64)
+            offset = target - linear @ anchor
+            inverse = np.linalg.inv(np.array([[linear[0, 0], linear[0, 1], offset[0]],
+                                              [linear[1, 0], linear[1, 1], offset[1]],
+                                              [0.0, 0.0, 1.0]], dtype=np.float64))
+            corners = np.array([[0.0, 0.0, 1.0], [pw, 0.0, 1.0],
+                                [pw, ph, 1.0], [0.0, ph, 1.0]], dtype=np.float64)
+            source_corners = corners @ inverse.T
+            x0 = max(x0, float(source_corners[:, 0].min()))
+            y0 = max(y0, float(source_corners[:, 1].min()))
+            x1 = min(x1, float(source_corners[:, 0].max()))
+            y1 = min(y1, float(source_corners[:, 1].max()))
+        except (ValueError, np.linalg.LinAlgError):
+            pass
+        if x1 - x0 < 1.0 or y1 - y0 < 1.0:
+            return None
+
+        # A transform can enlarge the generated picture by 10x or more. Render at that
+        # density, but cap the temporary crop so an off-screen title cannot allocate a
+        # multi-gigabyte bitmap; the cap is still at or above output resolution.
+        sx = abs(float(state.scale_x)) / 100.0
+        sy = abs(float(state.scale_y)) / 100.0
+        detail = max(scale, scale * max(1.0, sx, sy))
+        span_w, span_h = max(1.0, x1 - x0), max(1.0, y1 - y0)
+        side_cap = max(render_w, render_h) * 2.0
+        detail = min(detail, side_cap / max(span_w, span_h))
+        detail = min(detail, math.sqrt(32_000_000.0 / (span_w * span_h)))
+        detail = max(0.05, detail)
+
+        virtual_w = max(1, int(round(pw * detail)))
+        virtual_h = max(1, int(round(ph * detail)))
+        crop = (max(0, int(round(x0 * detail))), max(0, int(round(y0 * detail))),
+                max(1, int(round((x1 - x0) * detail))),
+                max(1, int(round((y1 - y0) * detail))))
+        if clip.is_shape:
+            layer = shape_render.render(spec, virtual_w, virtual_h, detail, crop=crop)
+        else:
+            layer = text_render.render(spec, virtual_w, virtual_h, detail,
+                                       poses=effect.unit_poses if clip.is_text else None,
+                                       crop=crop)
+        if layer is None or not layer.any():
+            return None
+        return layer_ops.apply_transform_detail(
+            layer, (crop[0] / detail, crop[1] / detail), detail, state,
+            (pw, ph), scale, (render_w, render_h))
+
     def _render_composition_frame(self, comp, frame_no, scale=1.0):
         """Render one composition definition at its own native size.
 
@@ -511,14 +611,6 @@ class EditorEngine:
                     units = text_unit_render.layout_units(spec, width, height, scale)
                 effect = preset_model.evaluate(clip, local, units=units,
                                                project_size=self.project_size())
-            # Sample the *held* moment, so posterize time and stutter really do freeze
-            # the picture instead of only freezing the effect parameters.
-            layer, rect = self._layer_for(clip, clip.timeline_start + local, scale,
-                                          effect.unit_poses if clip.is_text else None, spec)
-            if layer is None:
-                continue
-            layer = self.apply_effects_layer(layer, clip.effects, local, scale,
-                                             self.track_type_of(clip), clip=clip, rect=rect)
             state = transforms.evaluate(clip, local)
             pose = effect.pose
             if not pose.is_identity():
@@ -532,7 +624,35 @@ class EditorEngine:
                     rotation=state.rotation + pose.rotation,
                     anchor_x=state.anchor_x, anchor_y=state.anchor_y,
                     opacity=state.opacity, flip_h=state.flip_h, flip_v=state.flip_v)
-            layer = layer_ops.apply_transform(layer, rect, state, self.project_size(), scale)
+            # Generated layers can be rasterised at their final density. Effects need a
+            # full-frame layer, so a generated clip with an active effect keeps the
+            # established (effect first, transform second) path.
+            if clip.is_shape or clip.is_text:
+                layer = self._render_generated(clip, local, scale, state, effect, spec)
+                if layer is None:
+                    continue
+                # Generated layers are already transformed, so their effects belong in
+                # output space: a blur is the same number of pixels in the preview and
+                # the export, and it cannot enlarge a low-resolution bitmap again. A
+                # media clip keeps the historical effect-then-transform order because
+                # its source pixels come from the frame itself.
+                if clip.effects:
+                    layer = self.apply_effects_layer(
+                        layer, clip.effects, local, scale, self.track_type_of(clip),
+                        clip=clip, rect=(0, 0, layer.shape[1], layer.shape[0]))
+            else:
+                # Sample the *held* moment, so posterize time and stutter really do
+                # freeze the picture instead of only freezing the effect parameters.
+                layer, rect = self._layer_for(clip, clip.timeline_start + local, scale,
+                                              effect.unit_poses if clip.is_text else None,
+                                              spec)
+                if layer is None:
+                    continue
+                layer = self.apply_effects_layer(layer, clip.effects, local, scale,
+                                                 self.track_type_of(clip), clip=clip,
+                                                 rect=rect)
+                layer = layer_ops.apply_transform(layer, rect, state,
+                                                  self.project_size(), scale)
             if not pose.is_identity():
                 layer = layer_ops.preset_look(layer, pose.blur * scale, pose.hue, pose.light)
             opacity = transforms.opacity_at(clip, local) * clip.fade_gain_at(frame_no) * pose.opacity

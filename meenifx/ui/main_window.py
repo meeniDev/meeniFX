@@ -1681,6 +1681,15 @@ class MainWindow(QMainWindow):
         # Interactive work is over: let background rendering resume and quietly fill the
         # frames just after the playhead for the next play.
         self.renderer.finish_playback(); self.renderer.cancel_interactive()
+        # Auto may have reduced the scale to keep playback real-time. That is a playback
+        # concession, never the quality of the paused picture: drop back to the panel fit
+        # and repaint the current frame at full detail.
+        if getattr(self, "_quality_label", "Auto") == "Auto":
+            self._auto_scale = None
+        # App shutdown calls stop_playback too; there is no point starting a render
+        # against widgets that are about to be destroyed.
+        if not getattr(self, "_closing", False):
+            self._request_preview()
         self._prefetch_timer.start()
         if self._camera is not None:self._camera.release(); self._camera=None
         self.bridge.status.emit("Preview stopped")
@@ -2053,7 +2062,8 @@ class MainWindow(QMainWindow):
         if folder==self.frame_cache.folder:
             return
         self._cache_dir=folder
-        self.frame_cache.open_folder(folder,fingerprint(self.engine.timeline))
+        self.frame_cache.open_folder(folder,fingerprint(
+            self.engine.timeline,self.engine.project_size(),self.engine.background_bgr))
         self._on_cache_changed()
 
     def _on_project_changed(self):
@@ -2069,8 +2079,9 @@ class MainWindow(QMainWindow):
     def _on_project_saved(self):
         """Stamp the cache folder so a later open can reuse these frames."""
         if self.frame_cache.folder:
-            self.frame_cache.write_manifest(fingerprint(self.engine.timeline),
-                                            {"fps":self.engine.timeline.fps})
+            self.frame_cache.write_manifest(fingerprint(
+                self.engine.timeline,self.engine.project_size(),self.engine.background_bgr),
+                {"fps":self.engine.timeline.fps})
 
     # ------------------------------------------------------------ transform tools
     # ------------------------------------------------------------------- text clips
@@ -2430,7 +2441,9 @@ class MainWindow(QMainWindow):
         return (self.engine.project_size() or (1920,1080))
 
     def closeEvent(self,event):
+        self._closing=True
         if not self.projects.maybe_save():
+            self._closing=False
             event.ignore(); return
         self.stop_playback(); self.audio.stop()
         # Finish or drop the browser's thumbnail jobs before the widgets go away.

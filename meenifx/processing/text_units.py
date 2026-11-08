@@ -171,7 +171,11 @@ def _stamp_key(spec, glyph_text, scale):
 
 
 def stamp(spec, glyph_text, scale):
-    """(RGBA bitmap, ox, oy) of one glyph with its stroke and shadow, cached.
+    """(BGRA bitmap, ox, oy) of one glyph with its stroke and shadow, cached.
+
+    The caller composites into a BGRA layer, so the RGBA bitmap Pillow produces is
+    converted once here. Returning it as RGBA made every animated glyph swap red and
+    blue (and made the hue rotation read the wrong channels).
 
     ox/oy is where the bitmap's top-left corner sits when the glyph is drawn at (0, 0)
     with Pillow's "la" anchor - the same origin the static renderer uses.
@@ -220,7 +224,8 @@ def stamp(spec, glyph_text, scale):
         underline_y = -top + ascent + descent * 0.35
         painter.rectangle([-left, underline_y, -left + max(1.0, font.getlength(glyph_text)),
                            underline_y + thickness], fill=fill)
-    result = (np.asarray(image, dtype=np.uint8).copy(), left, top)
+    rgba = np.asarray(image, dtype=np.uint8)
+    result = (rgba[:, :, [2, 1, 0, 3]].copy(), left, top)
     if len(_STAMP_CACHE) > _STAMP_LIMIT:
         _STAMP_CACHE.clear()
     _STAMP_CACHE[key] = result
@@ -297,22 +302,30 @@ def _blend(layer, bitmap, x, y, opacity):
         [rgb, out_alpha * 255.0], axis=2).astype(np.uint8)
 
 
-def render(spec, width, height, scale=1.0, poses=None):
-    """A BGRA text layer with the per-unit animation applied; None when there is no text."""
+def render(spec, width, height, scale=1.0, poses=None, crop=None):
+    """A BGRA text layer with the per-unit animation applied; None when there is no text.
+
+    `crop` limits the allocation to an (x, y, w, h) window of the full canvas, exactly
+    like :func:`meenifx.processing.text.render`, so transformed text can be rasterised
+    at its destination density without allocating a frame at that density.
+    """
     width, height = max(1, int(width)), max(1, int(height))
     scale = max(0.05, float(scale))
+    from .text import _view
+    view_x, view_y, canvas_w, canvas_h = _view(width, height, crop)
     built = layout(spec, width, height, scale)
     if built is None:
         return None
-    layer = np.zeros((height, width, 4), dtype=np.uint8)
+    layer = np.zeros((canvas_h, canvas_w, 4), dtype=np.uint8)
     # The background plate holds still while the glyphs animate.
     plate_alpha = float(spec.get("bg_opacity", 0.0))
     if plate_alpha > 0.001:
         pad = max(0.0, float(spec.get("bg_padding", 0.0)) * scale)
         block_h = built["line_height"] * len(built["lines"]) + built["gap"] * (len(built["lines"]) - 1)
-        rect = [built["left"] - pad, built["top"] - pad,
-                built["left"] + built["block_w"] + pad, built["top"] + block_h + pad]
-        plate = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        rect = [built["left"] - pad - view_x, built["top"] - pad - view_y,
+                built["left"] + built["block_w"] + pad - view_x,
+                built["top"] + block_h + pad - view_y]
+        plate = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
         ImageDraw.Draw(plate).rectangle(rect, fill=_colour(spec.get("bg_color"),
                                                            int(255 * plate_alpha)))
         layer = np.asarray(plate, dtype=np.uint8).copy()[:, :, [2, 1, 0, 3]]
@@ -333,12 +346,13 @@ def render(spec, width, height, scale=1.0, poses=None):
             continue
         bitmap, ox, oy = stamp(spec, glyph_text, scale)
         if pose.is_identity():
-            _blend(layer, bitmap, glyph["x"] + ox, glyph["y"] + oy, fill_opacity)
+            _blend(layer, bitmap, glyph["x"] + ox - view_x,
+                   glyph["y"] + oy - view_y, fill_opacity)
             continue
         bitmap = _tint(bitmap, pose.hue, pose.light)
         unit_x = glyph["x"] + glyph["w"] / 2.0
         unit_y = glyph["y"] + built["line_height"] / 2.0
         warped, wx, wy = _warp(bitmap, (glyph["x"] + ox, glyph["y"] + oy),
                                (unit_x, unit_y), pose, scale)
-        _blend(layer, warped, wx, wy, pose.opacity)
+        _blend(layer, warped, wx - view_x, wy - view_y, pose.opacity)
     return np.ascontiguousarray(layer)

@@ -281,6 +281,10 @@ class ProjectController(QObject):
         """Install settings without converting clips (used by undo/redo, which restore clip times themselves)."""
         self.project.settings = settings
         self.w.engine.apply_project_settings(settings, self.project.folder)
+        # Output size and frame rate are part of every rendered frame. A cached frame
+        # from the previous settings has the wrong dimensions and timing, so it must not
+        # survive the change (including an undo or redo of that change).
+        self.w.frame_cache.clear(disk=True)
         self.update_title()
         self.project_changed.emit()
 
@@ -298,8 +302,10 @@ class ProjectController(QObject):
         self.project.settings = new
         session.playhead = int(round(session.playhead * engine.timeline.fps / max(1, old_fps)))
         self.w.qt_undo_stack.push_settings_change("Project settings", before, old, new, self._set_settings)
+        self.w.frame_cache.clear(disk=True)
         self.update_title()
         self.w.preview_panel.view.set_frame(engine.blank_frame(), frame_key=None, logical_size=engine.project_size())
+        self.w._request_preview()
         self.project_changed.emit()
         return True
 
