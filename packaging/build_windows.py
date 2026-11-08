@@ -77,7 +77,7 @@ def build(skip_installer=False, clean=True):
     for path in assets:
         print(f"Asset:   {path}")
     print(f"Sums:    {sums}")
-    if setup is None:
+    if setup is None and not skip_installer:
         raise SystemExit("The Windows installer was not produced (ISCC is required).")
     return assets, sums
 
