@@ -3549,7 +3549,8 @@ class TimelineCanvas(QWidget):
         keys.addAction("Duplicate Selected (Ctrl+Shift+D)", self.duplicate_selected_keyframes)
         keys.addAction("Delete Selected", self._delete_selected_keyframes)
         keys.addSeparator()
-        keys.addAction("Open Keyframe Editor", self.keyframe_editor_requested.emit([]))
+        keys.addAction("Open Keyframe Editor",
+                       lambda: self.keyframe_editor_requested.emit([]))
         open_graph = keys.addAction("Open Selection in Graph Editor",
                                     lambda: self.open_keyframes_in_graph(
                                         self.session.selected_key_entries()))

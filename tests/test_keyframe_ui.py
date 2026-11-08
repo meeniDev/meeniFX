@@ -262,3 +262,33 @@ def test_disabling_an_effect_rerenders_the_preview_immediately(editor, qapp):
     assert float(np.abs(base.astype(int) - changed.astype(int)).mean()) > 1.0, \
         "toggling an effect must reach the preview without another edit"
 
+
+def test_timeline_keyframes_menu_only_opens_the_editor_when_triggered(qapp, monkeypatch):
+    """Building the menu must not run its items.
+
+    The item was created with ``self.keyframe_editor_requested.emit([])``, so the emission
+    happened while the menu was being assembled: Qt rejected the None slot with a
+    TypeError and every right-click on an empty lane tried to open the editor.
+    """
+    from PyQt6.QtCore import QPoint
+    from PyQt6.QtWidgets import QMenu
+
+    from meenifx.ui.timeline_widget import TimelineCanvas
+
+    canvas = TimelineCanvas(build_engine(), None)
+    opened = []
+    canvas.keyframe_editor_requested.connect(opened.append)
+    shown = []
+    monkeypatch.setattr(QMenu, "exec", lambda menu, *args, **kwargs: shown.append(menu))
+
+    canvas._timeline_menu(QPoint(40, 40))
+    assert shown, "the empty-lane menu was not built"
+    assert opened == [], "assembling the menu must not open the editor"
+
+    keyframes = next(action.menu() for action in shown[0].actions()
+                     if action.menu() is not None and action.text() == "Keyframes")
+    item = next(action for action in keyframes.actions()
+                if action.text() == "Open Keyframe Editor")
+    item.trigger()
+    assert opened == [[]], "choosing the item opens the full editor"
+
