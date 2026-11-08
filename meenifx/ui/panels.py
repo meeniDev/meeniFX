@@ -520,12 +520,15 @@ class EffectsPanel(QWidget):
         gain = isinstance(clip.gain, AnimatedValue)
         shape_key = ()
         if clip.is_shape:
-            # The shape card is rebuilt when the kind changes or a switch (stroke, caps,
-            # arrowheads) flips; its numeric values are rows that follow the playhead.
-            shape_key = tuple(sorted(
-                (name, isinstance(value, AnimatedValue),
-                 str(value) if isinstance(value, (str, dict)) else value)
-                for name, value in SHAPE.ensure_shape(clip).items()))
+            # Only the shape's structure belongs in the rebuild key: its kind, whether the
+            # stroke controls are on, and which channels are animated. Numeric and colour
+            # values are painted by the existing rows, so editing them must never destroy
+            # and rebuild the panel (that is what used to jump the scroll position).
+            settings = SHAPE.ensure_shape(clip)
+            shape_key = (str(settings.get("kind") or "rectangle"),
+                         bool(settings.get("stroke_enabled")),
+                         tuple(sorted((name, isinstance(value, AnimatedValue))
+                                      for name, value in settings.items())))
         text_animation = ()
         if clip.is_text:
             animation = (clip.text or {}).get("animation") or {}
@@ -540,13 +543,27 @@ class EffectsPanel(QWidget):
                 gain, text_animation, shape_key, preset_rows)
 
     def refresh_properties(self):
-        """Rebuild only when the shape changed; otherwise just follow the playhead."""
+        """Rebuild only when the structure changed; otherwise just follow the playhead."""
         clips = self._selected_clips()
         key = self._structure_key(clips)
         self.refresh_effect_list()
         if key == self._built_key:
             self.sync_playhead()
             return
+        # A structural edit (or a selection change) really does need new widgets. Remember
+        # where the user was so the cards can be replaced without the panel jumping or
+        # dropping keyboard focus from the control being edited.
+        scroll = self.props_scroll.verticalScrollBar().value()
+        focus = QApplication.focusWidget()
+        focus_channel = None
+        if focus is not None and (focus is self.properties or self.properties.isAncestorOf(focus)):
+            widget = focus
+            while widget is not None and widget is not self:
+                channel = widget.property("propertyChannel")
+                if channel:
+                    focus_channel = channel
+                    break
+                widget = widget.parentWidget()
         self._built_key = key
         self._rows = []
         while self.properties_layout.count():
@@ -573,6 +590,16 @@ class EffectsPanel(QWidget):
         self._effect_cards(clip)
         self.properties_layout.addStretch(1)
         self.sync_playhead()
+        # Restore after the new cards have been laid out, never by forcing the panel to
+        # the top. The edited field itself is re-focused when it still exists.
+        bar = self.props_scroll.verticalScrollBar()
+        QTimer.singleShot(0, lambda b=bar, value=scroll: b.setValue(min(value, b.maximum())))
+        if focus_channel:
+            field = next((row.get("field") for row in self._rows
+                          if row.get("channel") == focus_channel and row.get("field") is not None),
+                         None)
+            if field is not None:
+                QTimer.singleShot(0, lambda f=field: f.setFocus(Qt.FocusReason.OtherFocusReason))
 
     def _clip(self):
         clips = self._selected_clips()
@@ -1234,6 +1261,7 @@ class EffectsPanel(QWidget):
                             step=max(1e-6, float(meta["step"])), unit=meta["unit"],
                             decimals=int(meta["decimals"]),
                             label_width=LABEL_W, tooltip=meta["label"])
+        field.setProperty("propertyChannel", channel)
         field.interaction_started.connect(self._begin_edit)
         field.edited.connect(lambda value, c=clip, ch=channel: self._set_channel(c, ch, value, True))
         field.committed.connect(lambda value, c=clip, ch=channel: self._commit_channel(c, ch, value))
@@ -2340,6 +2368,11 @@ class EffectsPanel(QWidget):
             elif kind == "color":
                 if any(row["entry"] is e for e in clip.effects):
                     set_swatch(row["button"], self._entry_color(clip, row["entry"]))
+            elif kind == "shape_color":
+                set_swatch(row["button"], SHAPE.color_at(clip, row["name"], local))
+                row["key"].blockSignals(True)
+                row["key"].setChecked(SHAPE.has_color_key(clip, row["name"], local))
+                row["key"].blockSignals(False)
             elif kind == "channel":
                 animated = CH.is_animated(clip, row["channel"])
                 row["stopwatch"].blockSignals(True)

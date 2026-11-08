@@ -309,6 +309,7 @@ class MainWindow(QMainWindow):
         self._menu_view.addAction("Save Layout As...",self.save_layout_preset)
         self._menu_view.addAction("Load Layout As...",self.load_layout_preset)
         help_menu=self.menuBar().addMenu("Help")
+        self._add_action(help_menu,"Getting Started",None,self.show_getting_started)
         self._add_action(help_menu,"Open sample project",None,lambda:self.projects.open_sample())
         self._add_action(help_menu,"Keyboard Shortcuts...",None,self.show_shortcuts)
         self._add_action(help_menu,"Check for Updates...",None,self.show_updates)
@@ -553,7 +554,7 @@ class MainWindow(QMainWindow):
         return False
 
     def _build_toolbar(self):
-        from PyQt6.QtWidgets import QMenu,QPushButton,QSizePolicy,QToolButton,QWidget
+        from PyQt6.QtWidgets import QHBoxLayout,QMenu,QPushButton,QSizePolicy,QToolButton,QWidget
         from .. import tokens
         from ..icons import icon
         toolbar=QToolBar("Main",self); toolbar.setMovable(False); toolbar.setObjectName("mainToolbar")
@@ -595,15 +596,25 @@ class MainWindow(QMainWindow):
         self.shape_button.setIcon(icon(SHAPE.ICONS["rectangle"]))
         self.shape_button.setFixedSize(tokens.CONTROL_H,tokens.CONTROL_H)
         self.shape_button.setCheckable(True)
-        self.shape_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         self.shape_button.setToolTip("Shape tool: pick a shape, then drag in the preview to draw it")
-        shape_picker=QMenu(self.shape_button)
+        shape_picker=QMenu(self)
         for kind in SHAPE.KINDS:
             shape_picker.addAction(icon(SHAPE.ICONS[kind]),SHAPE.LABELS[kind],
                                    lambda _checked=False,k=kind:self._start_shape_tool(k))
-        self.shape_button.setMenu(shape_picker)
+        # A split button has two glyphs that need their own space: the shape itself and
+        # the disclosure arrow. Keeping them as two real controls avoids the menu
+        # indicator ever painting over the icon at any DPI or toolbar height.
+        self.shape_menu_button=QToolButton(); self.shape_menu_button.setProperty("role","icon")
+        self.shape_menu_button.setIcon(icon("chevron_down"))
+        self.shape_menu_button.setToolTip("Choose a shape")
+        self.shape_menu_button.setFixedSize(tokens.CONTROL_H - 6,tokens.CONTROL_H)
+        self.shape_menu_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.shape_menu_button.setMenu(shape_picker)
+        shape_holder=QWidget()
+        shape_row=QHBoxLayout(shape_holder); shape_row.setContentsMargins(0,0,0,0); shape_row.setSpacing(0)
+        shape_row.addWidget(self.shape_button); shape_row.addWidget(self.shape_menu_button)
         self.shape_button.clicked.connect(lambda _=False:self._start_shape_tool(self._shape_kind))
-        toolbar.addWidget(self.shape_button)
+        toolbar.addWidget(shape_holder)
         self.captions_button=QToolButton(); self.captions_button.setProperty("role","icon")
         self.captions_button.setIcon(icon("captions")); self.captions_button.setFixedSize(tokens.CONTROL_H,tokens.CONTROL_H)
         self.captions_button.setToolTip("Generate Auto Captions from the audio")
@@ -639,6 +650,7 @@ class MainWindow(QMainWindow):
         def refresh_icons(_toolbar):
             for button,name in icon_names: button.setIcon(icon(name))
             self.shape_button.setIcon(icon(SHAPE.ICONS.get(self._shape_kind,"shape_rectangle")))
+            self.shape_menu_button.setIcon(icon("chevron_down"))
             self.record_button.setIcon(icon("record",tokens.COLORS["red"]))
         from .themed import bind_theme
         bind_theme(toolbar,refresh_icons)
@@ -1028,6 +1040,31 @@ class MainWindow(QMainWindow):
             self.bridge.status.emit("Select a marker on the ruler first (click it, or press M to add one)")
             return
         self.timeline_panel.canvas.rename_marker(markers[0])
+
+    def tutorial_target(self,key):
+        """The real widget a tour page points at, when it is currently on screen."""
+        targets={"project":self.project_panel,"timeline":self.timeline_panel,
+                 "preview":self.preview_panel,"effects":self.effects_panel,
+                 "properties":self.effects_panel.props_scroll,"export":self.export_button}
+        widget=targets.get(key)
+        return widget if widget is not None and widget.isVisible() else None
+
+    def show_getting_started(self):
+        """Open the tour on demand; Help ignores the completed flag."""
+        from .onboarding import OnboardingDialog
+        dialog=getattr(self,"_onboarding_dialog",None)
+        if dialog is None:
+            dialog=OnboardingDialog(self)
+            self._onboarding_dialog=dialog
+        dialog.restart()
+
+    def maybe_show_onboarding(self):
+        """Show the first-launch tour once, and only when the editor is usable."""
+        if not self.isVisible():
+            return
+        from .onboarding import has_completed
+        if not has_completed():
+            self.show_getting_started()
 
     def show_markers_list(self):
         """View > Markers List: a small non-modal window; double-click jumps to a marker."""
@@ -1840,8 +1877,11 @@ class MainWindow(QMainWindow):
         if not region:
             return int(lo),int(hi)
         timeline=self.engine.timeline
-        if bool(timeline.loop_enabled) and timeline.loop_end>timeline.loop_start:
-            return int(timeline.loop_start),int(timeline.loop_end)
+        if (bool(timeline.loop_enabled) and timeline.loop_in is not None
+                and timeline.loop_out is not None):
+            start,end=sorted((int(timeline.loop_in),int(timeline.loop_out)))
+            if end>start:
+                return start,end
         spans=[(int(clip.timeline_start),int(clip.end)) for clip in
                (timeline.find_clip(cid) for cid in sorted(self.engine.session.selected))
                if clip is not None]

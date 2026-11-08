@@ -192,14 +192,32 @@ def build_stylesheet():
                                        selection-background-color: {c['accent_fill']}; selection-color: #FFFFFF; }}
         QComboBox QAbstractItemView::item {{ min-height: 24px; padding: 2px 8px; border-radius: {RADIUS_SM}px; }}
         QComboBox QAbstractItemView::item:hover {{ background: {c['accent_soft']}; color: {c['popup_text']}; }}
+        /* The popup delegate must paint the selected row itself: platform palettes use a
+           dark highlight here and can leave the (also dark) text unreadable. */
+        QComboBox QAbstractItemView::item:selected,
+        QComboBox QAbstractItemView::item:selected:hover,
+        QComboBox QAbstractItemView::item:selected:focus {{ background: {c['accent_fill']}; color: #FFFFFF; }}
+        QComboBox QAbstractItemView::item:disabled {{ color: {c['disabled']}; }}
+        QComboBox QAbstractItemView::item:selected:disabled {{ background: {c['border']}; color: {c['disabled']}; }}
 
         /* Lists and trees */
         QListWidget, QListView, QTreeWidget, QTreeView {{ background: {c['panel_alt']}; border: 1px solid {c['border']};
                                   border-radius: {RADIUS}px; selection-background-color: {c['accent_fill']};
                                   selection-color: #FFFFFF; outline: 0; }}
-        QListWidget::item, QTreeWidget::item {{ border-radius: {RADIUS_SM}px; padding: 2px; }}
-        QListWidget::item:hover, QTreeWidget::item:hover {{ background: {c['accent_soft']}; color: {c['text']}; }}
-        QListWidget::item:selected, QTreeWidget::item:selected {{ background: {c['accent_fill']}; color: #FFFFFF; }}
+        QListWidget::item, QTreeWidget::item, QListView::item, QTreeView::item {{
+            border-radius: {RADIUS_SM}px; padding: 2px; }}
+        QListWidget::item:hover, QTreeWidget::item:hover,
+        QListView::item:hover, QTreeView::item:hover {{ background: {c['accent_soft']}; color: {c['text']}; }}
+        QListWidget::item:selected, QTreeWidget::item:selected,
+        QListView::item:selected, QTreeView::item:selected,
+        QListView::item:selected:active, QTreeView::item:selected:active,
+        QListView::item:selected:!active, QTreeView::item:selected:!active {{
+            background: {c['accent_fill']}; color: #FFFFFF; }}
+        QListWidget::item:disabled, QTreeWidget::item:disabled,
+        QListView::item:disabled, QTreeView::item:disabled {{ color: {c['disabled']}; }}
+        QListWidget::item:selected:disabled, QTreeWidget::item:selected:disabled,
+        QListView::item:selected:disabled, QTreeView::item:selected:disabled {{
+            background: {c['border']}; color: {c['disabled']}; }}
         QHeaderView::section {{ background: {c['panel_soft']}; color: {c['muted']}; border: 0; padding: 4px 8px; }}
 
         /* Cards and groups */

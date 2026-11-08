@@ -156,6 +156,9 @@ class AppController:
             self.window.show()
             self.window.raise_()
             self.window.activateWindow()
+            if not self.quiet_recents:
+                # The tour points at real panels, so wait until the editor is on screen.
+                QTimer.singleShot(650,self.window.maybe_show_onboarding)
 
     def open_project(self, path):
         ok = self.projects.open_path(path)

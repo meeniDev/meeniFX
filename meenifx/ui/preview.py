@@ -16,7 +16,7 @@ quality can only make the picture softer.
 import cv2
 import numpy as np
 from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QImage, QPainter, QPen
+from PyQt6.QtGui import QBrush, QColor, QImage, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QMenu, QSizePolicy, QToolButton,
                              QVBoxLayout, QWidget)
 
@@ -24,6 +24,7 @@ from .. import tokens
 from ..constants import MEDIA_MIME
 from ..icons import icon
 from .master_meter import MasterMeter
+from .themed import bind_theme
 
 # Preview quality choices -> render scale in percent (Auto is picked from the panel size).
 QUALITY_LABELS = ("Full", "1/2", "1/4", "1/8", "Auto")
@@ -50,7 +51,11 @@ class PreviewWidget(QWidget):
                          "Ctrl resizes proportionally from the centre, Shift from the "
                          "centre without a ratio lock. Side handles change one axis; drag "
                          "inside to move, the knob to rotate, the crosshair to move the anchor.")
-        self.setStyleSheet("#previewCanvas { background: #141617; border: 1px solid #34383A; }")
+        # Every colour is painted from the active tokens, so the workspace follows the
+        # theme instead of staying dark after a light-theme switch.
+        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
+        bind_theme(self, lambda w: w.update())
+        self._checker = None
         self._quality_getter = quality_getter or (lambda: 100)
         self._image = QImage()
         self._frame_size = (0, 0)      # logical/project size only
@@ -187,10 +192,29 @@ class PreviewWidget(QWidget):
         self._emit_zoom()
         super().resizeEvent(event)
 
+    def _checker_brush(self):
+        """A small themed checkerboard for transparent parts of the composition."""
+        key = (tokens.theme_name(), round(self.devicePixelRatioF(), 2))
+        if self._checker is not None and self._checker[0] == key:
+            return self._checker[1]
+        dpr = max(1.0, self.devicePixelRatioF())
+        tile = 12
+        pixmap = QPixmap(int(tile * 2 * dpr), int(tile * 2 * dpr))
+        pixmap.setDevicePixelRatio(dpr)
+        pixmap.fill(QColor(tokens.COLORS["panel_alt"]))
+        painter = QPainter(pixmap)
+        painter.fillRect(0, 0, tile, tile, QColor(tokens.COLORS["panel_soft"]))
+        painter.fillRect(tile, tile, tile, tile, QColor(tokens.COLORS["panel_soft"]))
+        painter.end()
+        self._checker = (key, QBrush(pixmap))
+        return self._checker[1]
+
     def paintEvent(self, _event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-        painter.fillRect(self.rect(), QColor("#141617"))
+        # The workspace around the composition follows the UI theme; the picture itself
+        # remains untouched and the transparent checkerboard lives only inside the frame.
+        painter.fillRect(self.rect(), QColor(tokens.COLORS["bg"]))
         if self._image.isNull() or not self._frame_size[0]:
             # Nothing to show yet, but the statistics are live: an empty timeline still
             # answers "is the overlay on?" instead of drawing nothing at all.
@@ -214,13 +238,14 @@ class PreviewWidget(QWidget):
         source_rect = QRectF(u0 * image_w, v0 * image_h, uw * image_w, vh * image_h)
         painter.save()
         painter.setClipRect(visible)
+        painter.fillRect(rect, self._checker_brush())
         painter.drawImage(visible, self._image, source_rect)
         painter.setClipping(False)
         # The frame edge is outlined just outside the picture: drawing it on the frame rect
         # itself painted a light grey line over the picture's first row and column (and was
         # clipped to nothing on the other two sides), which looked like a stray white border
         # and made the preview differ from the exported frame at the edges.
-        painter.setPen(QPen(QColor("#596273"), 1))
+        painter.setPen(QPen(QColor(tokens.COLORS["border_strong"]), 1))
         painter.drawRect(rect.adjusted(-1, -1, 1, 1))
         if self.guides:
             painter.setPen(QPen(QColor(220, 220, 220, 180), 1, Qt.PenStyle.DashLine))
