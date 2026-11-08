@@ -368,8 +368,8 @@ class MainWindow(QMainWindow):
         self._add_action(edit,"Undo","Ctrl+Z",self.engine.session.undo); self._add_action(edit,"Redo","Ctrl+Y",self.engine.session.redo); edit.addSeparator()
         commands=(("Cut","Ctrl+X",self.engine.session.cut_selected),("Copy","Ctrl+C",self.engine.session.copy_selected),
             ("Paste","Ctrl+V",self.smart_paste.paste),("Duplicate","Ctrl+D",self.engine.session.duplicate_selected),
-            ("Select All","Ctrl+A",self.engine.session.select_all),("Split at Playhead","C",self.engine.session.split_at_playhead),
-            ("Delete","Delete",self.engine.session.delete_selected),("Ripple Delete","Shift+Delete",lambda:self.engine.session.delete_selected(True)),
+            ("Select All","Ctrl+A",self._select_all_focused),("Split at Playhead","C",self.engine.session.split_at_playhead),
+            ("Delete","Delete",self._delete_focused),("Ripple Delete","Shift+Delete",lambda:self._delete_focused(True)),
             ("Add Marker","M",self.engine.session.add_marker_at_playhead))
         for row in commands:self._add_action(edit,*row)
         edit.addSeparator()
@@ -544,6 +544,39 @@ class MainWindow(QMainWindow):
         if self._is_text_entry(QApplication.focusWidget()):
             return
         callback()
+
+    def _focused_animation_editor(self):
+        """The Keyframe/Graph panel that owns focus, or None for the rest of the app."""
+        from PyQt6.QtWidgets import QApplication
+        widget = QApplication.focusWidget()
+        if widget is None:
+            return None
+        for panel in (self.keyframe_editor, self.graph_editor):
+            if widget is panel or panel.isAncestorOf(widget):
+                return panel
+        return None
+
+    def _select_all_focused(self):
+        """Ctrl+A follows the focused animation editor; otherwise it selects clips."""
+        from PyQt6.QtWidgets import QApplication
+        if self._is_text_entry(QApplication.focusWidget()):
+            return
+        panel = self._focused_animation_editor()
+        if panel is not None:
+            panel.select_all()
+            return
+        self.engine.session.select_all()
+
+    def _delete_focused(self, ripple=False):
+        """Delete keys while an animation editor has focus; otherwise delete clips."""
+        from PyQt6.QtWidgets import QApplication
+        if self._is_text_entry(QApplication.focusWidget()):
+            return
+        panel = self._focused_animation_editor()
+        if panel is not None:
+            panel.delete_selected()
+            return
+        self.engine.session.delete_selected(ripple=ripple)
 
     @staticmethod
     def _is_text_entry(widget):

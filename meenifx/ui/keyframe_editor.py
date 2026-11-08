@@ -193,6 +193,12 @@ class KeyLane(QWidget):
             painter.drawPolygon(QPolygonF([QPointF(x, mid - size), QPointF(x + size, mid),
                                            QPointF(x, mid + size), QPointF(x - size, mid)]))
         painter.restore()
+        if self.panel._marquee_rect is not None:
+            offset = self.mapTo(self.panel.body, QPoint(0, 0))
+            box = self.panel._marquee_rect.translated(-offset.x(), -offset.y())
+            painter.setPen(QPen(QColor(tokens.COLORS["accent"]), 1, Qt.PenStyle.DashLine))
+            painter.setBrush(QColor(124, 156, 255, 38))
+            painter.drawRect(box)
         self._paint_playhead(painter)
         painter.end()
 
@@ -224,16 +230,16 @@ class KeyLane(QWidget):
         if hit is not None:
             self.panel.begin_key_drag(self.row, hit, event.position().x(), event.modifiers())
             return
-        # Empty space: a click moves the playhead and drops the selection.  Holding
-        # Ctrl/Shift keeps the selection so a multi-row click never loses it.
-        if not event.modifiers() & (Qt.KeyboardModifier.ControlModifier
-                                    | Qt.KeyboardModifier.ShiftModifier):
-            self.panel.session.clear_key_selection()
-        self.panel.set_playhead_at_x(event.position().x())
         self._empty_press = event.position()
-        self.panel._set_active_channel(self.channel)
+        # The panel owns the marquee so a drag can cross lane widgets and select keys
+        # on several properties. Resolve the click/playhead decision on release, so a
+        # marquee never scrubs the playhead while it is being drawn.
+        self.panel.begin_marquee(self, event.position(), event.modifiers())
 
     def mouseMoveEvent(self, event):
+        if self._empty_press is not None:
+            self.panel.marquee_to(self, event.position())
+            return
         if self.panel._drag is not None:
             self.panel.drag_to(event.position().x())
             return
@@ -251,8 +257,11 @@ class KeyLane(QWidget):
         if event.button() == Qt.MouseButton.MiddleButton:
             self.panel.end_pan()
             return
+        if self._empty_press is not None:
+            self.panel.finish_marquee(self, event.position(), event.modifiers())
+            self._empty_press = None
+            return
         self.panel.end_key_drag()
-        self._empty_press = None
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event):
@@ -305,6 +314,8 @@ class KeyframeEditorPanel(QWidget):
         self._active_channel = None
         self._signature = object()
         self._drag = None
+        self._marquee = None
+        self._marquee_rect = None
         self._pan = None
         self._syncing_value = False
         self._last_live = 0.0
@@ -1134,6 +1145,7 @@ class KeyframeEditorPanel(QWidget):
             self.delete_selected()
             return True
         if key == Qt.Key.Key_Escape:
+            self.cancel_marquee()
             self.cancel_drag()
             return True
         if modifiers & Qt.KeyboardModifier.ControlModifier:
@@ -1160,6 +1172,87 @@ class KeyframeEditorPanel(QWidget):
     def select_all(self):
         self.session.set_key_selection(self.key_entries())
         self._update_actions()
+
+    # --------------------------------------------------------------- marquee
+    def begin_marquee(self, lane, pos, modifiers):
+        """Start a selection box; a click is resolved only when the mouse is released."""
+        if self.clip() is None:
+            return
+        origin = lane.mapTo(self.body, QPoint(int(round(pos.x())), int(round(pos.y()))))
+        self._marquee = {
+            "origin": QPointF(origin),
+            "modifiers": modifiers,
+            "base": set(self.session.key_selection),
+            "moved": False,
+        }
+        self._marquee_rect = None
+        self._set_active_channel(lane.channel)
+        self._refresh_views()
+
+    def _keys_in_marquee(self, rect):
+        clip = self.clip()
+        if clip is None:
+            return set()
+        chosen = set()
+        for lane in self.lanes:
+            if lane.isHidden():
+                continue
+            offset = lane.mapTo(self.body, QPoint(0, 0))
+            for record in lane._records():
+                # The marquee lives in body coordinates, so a lane's keys move by the
+                # lane's own offset too (the lanes start after the property columns).
+                point = QPointF(offset.x() + self.x_of(int(record[0])),
+                                offset.y() + ROW_H / 2.0)
+                if rect.contains(point):
+                    chosen.add((clip.id, lane.channel, int(record[0])))
+        return chosen
+
+    def marquee_to(self, lane, pos):
+        marquee = self._marquee
+        if marquee is None:
+            return
+        point = lane.mapTo(self.body, QPoint(int(round(pos.x())), int(round(pos.y()))))
+        if not marquee["moved"]:
+            delta = QPointF(point) - marquee["origin"]
+            if abs(delta.x()) < 3.0 and abs(delta.y()) < 3.0:
+                return
+            marquee["moved"] = True
+        self._marquee_rect = QRectF(marquee["origin"], QPointF(point)).normalized()
+        chosen = self._keys_in_marquee(self._marquee_rect)
+        modifiers = marquee["modifiers"]
+        if modifiers & Qt.KeyboardModifier.ControlModifier:
+            selection = marquee["base"] ^ chosen
+        elif modifiers & Qt.KeyboardModifier.ShiftModifier:
+            selection = marquee["base"] | chosen
+        else:
+            selection = chosen
+        self.session.set_key_selection(selection)
+        self._refresh_views()
+
+    def finish_marquee(self, lane, pos, modifiers):
+        marquee = self._marquee
+        self._marquee = None
+        self._marquee_rect = None
+        if marquee is None:
+            return False
+        if not marquee["moved"]:
+            if not marquee["modifiers"] & (Qt.KeyboardModifier.ControlModifier
+                                           | Qt.KeyboardModifier.ShiftModifier):
+                self.session.clear_key_selection()
+            self.set_playhead_at_x(pos.x())
+            self._set_active_channel(lane.channel)
+        self._refresh_views()
+        return True
+
+    def cancel_marquee(self):
+        marquee = self._marquee
+        self._marquee = None
+        self._marquee_rect = None
+        if marquee is not None:
+            self.session.set_key_selection(marquee["base"])
+            self._refresh_views()
+            return True
+        return False
 
     def keyPressEvent(self, event):
         if self.handle_key(event):

@@ -479,12 +479,8 @@ class GraphCanvas(QWidget):
             self.setCursor(Qt.CursorShape.SizeHorCursor)
             self._scrub_to(pos.x())
             return
-        handle = self._handle_at(pos)
-        if handle is not None:
-            channel, time, side = handle
-            self.panel.session.begin_gesture()
-            self._drag = {"kind": "handle", "channel": channel, "time": time, "side": side}
-            return
+        # Keys win over handles when they overlap. A handle is only draggable at its own
+        # square/circle, so clicking a diamond can never bend a neighbouring tangent.
         hit = self._key_at(pos)
         modifiers = event.modifiers()
         additive = bool(modifiers & (Qt.KeyboardModifier.ShiftModifier
@@ -520,6 +516,12 @@ class GraphCanvas(QWidget):
             self.panel.session.begin_gesture()
             self.update()
             return
+        handle = self._handle_at(pos)
+        if handle is not None:
+            channel, time, side = handle
+            self.panel.session.begin_gesture()
+            self._drag = {"kind": "handle", "channel": channel, "time": time, "side": side}
+            return
         playhead_x = self.x_of(self.panel.session.playhead)
         if abs(pos.x() - playhead_x) <= 4.0:
             # Grabbing the red line itself scrubs, the way the timeline's playhead does.
@@ -527,10 +529,10 @@ class GraphCanvas(QWidget):
             self.setCursor(Qt.CursorShape.SizeHorCursor)
             return
         # Empty space: a plain click deselects and moves the playhead, a drag draws a
-        # selection box. Both gestures start here so a click never becomes a box.
+        # selection box. The selection is changed on release so Ctrl/Shift can extend or
+        # toggle a box and Escape can restore the selection it started from.
         self._drag = {"kind": "empty", "origin": pos, "modifiers": modifiers,
-                      "moved": False}
-        self.panel.select_keys(set())
+                      "moved": False, "base": set(self.panel.selection)}
         self.update()
 
     @crashlog.guard("graph editor")
@@ -581,19 +583,19 @@ class GraphCanvas(QWidget):
             return
         if drag["kind"] in ("pan", "scrub"):
             self.unsetCursor()
-        if drag["kind"] == "box" and self._box is not None:
-            self._select_in_box(self._box)
+        if drag["kind"] in ("box", "empty") and self._box is not None and drag.get("moved"):
+            self._select_in_box(self._box, drag.get("modifiers", Qt.KeyboardModifier.NoModifier),
+                                drag.get("base", set()))
             self._box = None
             self.update()
             return
         if drag["kind"] == "empty":
-            if self._box is not None and drag.get("moved"):
-                self._select_in_box(self._box)
-                self._box = None
-            else:
-                self._box = None
-                self.panel.session.set_playhead(
-                    max(0, int(round(self.frame_at(event.position().x())))))
+            self._box = None
+            if not drag.get("modifiers", Qt.KeyboardModifier.NoModifier) & (
+                    Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier):
+                self.panel.select_keys(set())
+            self.panel.session.set_playhead(
+                max(0, int(round(self.frame_at(event.position().x())))))
             self.update()
             return
         if drag["kind"] in ("keys", "handle"):
@@ -756,7 +758,8 @@ class GraphCanvas(QWidget):
                 best, best_distance = channel, distance
         return best
 
-    def _select_in_box(self, box):
+    def _select_in_box(self, box, modifiers=Qt.KeyboardModifier.NoModifier, base=None):
+        """Select visible keyframes inside a marquee, honouring the drag's modifiers."""
         chosen = set()
         for channel, time, value in self.panel.key_entries():
             if channel not in self.panel.visible_channels():
@@ -764,7 +767,14 @@ class GraphCanvas(QWidget):
             point = QPointF(self.x_of(self.panel.start_frame() + time), self.y_of(value))
             if box.contains(point):
                 chosen.add((channel, time))
-        self.panel.select_keys(chosen, additive=True)
+        base = set(base or ())
+        if modifiers & Qt.KeyboardModifier.ControlModifier:
+            selection = base ^ chosen
+        elif modifiers & Qt.KeyboardModifier.ShiftModifier:
+            selection = base | chosen
+        else:
+            selection = chosen
+        self.panel.select_keys(selection)
 
     def reset_view(self):
         """Back to the default zoom, then frame the whole animation."""
@@ -856,15 +866,18 @@ class GraphCanvas(QWidget):
             self.panel.delete_selected()
             return
         if event.key() == Qt.Key.Key_Escape:
-            self.panel.select_keys(set())
+            drag = self._drag
+            if drag is not None and drag.get("kind") in ("empty", "box"):
+                self.panel.select_keys(drag.get("base", set()))
+            else:
+                self.panel.select_keys(set())
             self._drag = None
             self._box = None
             self.update()
             return
         if modifiers & Qt.KeyboardModifier.ControlModifier:
             if event.key() == Qt.Key.Key_A:
-                self.panel.select_keys({(channel, time) for channel, time, _value
-                                        in self.panel.key_entries()})
+                self.panel.select_all()
                 return
             if event.key() == Qt.Key.Key_C:
                 self.panel.copy_selected()
@@ -1270,8 +1283,7 @@ class GraphEditorPanel(QWidget):
         clip = self.clip()
         if clip is not None:
             self.session.set_playhead(max(clip.timeline_start, min(clip.end - 1, frame)))
-        self.selection = {entry for entry in self.selection if entry[0] == channel}
-        self.canvas.update()
+        self.select_keys({entry for entry in self.selection if entry[0] == channel})
 
     def _channel_toggled(self, item, _column):
         if self._building:
@@ -1288,6 +1300,20 @@ class GraphEditorPanel(QWidget):
         if self.visible >= set(animated):
             self.visible = set()
         self.canvas.update()
+
+    def select_all(self):
+        """Select every key on the currently visible curves.
+
+        The Graph Editor's scope is the plotted channels, not hidden curves and not the
+        timeline's whole project. That keeps Ctrl+A predictable while the channel tree is
+        filtered with its checkboxes.
+        """
+        clip = self.clip()
+        if clip is None:
+            return 0
+        entries = {(channel, int(time)) for channel, time, _value in self.key_entries()}
+        self.select_keys(entries)
+        return len(entries)
 
     def select_keys(self, entries, additive=False):
         entries = {(channel, int(time)) for channel, time in entries}
@@ -1348,11 +1374,14 @@ class GraphEditorPanel(QWidget):
 
     def delete_selected(self):
         entries = self.selected_entries()
-        if entries:
-            self.session.delete_keyframes(entries)
-            self.selection = set()
-            self.refresh_preview()
-            self.canvas.update()
+        if not entries:
+            return 0
+        removed = self.session.delete_keyframes(entries)
+        self.selection = set()
+        self.session.clear_key_selection()
+        self.refresh_preview()
+        self.canvas.update()
+        return removed
 
     def duplicate_selected(self):
         entries = self.selected_entries()

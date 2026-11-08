@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
-from PyQt6.QtGui import QContextMenuEvent, QMouseEvent  # noqa: E402
+from PyQt6.QtGui import QContextMenuEvent, QKeyEvent, QMouseEvent  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from meenifx.model import channels as CH  # noqa: E402
@@ -356,3 +356,110 @@ def test_context_menu_offers_easing_and_add_keyframe(editor):
     assert "Ease In Out" in seen["labels"]
     assert "Advanced Interpolation" in seen["labels"]
     assert "Delete" in seen["labels"]
+
+
+def _select_box(canvas, start_frame, end_frame, modifiers=Qt.KeyboardModifier.NoModifier):
+    rect = canvas.curve_rect()
+    left = QPointF(canvas.x_of(canvas.panel.start_frame() + start_frame) - 8,
+                   rect.top() + 4)
+    right = QPointF(canvas.x_of(canvas.panel.start_frame() + end_frame),
+                    rect.bottom() - 4)
+    drag(canvas, left, right, modifiers=modifiers)
+
+
+def test_box_selection_replaces_an_existing_selection(editor):
+    clip = animated_clip(editor, keys=((0, 0.0), (10, 40.0), (20, 100.0)))
+    channel = "transform.position_x"
+    graph = editor.graph_editor
+    graph.select_keys({(channel, 20)})
+    _select_box(graph.canvas, 0, 12)
+    pump(0.05)
+    # Animating position_x also seeds position_y with a key at the same frame.
+    assert graph.selection == {(channel, 0), (channel, 10), ("transform.position_y", 0)}
+    assert editor.engine.session.key_selection == {
+        (clip.id, channel, 0), (clip.id, channel, 10),
+        (clip.id, "transform.position_y", 0)}
+
+
+def test_box_selection_shift_adds_and_ctrl_toggles(editor):
+    clip = animated_clip(editor, keys=((0, 0.0), (10, 40.0), (20, 100.0)))
+    channel = "transform.position_x"
+    graph = editor.graph_editor
+    graph.select_keys({(channel, 20)})
+    _select_box(graph.canvas, 0, 12, Qt.KeyboardModifier.ShiftModifier)
+    assert graph.selection == {(channel, 0), (channel, 10), (channel, 20),
+                               ("transform.position_y", 0)}
+
+    graph.select_keys({(channel, 0), (channel, 20)})
+    _select_box(graph.canvas, 0, 12, Qt.KeyboardModifier.ControlModifier)
+    assert graph.selection == {(channel, 10), (channel, 20), ("transform.position_y", 0)}, \
+        "Ctrl must toggle the box contents against the starting selection"
+    assert editor.engine.session.key_selection == {
+        (clip.id, channel, 10), (clip.id, channel, 20),
+        (clip.id, "transform.position_y", 0)}
+
+
+def test_escape_cancels_a_graph_marquee(editor):
+    clip = animated_clip(editor, keys=((0, 0.0), (10, 40.0), (20, 100.0)))
+    channel = "transform.position_x"
+    graph = editor.graph_editor
+    graph.select_keys({(channel, 20)})
+    canvas = graph.canvas
+    rect = canvas.curve_rect()
+    start = QPointF(canvas.x_of(graph.start_frame()) - 8, rect.top() + 4)
+    end = QPointF(canvas.x_of(graph.start_frame() + 12), rect.bottom() - 4)
+    mouse(canvas, QEvent.Type.MouseButtonPress, start)
+    mouse(canvas, QEvent.Type.MouseMove, end)
+    assert canvas._box is not None
+    canvas.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape,
+                                   Qt.KeyboardModifier.NoModifier))
+    assert graph.selection == {(channel, 20)}
+    assert canvas._box is None and canvas._drag is None
+    mouse(canvas, QEvent.Type.MouseButtonRelease, end)
+    assert editor.engine.session.key_selection == {(clip.id, channel, 20)}
+
+
+def test_ctrl_a_selects_only_visible_graph_channels(editor):
+    clip = animated_clip(editor)
+    channel = "transform.position_x"
+    CH.set_value(clip, "transform.opacity", 100.0, 0, auto_key=True)
+    CH.set_value(clip, "transform.opacity", 20.0, 30, auto_key=True)
+    graph = editor.graph_editor
+    graph.visible = {channel}
+    graph.refresh()
+    canvas = graph.canvas
+    canvas.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_A,
+                                   Qt.KeyboardModifier.ControlModifier, "a"))
+    assert graph.selection == {(channel, 0), (channel, 20)}
+    assert not any(selected_channel == "transform.opacity"
+                   for selected_channel, _time in graph.selection)
+
+    graph.visible = set()
+    graph.refresh()
+    canvas.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_A,
+                                   Qt.KeyboardModifier.ControlModifier, "a"))
+    assert {selected_channel for selected_channel, _time in graph.selection} == {
+        channel, "transform.position_y", "transform.opacity"}
+
+
+def test_delete_from_the_focused_graph_keeps_the_clip_and_undoes(editor):
+    clip = animated_clip(editor)
+    channel = "transform.position_x"
+    graph = editor.graph_editor
+    canvas = graph.canvas
+    graph.select_keys({(channel, 20)})
+    editor.activateWindow()
+    pump(0.05)
+    canvas.setFocus()
+    pump(0.05)
+    delete = next(action for menu_action in editor.menuBar().actions()
+                  if menu_action.menu() is not None
+                  and menu_action.menu().title() == "Edit"
+                  for action in menu_action.menu().actions()
+                  if action.text() == "Delete")
+    delete.trigger()
+    pump(0.05)
+    assert editor.engine.timeline.find_clip(clip.id) is not None
+    assert CH.key_times(editor.engine.timeline.find_clip(clip.id), channel) == [0]
+    editor.engine.session.undo()
+    assert CH.key_times(editor.engine.timeline.find_clip(clip.id), channel) == [0, 20]
