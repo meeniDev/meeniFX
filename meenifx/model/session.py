@@ -1371,7 +1371,9 @@ class TimelineSession:
         return len(clips)
 
     def duplicate_selected(self):
-        clips = self._selected_clips()
+        clips = [clip for clip in (self.timeline.find_clip(cid) for cid
+                                  in self._editable_ids(self.with_links(self.selected)))
+                 if clip is not None]
         if not clips:
             return
         records = [self.timeline.clip_record(c) for c in clips]

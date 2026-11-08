@@ -1081,6 +1081,8 @@ class Timeline:
             "gain": copy.deepcopy(clip.gain),
             "presets": copy.deepcopy(getattr(clip, "presets", [])),
             "composition_id": getattr(clip, "composition_id", ""),
+            "blend": getattr(clip, "blend", "normal"),
+            "adjustment": bool(getattr(clip, "adjustment", False)),
         }
 
     def paste_records(self, records, at_frame, anchor_track=None, mode="snap"):
@@ -1165,7 +1167,11 @@ class Timeline:
                                  rec.get("volume", 1.0), rec.get("fade_in", 0), rec.get("fade_out", 0),
                                  rec.get("fade_in_curve", 0.0), rec.get("fade_out_curve", 0.0),
                                  stream=rec.get("stream"), gain=rec.get("gain", 0.0),
-                                 composition_id=rec.get("composition_id", ""))
+                                 transform=rec.get("transform"),
+                                 transform_meta=rec.get("transform_meta"),
+                                 composition_id=rec.get("composition_id", ""),
+                                 blend=rec.get("blend", "normal"),
+                                 adjustment=rec.get("adjustment", False))
             clip.presets = copy.deepcopy(rec.get("presets") or [])
             clip.text = copy.deepcopy(rec.get("text"))
             clip.shape = copy.deepcopy(rec.get("shape"))
