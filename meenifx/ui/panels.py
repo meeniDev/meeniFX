@@ -190,7 +190,7 @@ class EffectsPanel(QWidget):
         # never folds a section the user just opened.
         self._property_groups = {}
         self._clipboard = None
-        self.refresh_effect_list()
+        self.refresh_properties()
 
     # ------------------------------------------------------------ effect list
     def refresh_effect_list(self, *_):

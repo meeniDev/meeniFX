@@ -4,8 +4,68 @@ from PyQt6.QtWidgets import QWidget
 
 from meenifx.effects.builtins import (BlobTrackerEffect, FaceTrackerEffect,
                                       HandTrackerEffect, MosaicEffect)
+from meenifx.engine import EditorEngine
+from meenifx.ui.components import EmptyState
 from meenifx.ui import panels as PANELS
+from conftest import build_engine
 from test_keyframe_ui import editor, pump  # noqa: F401  (shared MainWindow fixture)
+
+
+def test_properties_show_empty_state_at_startup(qapp):
+    panel = PANELS.EffectsPanel(EditorEngine(30))
+    panel.props_scroll.resize(400, 500)
+    panel.props_scroll.show()
+    pump(qapp, 0.1)
+    try:
+        states = [panel.properties_layout.itemAt(i).widget()
+                  for i in range(panel.properties_layout.count())]
+        assert len(states) == 1
+        state = states[0]
+        assert isinstance(state, EmptyState)
+        assert state.isVisible()
+        assert state.title.isVisible()
+        assert state.title.text() == "Nothing selected"
+        assert state.message.isVisible()
+        assert state.message.text() == "Select a clip on the timeline to edit its properties."
+        assert state._art.isVisible()
+    finally:
+        panel.props_scroll.close()
+        panel.close()
+
+
+def test_properties_show_selected_clip_at_startup(qapp):
+    engine, clip = build_engine()
+    engine.session.set_selection({clip.id})
+    panel = PANELS.EffectsPanel(engine)
+    try:
+        assert panel.properties_layout.count() > 0
+        assert not any(isinstance(panel.properties_layout.itemAt(i).widget(), EmptyState)
+                       for i in range(panel.properties_layout.count()))
+        assert panel._clip() is clip
+    finally:
+        panel.props_scroll.close()
+        panel.close()
+
+
+def test_properties_follow_selection_without_manual_refresh(editor, qapp):
+    panel = editor.effects_panel
+    editor.engine.session.set_selection(set())
+    pump(qapp, 0.1)
+    state = panel.properties_layout.itemAt(0).widget()
+    assert isinstance(state, EmptyState)
+    assert state.isVisible()
+    assert state.title.isVisible()
+
+    editor.engine.session.set_selection({editor._test_clip_id})
+    pump(qapp, 0.1)
+    assert not any(isinstance(panel.properties_layout.itemAt(i).widget(), EmptyState)
+                   for i in range(panel.properties_layout.count()))
+
+    editor.engine.session.set_selection(set())
+    pump(qapp, 0.1)
+    state = panel.properties_layout.itemAt(0).widget()
+    assert isinstance(state, EmptyState)
+    assert state.isVisible()
 
 
 def _groups(panel):
