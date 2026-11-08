@@ -14,11 +14,14 @@ from . import transform as T
 from .keyframes import AnimatedValue, animation_value
 from .values import Value
 from .timeline import CommandStack, Signal, Timeline, clone_effects, timecode_text
+from .transition import (DEFAULT_AUDIO_CURVE, DEFAULT_VIDEO_CURVE, normalise_audio_curve,
+                         normalise_kind, normalise_video_curve)
 
 
 class TimelineSession:
     _clipboard = []
-    OVERLAP_MODES = {"Block overlaps": "snap", "Push neighbours": "push"}
+    OVERLAP_MODES = {"Crossfade overlap": "crossfade", "Block overlaps": "snap",
+                    "Push neighbours": "push"}
 
     def __init__(self, timeline=None, media=None):
         self.timeline = timeline or Timeline()
@@ -59,7 +62,10 @@ class TimelineSession:
         self._primary = None
         self.tool = Value("select")
         self.snap_enabled = Value(True)
-        self.overlap_label = Value("Block overlaps")
+        # VEGAS-style default: dropping a clip over its neighbour cuts a crossfade. The
+        # preference can turn this off, and the timeline settings offer block/push.
+        self.overlap_label = Value("Crossfade overlap")
+        self.auto_transitions = Value(True)
         self.zoom_value = Value(50.0)
         self.vzoom_value = Value(64.0)
         self.needs_fit = True
@@ -85,7 +91,11 @@ class TimelineSession:
 
     @property
     def overlap_mode(self):
-        return self.OVERLAP_MODES.get(self.overlap_label.get(), "snap")
+        mode = self.OVERLAP_MODES.get(self.overlap_label.get(), "snap")
+        if mode == "crossfade" and not bool(self.auto_transitions.get()):
+            # Preferences turned automatic transitions off: overlap behaves as block.
+            return "snap"
+        return mode
 
     def request_redraw(self):
         self.redraw_requested.emit()
@@ -341,9 +351,50 @@ class TimelineSession:
         def action():
             fresh, _valid = self.timeline.move_preview(ids, delta, lane_shift, mode)
             self.timeline.apply_placements(fresh, mode)
+            if mode == "crossfade":
+                self.timeline.create_auto_transitions(ids)
 
         self.stack.run("Move clip" if len(ids) == 1 else f"Move {len(ids)} clips", action)
         return True
+
+    # ---------------------------------------------------------- transitions
+    def update_transition(self, out_id, in_id, kind=None, curve=None, audio_curve=None):
+        """Change one transition's settings as a single undoable edit."""
+        record = self.timeline.transition_between(out_id, in_id)
+        if record is None:
+            return False
+
+        def action():
+            target = self.timeline.transition_between(out_id, in_id)
+            if target is None:
+                return False
+            if kind is not None:
+                target.kind = normalise_kind(kind)
+            if curve is not None:
+                target.curve = normalise_video_curve(curve)
+            if audio_curve is not None:
+                target.audio_curve = normalise_audio_curve(audio_curve)
+            return True
+
+        self.stack.run("Edit transition", action)
+        self.changed.emit()
+        self.request_redraw()
+        return True
+
+    def remove_transition(self, out_id, in_id):
+        """Remove a transition while leaving both clips and their overlap intact."""
+        if self.timeline.transition_between(out_id, in_id) is None:
+            return False
+        self.stack.run("Remove transition",
+                       lambda: self.timeline.remove_transition(out_id, in_id))
+        self.changed.emit()
+        self.request_redraw()
+        return True
+
+    def reset_transition_curve(self, out_id, in_id):
+        """Back to the default picture and audio curves, in one undo step."""
+        return self.update_transition(out_id, in_id, curve=DEFAULT_VIDEO_CURVE,
+                                      audio_curve=DEFAULT_AUDIO_CURVE)
 
     # ------------------------------------------------------------ pre-compose
     def precompose_problem(self, ids=None):
@@ -2111,6 +2162,7 @@ class TimelineSession:
                 if edit.get("text") is not None:
                     TXT.set_content(clip, str(edit["text"]), 0)
                 clip.clamp_fades("in")
+            self.timeline.prune_transitions()
 
         changed = self.stack.run(label, action)
         if changed:

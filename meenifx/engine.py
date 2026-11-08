@@ -341,23 +341,18 @@ class EditorEngine:
         return None if src is None else self.fit_to_project(src)
 
     def _video_stack(self, frame_no):
-        """Visible video clips under the playhead, bottom layer first.
+        """Visible video layers under the playhead, bottom layer first.
 
+        Each entry is (clip, weight, group). A transition pair shares a group and carries
+        complementary weights, so the compositor blends two fully rendered pictures
+        instead of choosing one of them. Ordinary clips carry weight 1 and no group.
         Track order is top-first in the model, so the reverse is the compositing order.
         """
         stack = []
         for track in reversed(self.timeline.tracks):
             if track.type != "video" or not track.visible:
                 continue
-            for clip in track.sorted_clips():
-                # Adjustment layers carry no picture but occupy their track: they are part
-                # of the stack so their effects can see everything composited below them.
-                if ((clip.source_path or clip.is_text or clip.is_shape
-                        or getattr(clip, "is_composition", False)
-                        or getattr(clip, "adjustment", False))
-                        and clip.timeline_start <= frame_no < clip.end):
-                    stack.append(clip)
-                    break
+            stack.extend(self.timeline.video_layers_at(track, frame_no))
         return stack
 
     def _layer_for(self, clip, frame_no, scale, unit_poses=None, spec=None):
@@ -453,7 +448,7 @@ class EditorEngine:
         stack = self._video_stack(frame_no)
         if not stack:
             return None
-        top = stack[-1]
+        top = stack[-1][0]
         self.current_fx = top.effects
         self.current_media_path = top.source_path
         self.current_clip_local_frame = frame_no - top.timeline_start
@@ -461,9 +456,46 @@ class EditorEngine:
         canvas = np.empty((height, width, 3), dtype=np.float32)
         canvas[:] = self.background_bgr
         painted = False
-        for clip in stack:
+        group_key = None
+        group = []
+
+        def flush_group():
+            """Composite the buffered transition pair as one alpha-weighted picture.
+
+            Both clips were rendered (effects, transform, animation) independently; mixing
+            their premultiplied colours by the transition weights is a real dissolve and
+            keeps full coverage instead of fading through the background.
+            """
+            nonlocal canvas, painted, group_key
+            if not group:
+                group_key = None
+                return
+            if len(group) == 1:
+                layer, alpha, mode = group[0]
+                layer_ops.composite(canvas, layer, alpha, mode)
+                painted = True
+            else:
+                total = np.zeros((height, width), dtype=np.float32)
+                colour = np.zeros((height, width, 3), dtype=np.float32)
+                mode = "normal"
+                for layer, alpha, blend_mode in group:
+                    coverage = layer[:, :, 3].astype(np.float32) / 255.0 * float(alpha)
+                    colour += layer[:, :, :3].astype(np.float32) * coverage[:, :, None]
+                    total += coverage
+                    mode = blend_mode
+                covered = total > 1e-4
+                if covered.any():
+                    rgb = colour / np.maximum(total, 1e-6)[:, :, None]
+                    combined = np.dstack([rgb, np.clip(total, 0.0, 1.0) * 255.0]).astype(np.uint8)
+                    layer_ops.composite(canvas, combined, 1.0, mode)
+                    painted = True
+            group.clear()
+            group_key = None
+
+        for clip, weight, key in stack:
             local = self.held_frame(clip, frame_no - clip.timeline_start)
             if getattr(clip, "adjustment", False):
+                flush_group()
                 canvas = self.compose_adjustment(canvas, clip, frame_no, local, scale)
                 painted = True
                 continue
@@ -504,14 +536,24 @@ class EditorEngine:
             if not pose.is_identity():
                 layer = layer_ops.preset_look(layer, pose.blur * scale, pose.hue, pose.light)
             opacity = transforms.opacity_at(clip, local) * clip.fade_gain_at(frame_no) * pose.opacity
+            opacity *= weight
             if opacity <= 0.001:
                 continue
-            if (clip is top and len(stack) == 1 and opacity >= 0.999 and pose.is_identity()
-                    and state.is_identity() and layer[:, :, 3].min() == 255
-                    and clip.blend == "normal" and not getattr(clip, "adjustment", False)):
+            if (key is None and clip is top and len(stack) == 1 and opacity >= 0.999
+                    and pose.is_identity() and state.is_identity()
+                    and layer[:, :, 3].min() == 255 and clip.blend == "normal"
+                    and not getattr(clip, "adjustment", False)):
                 return np.ascontiguousarray(layer[:, :, :3])
-            layer_ops.composite(canvas, layer, opacity, getattr(clip, "blend", "normal"))
-            painted = True
+            if key is None:
+                flush_group()
+                layer_ops.composite(canvas, layer, opacity, getattr(clip, "blend", "normal"))
+                painted = True
+            else:
+                if key != group_key:
+                    flush_group()
+                    group_key = key
+                group.append((layer, opacity, getattr(clip, "blend", "normal")))
+        flush_group()
         if not painted:
             return None
         return layer_ops.flatten(canvas)

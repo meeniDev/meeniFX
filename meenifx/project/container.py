@@ -24,7 +24,7 @@ import time
 import zipfile
 
 FORMAT_NAME = "mfxpf"
-FORMAT_VERSION = 8
+FORMAT_VERSION = 9
 
 JSON_ENTRIES = {
     "meta": "meta.json",
@@ -35,6 +35,7 @@ JSON_ENTRIES = {
     "effects": "timeline/effects.json",
     "keyframes": "timeline/keyframes.json",
     "markers": "timeline/markers.json",
+    "transitions": "timeline/transitions.json",
     "compositions": "compositions.json",
     "ui": "ui/layout.json",
 }
@@ -172,6 +173,20 @@ def _migrate_7_to_8(sections):
 
 MIGRATIONS[7] = _migrate_7_to_8
 
+
+def _migrate_8_to_9(sections):
+    """Format 9 stores automatic overlap transitions.
+
+    Older projects had overlapping clips too, but they never had transition records, so
+    they keep rendering exactly as they did: the overlap is not reinterpreted.
+    """
+    sections.setdefault("transitions", {"transitions": []})
+    return sections
+
+
+MIGRATIONS[8] = _migrate_8_to_9
+
+
 def migrate(sections, version):
     while version < FORMAT_VERSION:
         step = MIGRATIONS.get(version)
@@ -260,6 +275,8 @@ def read_container(path):
         names = set(zf.namelist())
         if JSON_ENTRIES["ui"] in names:
             data.sections["ui"] = _read_json(zf, JSON_ENTRIES["ui"])
+        if JSON_ENTRIES["transitions"] in names:
+            data.sections["transitions"] = _read_json(zf, JSON_ENTRIES["transitions"])
         if JSON_ENTRIES["compositions"] in names:
             data.sections["compositions"] = _read_json(zf, JSON_ENTRIES["compositions"])
         if WINDOW_STATE_ENTRY in names:

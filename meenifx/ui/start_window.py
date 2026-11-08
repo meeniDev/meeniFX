@@ -15,6 +15,7 @@ from ..project.settings import PROJECT_EXTENSION, PROJECT_FILTER, fps_text
 from .branding import app_icon, wordmark
 from .filedialogs import choose_folder, open_file
 from .layout import app_settings
+from .timeline_settings import TimelineSettings
 from .toast import Toast
 from .themed import muted_text
 from .. import tokens
@@ -466,6 +467,7 @@ class PreferencesDialog(QDialog):
         self.prune_missing.setToolTip("Silently drops recent entries whose file is gone when the "
                                       "window opens, so a deleted or moved project cannot linger")
         layout.addWidget(self.prune_missing)
+        self._build_timeline_section(layout)
         from ..recording.settings import RecorderSettings
         self._recorder_settings = RecorderSettings.load()
         row = QHBoxLayout()
@@ -498,6 +500,33 @@ class PreferencesDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    # -------------------------------------------------------------------- timeline
+    def _build_timeline_section(self, layout):
+        """Timeline behaviour preferences, saved in the app's INI file."""
+        from PyQt6.QtWidgets import QGroupBox
+        self._timeline_settings = TimelineSettings.load()
+        group = QGroupBox("Timeline")
+        form = QVBoxLayout(group)
+        self.auto_transitions = QCheckBox("Create a crossfade when clips overlap")
+        self.auto_transitions.setChecked(self._timeline_settings.auto_overlap_transitions)
+        self.auto_transitions.setToolTip("On by default: dropping a clip over another on the same "
+                                         "track cuts an automatic transition in the overlap")
+        form.addWidget(self.auto_transitions)
+        layout.addWidget(group)
+
+    def _apply_timeline_settings(self):
+        settings = TimelineSettings(
+            {"auto_overlap_transitions": self.auto_transitions.isChecked()})
+        settings.save()
+        self._timeline_settings = settings
+        parent = self.parent()
+        engine = getattr(parent, "engine", None)
+        if engine is not None:
+            engine.session.auto_transitions.set(settings.auto_overlap_transitions)
+        canvas = getattr(getattr(parent, "timeline_panel", None), "canvas", None)
+        if canvas is not None:
+            canvas.update()
 
     # ------------------------------------------------------ playback & performance
     def _build_playback_section(self, layout):
@@ -931,6 +960,7 @@ class PreferencesDialog(QDialog):
         self._recorder_settings.floating_bar = self.rec_float.isChecked()
         self._recorder_settings.save()
         self._apply_playback_settings()
+        self._apply_timeline_settings()
         self._apply_paste_settings()
         self._apply_preview_settings()
         self._apply_update_settings()

@@ -32,6 +32,11 @@ class Segment:
     fade_out_seconds: float = 0.0
     fade_in_curve: float = 0.0
     fade_out_curve: float = 0.0
+    # Overlap transition windows in timeline seconds: (start, end, curve). They multiply
+    # the clip's own fades and gain automation, so a crossfade adds to an existing fade
+    # instead of replacing it.
+    transition_in: tuple = ()
+    transition_out: tuple = ()
 
     def source_seconds(self, timeline_seconds):
         """Map timeline seconds to source seconds (forward, reverse and loop aware)."""
@@ -40,6 +45,18 @@ class Segment:
         if self.loop_length > 0:
             position = self.loop_start + np.mod(position - self.loop_start, self.loop_length)
         return position
+
+
+def transition_shape(progress, curve="equal_power"):
+    """Vectorised incoming-gain curve for an overlap transition.
+
+    Equal power uses sin(t*pi/2), so the outgoing cos(t*pi/2) and incoming sin(t*pi/2)
+    weights keep summed power constant through the crossfade. Linear is the plain ramp.
+    """
+    x = np.clip(np.asarray(progress, dtype=np.float64), 0.0, 1.0)
+    if str(curve or "").strip().lower() == "linear":
+        return x
+    return np.sin(x * np.pi / 2.0)
 
 
 def fade_shape(progress, curve=0.0):
@@ -107,6 +124,29 @@ def render(segments, start_seconds, count, rate, channels=2):
             # The sampled automation already carries the clip gain, so the constant gain
             # must not be applied a second time.
             gain = 1.0
+        # Overlap crossfades ride on top of everything else. The outgoing clip follows
+        # 1 - shape and the incoming clip shape, so the pair sums to a click-free motion
+        # and a one-sided pair (only one clip has sound) still fades predictably.
+        for window, incoming in ((segment.transition_out, False),
+                                 (segment.transition_in, True)):
+            if not window:
+                continue
+            try:
+                window_start, window_end, curve = window
+            except (TypeError, ValueError):
+                continue
+            if window_end <= window_start:
+                continue
+            progress = ((times[first:last] - float(window_start))
+                        / float(window_end - window_start))
+            shape = transition_shape(progress, curve)
+            if not incoming:
+                if str(curve or "").strip().lower() == "linear":
+                    shape = 1.0 - shape
+                else:
+                    # cos(t*pi/2) = sqrt(1 - sin(t*pi/2)^2): the pair keeps summed power.
+                    shape = np.sqrt(np.clip(1.0 - shape * shape, 0.0, 1.0))
+            weights = shape if weights is None else weights * shape
         if weights is not None:
             weights = (weights * gain).astype(np.float32)
         else:

@@ -117,12 +117,23 @@ def clip_digest(clip):
 
 def timeline_digests(timeline):
     """{clip_id: (digest, first_frame, last_frame)} for every clip on the timeline."""
+    # A transition changes the picture/audio of both clips in its overlap, even though
+    # neither clip's own properties moved. Fold its settings into both digests so a
+    # curve change invalidates exactly those cached frames.
+    transition_notes = {}
+    for transition in getattr(timeline, "transitions", []) or ():
+        note = "|".join(str(part) for part in transition.state())
+        for clip_id in (transition.out_id, transition.in_id):
+            transition_notes.setdefault(clip_id, []).append(note)
     result = {}
     for track in timeline.tracks:
         quiet = getattr(track, "muted", False) and track.type == "audio"
         hidden = not bool(getattr(track, "visible", True))
         for clip in track.clips:
             digest = clip_digest(clip)
+            notes = transition_notes.get(clip.id)
+            if notes:
+                digest += ":T[" + ";".join(sorted(notes)) + "]"
             if hidden:
                 # A hidden track contributes nothing to the picture, so its cached frames
                 # must be dropped the moment it is hidden (this is why a hidden text

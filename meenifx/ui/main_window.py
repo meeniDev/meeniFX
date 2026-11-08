@@ -25,6 +25,7 @@ from ..media.reader import probe_media as probe_media_header
 from ..media.reader import read_media
 from ..preview import PlaybackMetrics, PlaybackSettings, PreviewCache, PreviewRenderer
 from ..preview.settings import WAVEFORM_MODES
+from .timeline_settings import TimelineSettings
 from ..preview import gpu as render_backend
 from ..preview.invalidation import changed_ranges, fingerprint, timeline_digests
 from ..preview.metrics import PerfOverlay
@@ -150,6 +151,10 @@ class MainWindow(QMainWindow):
         # Built before the UI so the menu can read the saved options and the canvas can
         # ask the cache for its state from the very first paint.
         self.playback_settings=PlaybackSettings.load()
+        # Timeline preference: automatic overlap transitions can be switched off without
+        # changing the overlap mode the user picked in the timeline settings popover.
+        self.timeline_settings=TimelineSettings.load()
+        self.engine.session.auto_transitions.set(self.timeline_settings.auto_overlap_transitions)
         self.frame_cache=PreviewCache(self.playback_settings.ram_cache_mb,
                                       self.playback_settings.disk_cache_mb,parent=self)
         self.renderer=PreviewRenderer(self._render_preview_frame,self.frame_cache,parent=self)

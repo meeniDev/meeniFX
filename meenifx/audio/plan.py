@@ -23,7 +23,7 @@ def wants_audio(path):
     return bool(path) and os.path.splitext(path)[1].lower() in AUDIO_CAPABLE
 
 
-def clip_segment(clip, samples, rate, timeline_fps, gain):
+def clip_segment(clip, samples, rate, timeline_fps, gain, envelopes=()):
     """Map one clip onto its decoded samples, or None when it cannot contribute audio."""
     if samples is None or getattr(samples, "size", 0) == 0:
         return None
@@ -61,6 +61,13 @@ def clip_segment(clip, samples, rate, timeline_fps, gain):
         samples_per.append((int(clip.end) / fps,
                             base_gain * float(clip.gain_linear_at(last))))
         points = tuple(samples_per)
+    transition_in = ()
+    transition_out = ()
+    for start, end, curve, role in envelopes or ():
+        if role == "in":
+            transition_in = (start, end, curve)
+        elif role == "out":
+            transition_out = (start, end, curve)
     return Segment(
         start_seconds=clip.timeline_start / fps,
         end_seconds=clip.end / fps,
@@ -78,6 +85,8 @@ def clip_segment(clip, samples, rate, timeline_fps, gain):
         fade_out_seconds=max(0.0, float(getattr(clip, "fade_out", 0))) / fps,
         fade_in_curve=float(getattr(clip, "fade_in_curve", 0.0)),
         fade_out_curve=float(getattr(clip, "fade_out_curve", 0.0)),
+        transition_in=transition_in,
+        transition_out=transition_out,
     )
 
 
@@ -154,7 +163,8 @@ def build_segments(timeline, audio_for, rate, resolver=None, only_ids=None):
             continue
         samples = audio_for(clip.source_path)
         samples = processed_samples(clip, samples, rate, resolver, timeline.fps)
-        segment = clip_segment(clip, samples, rate, timeline.fps, gain)
+        envelopes = timeline.audio_transition_envelopes(clip)
+        segment = clip_segment(clip, samples, rate, timeline.fps, gain, envelopes)
         if segment is not None:
             segments.append(segment)
     return segments

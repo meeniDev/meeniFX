@@ -21,6 +21,7 @@ from ..icons import icon
 from ..model import animation as ANIM
 from ..model import channels as CH
 from ..model import presets as PM
+from ..model import transition as TR
 from ..model.keyframes import AnimatedValue, Keyframe, clip_animations, clip_keyframe_frames
 from ..model.timeline import FADE_CURVES, MARKER_COLORS, fade_curve_name, fade_gain
 from ..theme import COLORS
@@ -203,7 +204,8 @@ class TimelineCanvas(QWidget):
         self.track_height_value = self.DEFAULT_TRACK_H
         self.track_heights = {}
         self._height_residual = 0.0
-        self.overlap_mode = "Block overlaps"
+        self.overlap_mode = "Crossfade overlap"
+        self._transition_sel = None     # (out_id, in_id) of the selected transition
         self._drag = None
         self._loop_drag = None
         self._loop_preview = None
@@ -420,6 +422,7 @@ class TimelineCanvas(QWidget):
         p.save()
         p.setClipRect(self._lane_viewport())
         self._paint_tracks(p)
+        self._paint_transitions(p)
         self._paint_empty_state(p)
         p.restore()
         p.save()
@@ -709,6 +712,118 @@ class TimelineCanvas(QWidget):
             p.drawLine(0, y + height - 1, self.HEADER_W, y + height - 1)
             p.drawLine(self.HEADER_W - 1, y, self.HEADER_W - 1, y + height)
         p.restore()
+
+    def _paint_transitions(self, p):
+        """Draw every overlap transition inside its region: tint, border, crossing curves."""
+        if not getattr(self.timeline, "transitions", None):
+            return
+        p.save()
+        p.setClipRect(self._clip_area(), Qt.ClipOperation.IntersectClip)
+        for transition in self.timeline.transitions:
+            window = self.timeline.transition_window(transition)
+            outgoing = self.timeline.find_clip(transition.out_id)
+            if window is None or outgoing is None or outgoing.track is None:
+                continue
+            track = outgoing.track
+            if track.type != "video":
+                # Audio pair records mirror the picture transition; drawing them again on
+                # the audio lane would suggest a second, separately editable transition.
+                continue
+            track_y = int(round(self.header_y(track)))
+            height = self.track_height(track)
+            if track_y + height < self.TRACKS_TOP or track_y > self.height():
+                continue
+            left, right = self.x_at(window[0]), self.x_at(window[1])
+            rect = QRectF(left, track_y + 3, max(2, right - left), height - 6)
+            if rect.right() < self.HEADER_W or rect.left() > self.width():
+                continue
+            selected = getattr(self, "_transition_sel", None) == (transition.out_id,
+                                                                  transition.in_id)
+            fill = QColor("#ffb454")
+            fill.setAlpha(82 if selected else 44)
+            p.fillRect(rect, fill)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(QColor("#ffd166" if selected else "#e0a33d"), 2 if selected else 1))
+            p.drawRect(rect)
+            # Compact crossing curves: picture weight for the outgoing and incoming clip.
+            steps = max(6, min(48, int(rect.width() / 4)))
+            outgoing_path, incoming_path = QPainterPath(), QPainterPath()
+            for index in range(steps + 1):
+                progress = index / steps
+                x = rect.left() + rect.width() * progress
+                weight = TR.video_weight(progress, transition.curve)
+                point_out = QPointF(x, rect.bottom() - (1.0 - weight) * rect.height())
+                point_in = QPointF(x, rect.bottom() - weight * rect.height())
+                if index == 0:
+                    outgoing_path.moveTo(point_out)
+                    incoming_path.moveTo(point_in)
+                else:
+                    outgoing_path.lineTo(point_out)
+                    incoming_path.lineTo(point_in)
+            p.setPen(QPen(QColor("#ffe6b0"), 1.2))
+            p.drawPath(outgoing_path)
+            p.setPen(QPen(QColor("#ffffff"), 1.2))
+            p.drawPath(incoming_path)
+            if selected and rect.width() >= 70 and rect.height() >= 22:
+                label = f"{timecode(window[1] - window[0], self.timeline.fps)}  crossfade"
+                p.setFont(QFont("Segoe UI", 8))
+                p.setPen(QColor("#ffffff"))
+                p.drawText(rect.adjusted(4, 1, -4, -1),
+                           Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, label)
+        p.restore()
+
+    def _transition_at(self, x, y):
+        """Transition under the pointer, if the point is inside its overlap region."""
+        track = self.track_at(y)
+        if track is None or track.type != "video" or x < self.HEADER_W:
+            return None
+        frame_no = self.frame_at(x)
+        for transition in getattr(self.timeline, "transitions", []) or ():
+            window = self.timeline.transition_window(transition)
+            outgoing = self.timeline.find_clip(transition.out_id)
+            if (window is None or outgoing is None or outgoing.track is not track
+                    or not (window[0] <= frame_no < window[1])):
+                continue
+            left, right = self.x_at(window[0]), self.x_at(window[1])
+            if left - 2 <= x <= right + 2:
+                return transition
+        return None
+
+    def _edit_transition(self, transition):
+        """Double-click/Edit Transition: curve selectors for one overlap."""
+        from .transition_dialog import TransitionDialog
+        current = self.timeline.transition_between(transition.out_id, transition.in_id)
+        if current is None:
+            return
+        dialog = TransitionDialog(current, self.timeline.transition_window(current), self)
+        if dialog.exec():
+            self.session.update_transition(current.out_id, current.in_id, **dialog.values())
+
+    def _transition_menu(self, transition, point):
+        self._transition_sel = (transition.out_id, transition.in_id)
+        self.update()
+        menu = QMenu(self)
+        menu.addAction("Edit Transition...", lambda: self._edit_transition(transition))
+        types = menu.addMenu("Change Transition Type")
+        for key, label in TR.KIND_LABELS.items():
+            action = types.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(transition.kind == key)
+            action.setEnabled(key == "crossfade")
+            action.triggered.connect(
+                lambda _checked=False, value=key:
+                self.session.update_transition(transition.out_id, transition.in_id, kind=value))
+        future = types.addMenu("More (not implemented)")
+        for label in ("Dip to Black", "Dip to White", "Wipe", "Slide", "Blur Dissolve"):
+            action = future.addAction(label)
+            action.setEnabled(False)
+        menu.addAction("Remove Transition",
+                       lambda: self.session.remove_transition(transition.out_id,
+                                                              transition.in_id))
+        menu.addAction("Reset Transition Curve",
+                       lambda: self.session.reset_transition_curve(transition.out_id,
+                                                                   transition.in_id))
+        menu.exec(point)
 
     def _paint_empty_state(self, p):
         """One faint line while the timeline has no clips at all, and nothing after that."""
@@ -1770,6 +1885,28 @@ class TimelineCanvas(QWidget):
             p.setFont(QFont("Segoe UI", 8))
             p.drawText(rect.adjusted(5, 2, -4, -2), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
                        f"{clip.name} -> {target.name}  {timecode(start, self.timeline.fps)}")
+            if valid and self.session.overlap_mode == "crossfade":
+                # The proposed overlap region and its duration, before the drop happens.
+                moving = {item.id for item, _lane, _start in placements}
+                for other in target.clips:
+                    if other.id in moving:
+                        continue
+                    overlap_start = max(start, other.timeline_start)
+                    overlap_end = min(start + clip.duration, other.end)
+                    if overlap_end <= overlap_start:
+                        continue
+                    ox1, ox2 = self.x_at(overlap_start), self.x_at(overlap_end)
+                    overlap = QRectF(ox1, rect.top(), max(2, ox2 - ox1), rect.height())
+                    colour = QColor("#ffd166")
+                    colour.setAlpha(96)
+                    p.fillRect(overlap, colour)
+                    p.setBrush(Qt.BrushStyle.NoBrush)
+                    p.setPen(QPen(QColor("#ffd166"), 1, Qt.PenStyle.SolidLine))
+                    p.drawRect(overlap)
+                    if overlap.width() >= 44:
+                        p.setPen(QColor("#10151d"))
+                        p.drawText(overlap, Qt.AlignmentFlag.AlignCenter,
+                                   f"{overlap_end - overlap_start}f")
 
     # ------------------------------------------------------------ media drops
     def _paint_media_drop(self, p, drop):
@@ -2611,6 +2748,10 @@ class TimelineCanvas(QWidget):
             if x < self.HEADER_W and self.track_at(y) is not None:
                 self._track_menu(self.track_at(y), event.globalPosition().toPoint())
                 return
+            transition = self._transition_at(x, y)
+            if transition is not None:
+                self._transition_menu(transition, event.globalPosition().toPoint())
+                return
             preset_clip, preset_index, _preset_edge = self._preset_hit(x, y)
             if preset_clip is not None:
                 self.session.set_selection({preset_clip.id})
@@ -2707,6 +2848,15 @@ class TimelineCanvas(QWidget):
                 self.session.set_selection({env_clip.id})
             self._begin_envelope_drag(env_clip, env_channel, env_kind, env_frame, event.modifiers())
             return
+        transition = self._transition_at(x, y)
+        if transition is not None:
+            # Selecting the region shows its duration; dragging the clips still works
+            # from their non-overlapping edges.
+            self._header_selected = None
+            self._transition_sel = (transition.out_id, transition.in_id)
+            self.session.set_selection({transition.out_id, transition.in_id})
+            self.update()
+            return
         track, clip = self._clip_at(x, y)
         if clip is not None:
             self._header_selected = None
@@ -2747,6 +2897,7 @@ class TimelineCanvas(QWidget):
                 self.setCursor(Qt.CursorShape.ClosedHandCursor)
             return
         if x >= self.HEADER_W:
+            self._transition_sel = None
             if self.session.marker_selected:
                 self.session.clear_marker_selection()
             if self.keyframes_visible and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
@@ -2980,7 +3131,7 @@ class TimelineCanvas(QWidget):
         clip = self.timeline.find_clip(drag["clip_id"])
         if clip is None:
             return
-        mode = "push" if self.overlap_mode == "Push neighbours" else "snap"
+        mode = self.session.overlap_mode
         if drag["kind"] in ("trim", "stretch"):
             delta = self.frame_at(x) - drag["start_frame"]
             delta = self._snap_frame(self.frame_at(drag["start_x"]) + delta, exclude=(clip.id,),
@@ -3036,7 +3187,7 @@ class TimelineCanvas(QWidget):
             self.update()
             return
         delta, shift = target
-        mode = "push" if self.overlap_mode == "Push neighbours" else "snap"
+        mode = self.session.overlap_mode
         ids = list(dict.fromkeys([*drag["ids"], *drag["followers"]]))
         pinned = list(drag["followers"])
 
@@ -3044,6 +3195,9 @@ class TimelineCanvas(QWidget):
             fresh, valid = self.timeline.move_preview(ids, delta, shift, mode, fixed_tracks=pinned)
             if valid:
                 self.timeline.apply_placements(fresh, mode)
+                if mode == "crossfade":
+                    # Same undo step as the move: undoing a drop removes its crossfade too.
+                    self.timeline.create_auto_transitions(ids)
 
         first = self.timeline.find_clip(drag["clip_id"])
         moved_to = first.track.name if first is not None else ""
@@ -3288,6 +3442,10 @@ class TimelineCanvas(QWidget):
     def mouseDoubleClickEvent(self, event):
         x, y = int(event.position().x()), int(event.position().y())
         if event.button() == Qt.MouseButton.LeftButton and x >= self.HEADER_W and y >= self.TRACKS_TOP:
+            transition = self._transition_at(x, y)
+            if transition is not None:
+                self._edit_transition(transition)
+                return
             kf_clip, kf_row, kf_time = self._keyframe_hit(x, y)
             if kf_clip is not None:
                 entries = [(kf_clip.id, kf_row["channel"], int(kf_time))]
@@ -3884,10 +4042,16 @@ class TimelinePanel(QWidget):
                                         "clips (Ctrl+K)", shortcut="Ctrl+K", icon_name="key_filled")
         self.add_key.clicked.connect(lambda _=False: self.canvas.session.add_keyframes_at_playhead())
         self.overlap = QComboBox()
-        self.overlap.setToolTip("What happens when a clip is dropped on top of another: "
-                               "block the move, or push the neighbours along")
-        self.overlap.addItems(["Block overlaps", "Push neighbours"])
-        self.overlap.currentTextChanged.connect(lambda text: setattr(self.canvas, "overlap_mode", text))
+        self.overlap.setToolTip("What happens when a clip is dropped on top of another: cut a "
+                               "crossfade in the overlap, block the move, or push neighbours along")
+        self.overlap.addItems(["Crossfade overlap", "Block overlaps", "Push neighbours"])
+        current = str(self.canvas.session.overlap_label.get())
+        self.overlap.setCurrentText(current if self.overlap.findText(current) >= 0
+                                    else "Crossfade overlap")
+        def _set_overlap(text):
+            self.canvas.overlap_mode = text
+            self.canvas.session.overlap_label.set(text)
+        self.overlap.currentTextChanged.connect(_set_overlap)
         self.zoom = ZoomSlider(self.canvas.ppf, self.canvas.MIN_PPF, self.canvas.MAX_PPF)
         self.zoom.setFixedWidth(140)
         self.zoom.edited.connect(self._set_zoom)

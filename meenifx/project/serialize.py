@@ -16,6 +16,7 @@ from ..model import transform as transforms
 from ..model.composition import Composition, CompositionLibrary
 from ..model.keyframes import AnimatedValue, Keyframe
 from ..model.timeline import Clip, Marker, Timeline, Track
+from ..model.transition import Transition
 
 CLIP_COLUMNS = ("id", "track", "media", "name", "start", "dur", "src_in", "src_out", "src_min", "src_max",
                 "src_fps", "tl_fps", "speed", "reverse", "loop", "freeze", "offset", "volume",
@@ -145,8 +146,11 @@ def timeline_to_sections(timeline, media_id_for):
                            for m in timeline.markers],
                "loop_in": timeline.loop_in, "loop_out": timeline.loop_out,
                "loop_enabled": bool(timeline.loop_enabled), "loop_at_end": bool(timeline.loop_at_end)}
+    transitions = {"transitions": [transition.as_dict()
+                                    for transition in getattr(timeline, "transitions", []) or ()]}
     return {"tracks": {"tracks": tracks, "counters": dict(timeline._counters), "max_clip": max_clip},
-            "clips": cols, "effects": eff, "keyframes": kf, "markers": markers}
+            "clips": cols, "effects": eff, "keyframes": kf, "markers": markers,
+            "transitions": transitions}
 
 
 def _keyframes_per_owner(sections):
@@ -300,6 +304,15 @@ def sections_to_timeline(sections, fps, path_for_media):
     timeline.loop_in, timeline.loop_out = m.get("loop_in"), m.get("loop_out")
     timeline.loop_enabled = bool(m.get("loop_enabled"))
     timeline.loop_at_end = bool(m.get("loop_at_end", True))
+    # Transitions are relationships between clips: load the settings here, then drop any
+    # record the loaded geometry no longer supports (a damaged or hand-edited file).
+    timeline.transitions = []
+    for row in (sections.get("transitions") or {}).get("transitions") or ():
+        try:
+            timeline.transitions.append(Transition.from_dict(row))
+        except (KeyError, TypeError, ValueError):
+            continue
+    timeline.prune_transitions()
     return timeline
 
 

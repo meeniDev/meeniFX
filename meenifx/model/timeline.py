@@ -12,6 +12,8 @@ from .animation import clamp_gain_db, db_to_gain
 from .keyframes import AnimatedValue
 from .presets import split_instances
 from .transform import default_transform
+from .transition import (Transition, normalise_audio_curve, normalise_kind,
+                         normalise_video_curve, video_weight)
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
 FAR = 10 ** 9
@@ -397,6 +399,10 @@ class Timeline:
         self._marker_ids = itertools.count(1)
         self._link_ids = itertools.count(1)
         self._counters = {"video": 0, "audio": 0}
+        # Transition records for overlapping pairs on one track. They hold settings only:
+        # the overlap window is derived from the live clips, so moving or trimming a clip
+        # can never leave a stale duration behind.
+        self.transitions = []
 
     def adopt(self, other):
         """Take over another timeline's whole state in place, so every holder of this object stays valid."""
@@ -531,6 +537,7 @@ class Timeline:
     def remove_track(self, track):
         if track in self.tracks:
             self.tracks.remove(track)
+        self.prune_transitions()
 
     def lane_index(self, track):
         """Index of a track among the tracks of its own type (0 = leftmost/nearest in header list)."""
@@ -610,6 +617,256 @@ class Timeline:
         return True
 
 
+    # ---- overlap transitions ---------------------------------------------
+    def transition_between(self, first_id, second_id):
+        """The record for a pair of clips, in either direction (None when there is none)."""
+        pair = {int(first_id), int(second_id)}
+        for transition in getattr(self, "transitions", []) or ():
+            if {transition.out_id, transition.in_id} == pair:
+                return transition
+        return None
+
+    def ordered_pair(self, first, second):
+        """(outgoing, incoming) by timeline order, with the clip id breaking ties."""
+        if (first.timeline_start, first.id) <= (second.timeline_start, second.id):
+            return first, second
+        return second, first
+
+    def transition_window(self, transition):
+        """(start, end) frames of the pair's actual overlap, or None when it is gone."""
+        if transition is None:
+            return None
+        outgoing = self.find_clip(transition.out_id)
+        incoming = self.find_clip(transition.in_id)
+        if outgoing is None or incoming is None or outgoing is incoming:
+            return None
+        start = max(outgoing.timeline_start, incoming.timeline_start)
+        end = min(outgoing.end, incoming.end)
+        return (start, end) if end > start else None
+
+    def transition_compatible(self, first, second):
+        """True when a crossfade makes sense for this pair of clips on the same track."""
+        if first is None or second is None or first is second:
+            return False
+        if first.track is None or second.track is None or first.track is not second.track:
+            return False
+        if first.track.type == "video":
+            # Adjustment layers have no picture of their own; a crossfade would have
+            # nothing to blend. Nested compositions, text, shapes, images and video do.
+            return not getattr(first, "adjustment", False) and not getattr(second, "adjustment", False)
+        return first.track.type == "audio"
+
+    def add_transition(self, first_id, second_id, kind="crossfade",
+                       curve=None, audio_curve=None):
+        """Create (or return the existing) transition for a clip pair.
+
+        An existing record keeps its curve: dropping clips into an overlap again must not
+        silently reset a curve the user chose.
+        """
+        first = self.find_clip(first_id)
+        second = self.find_clip(second_id)
+        if not self.transition_compatible(first, second):
+            return None
+        outgoing, incoming = self.ordered_pair(first, second)
+        existing = self.transition_between(outgoing.id, incoming.id)
+        if existing is not None:
+            return existing
+        transition = Transition(outgoing.id, incoming.id, normalise_kind(kind),
+                                normalise_video_curve(curve),
+                                normalise_audio_curve(audio_curve))
+        self.transitions.append(transition)
+        return transition
+
+    def remove_transition(self, first_id, second_id):
+        """Drop one record (a pair may legitimately overlap without a transition)."""
+        transition = self.transition_between(first_id, second_id)
+        if transition is None:
+            return False
+        self.transitions.remove(transition)
+        return True
+
+    def prune_transitions(self):
+        """Forget records whose clips, track, order or overlap no longer exist.
+
+        Called after every structural edit. This is what makes removing an overlap (by
+        moving, trimming, deleting, splitting or rippling a clip) remove its transition
+        instead of leaving a reference to something that is no longer there.
+        """
+        kept = []
+        for transition in getattr(self, "transitions", []) or ():
+            outgoing = self.find_clip(transition.out_id)
+            incoming = self.find_clip(transition.in_id)
+            if not self.transition_compatible(outgoing, incoming):
+                continue
+            first, second = self.ordered_pair(outgoing, incoming)
+            if first.id != transition.out_id or second.id != transition.in_id:
+                transition.out_id, transition.in_id = first.id, second.id
+            if self.transition_window(transition) is None:
+                continue
+            kept.append(transition)
+        changed = len(kept) != len(getattr(self, "transitions", []) or ())
+        self.transitions = kept
+        return changed
+
+    def transition_at(self, track, frame_no):
+        """The transition whose overlap covers `frame_no` on `track`, or None."""
+        for transition in getattr(self, "transitions", []) or ():
+            outgoing = self.find_clip(transition.out_id)
+            if outgoing is None or outgoing.track is not track:
+                continue
+            window = self.transition_window(transition)
+            if window is not None and window[0] <= frame_no < window[1]:
+                return transition
+        return None
+
+    def video_layers_at(self, track, frame_no):
+        """[(clip, weight, group)] painted on one video track at `frame_no`.
+
+        A single clip is the ordinary case. When two clips overlap and carry a
+        transition record, both are returned with complementary weights and a shared
+        group key, so the compositor can blend two fully rendered pictures instead of
+        dropping one of them. Overlaps without a record keep the historical behaviour
+        (the earliest-starting clip wins) so old projects render exactly as before.
+        """
+        active = [clip for clip in track.sorted_clips()
+                  if (clip.timeline_start <= frame_no < clip.end
+                      and (clip.source_path or clip.is_text or clip.is_shape
+                           or clip.is_composition or getattr(clip, "adjustment", False)))]
+        if not active:
+            return []
+        if len(active) == 1:
+            return [(active[0], 1.0, None)]
+        active_ids = {clip.id for clip in active}
+        for transition in getattr(self, "transitions", []) or ():
+            if transition.out_id not in active_ids or transition.in_id not in active_ids:
+                continue
+            window = self.transition_window(transition)
+            if window is None or not (window[0] <= frame_no < window[1]):
+                continue
+            if len(active) != 2:
+                # Three or more clips over one frame is ambiguous in this version; fall
+                # back to the old single-clip result rather than inventing a mix.
+                break
+            incoming = self.find_clip(transition.in_id)
+            outgoing = self.find_clip(transition.out_id)
+            progress = (frame_no - window[0]) / float(window[1] - window[0])
+            weight = video_weight(progress, transition.curve)
+            group = (track.id, transition.out_id, transition.in_id)
+            return [(outgoing, 1.0 - weight, group), (incoming, weight, group)]
+        return [(active[0], 1.0, None)]
+
+    def audio_partners(self, clip):
+        """Audio clips linked to a video clip (link group first, then a legacy pair)."""
+        if clip is None or clip.track is None or clip.track.type != "video":
+            return []
+        if clip.link_id:
+            return [other for other in self.link_group(clip.link_id)
+                    if other.id != clip.id and other.track is not None
+                    and other.track.type == "audio"]
+        return [other for other in self.all_clips()
+                if other.id != clip.id and other.track is not None
+                and other.track.type == "audio" and other.source_path == clip.source_path
+                and other.timeline_start == clip.timeline_start]
+
+    def audio_transition_envelopes(self, clip):
+        """[(start_seconds, end_seconds, curve, role)] for one audio clip.
+
+        These ride on the clip's mixer segment, so volume automation, fades and effects
+        are applied exactly as before and the crossfade multiplies on top of them.
+        """
+        envelopes = []
+        if clip is None or clip.track is None or clip.track.type != "audio":
+            return envelopes
+        fps = float(self.fps or 30)
+        seen = set()
+
+        def add(window, transition, role):
+            start = max(window[0], clip.timeline_start)
+            end = min(window[1], clip.end)
+            if end <= start or (role, start, end) in seen:
+                return
+            seen.add((role, start, end))
+            envelopes.append((start / fps, end / fps, transition.audio_curve, role))
+
+        for transition in getattr(self, "transitions", []) or ():
+            if clip.id not in (transition.out_id, transition.in_id):
+                continue
+            window = self.transition_window(transition)
+            if window is not None:
+                add(window, transition, "out" if clip.id == transition.out_id else "in")
+        # One-sided audio: the picture pair has only one linked sound. There is no audio
+        # pair record to read, so follow the picture transition and fade that lone clip;
+        # otherwise its full-level sound would cut abruptly when the clip ends.
+        for transition in getattr(self, "transitions", []) or ():
+            if clip.id in (transition.out_id, transition.in_id):
+                continue
+            outgoing = self.find_clip(transition.out_id)
+            incoming = self.find_clip(transition.in_id)
+            if (outgoing is None or incoming is None or outgoing.track is None
+                    or outgoing.track.type != "video"):
+                continue
+            out_audio = self.audio_partners(outgoing)
+            in_audio = self.audio_partners(incoming)
+            if (bool(out_audio) == bool(in_audio)) or clip not in (*out_audio, *in_audio):
+                continue
+            window = self.transition_window(transition)
+            if window is not None:
+                add(window, transition, "out" if clip in out_audio else "in")
+        return envelopes
+
+    def create_auto_transitions(self, clip_ids=None):
+        """Record transitions for the overlaps a drop just produced.
+
+        `clip_ids` limits the pairs to the clips that moved (None means every overlap),
+        so unrelated clips that happened to overlap already are not reinterpreted. Audio
+        partners of the pair get their own record over their actual overlap, which is
+        what keeps a linked video/audio pair's sound in step with the picture.
+        """
+        moved = {int(cid) for cid in (clip_ids or ())}
+        self.prune_transitions()
+        created = []
+        for track in self.tracks:
+            if track.locked:
+                continue
+            clips = track.sorted_clips()
+            for index, outgoing in enumerate(clips):
+                for incoming in clips[index + 1:]:
+                    if incoming.timeline_start >= outgoing.end:
+                        continue
+                    if moved and outgoing.id not in moved and incoming.id not in moved:
+                        continue
+                    if not self.transition_compatible(outgoing, incoming):
+                        continue
+                    start = max(outgoing.timeline_start, incoming.timeline_start)
+                    end = min(outgoing.end, incoming.end)
+                    if end <= start:
+                        continue
+                    if any(other is not outgoing and other is not incoming
+                           and other.timeline_start < end and other.end > start
+                           for other in clips):
+                        # A three-way overlap has no single unambiguous transition.
+                        continue
+                    transition = self.add_transition(outgoing.id, incoming.id)
+                    if transition is not None:
+                        created.append(transition)
+        for transition in list(created):
+            outgoing = self.find_clip(transition.out_id)
+            incoming = self.find_clip(transition.in_id)
+            if outgoing is None or incoming is None or outgoing.track.type != "video":
+                continue
+            for audio_out in self.audio_partners(outgoing):
+                for audio_in in self.audio_partners(incoming):
+                    if audio_out.track is not audio_in.track or audio_out.track.locked:
+                        continue
+                    start = max(audio_out.timeline_start, audio_in.timeline_start)
+                    end = min(audio_out.end, audio_in.end)
+                    if end <= start:
+                        continue
+                    audio_transition = self.add_transition(audio_out.id, audio_in.id)
+                    if audio_transition is not None and audio_transition not in created:
+                        created.append(audio_transition)
+        return created
+
     def find_clip(self, clip_id):
         for track in self.tracks:
             for clip in track.clips:
@@ -670,13 +927,20 @@ class Timeline:
         # must undo as one action, including the definition it created. Composition
         # timelines deliberately have no library back-reference, so this cannot recurse.
         comps = self.compositions.snapshot() if getattr(self, "compositions", None) else None
+        transitions = tuple(t.state() for t in getattr(self, "transitions", []) or ())
         return (tracks, tuple(m.state() for m in self.markers), self.loop_in,
-                self.loop_out, comps)
+                self.loop_out, comps, transitions)
 
     def restore(self, snap):
         tracks, markers, loop_in, loop_out = snap[:4]
         if len(snap) > 4 and getattr(self, "compositions", None) is not None:
             self.compositions.restore(snap[4])
+        if len(snap) > 5:
+            self.transitions = [Transition(*state) for state in snap[5]]
+        else:
+            # A pre-transition snapshot has no records; clearing is what an undo of the
+            # first-ever transition must restore.
+            self.transitions = []
         self.tracks = []
         for track, attrs, clips in tracks:
             track.name, track.muted, track.solo, track.locked, track.visible, track.volume = attrs
@@ -812,9 +1076,11 @@ class Timeline:
         if mode == "push":
             for track in {t for t in targets.values()}:
                 self._push_neighbours(track, moving_ids)
+        self.prune_transitions()
         return delta, track_delta
 
-    def move_preview(self, ids, delta, lane_shift, mode="snap", fixed_tracks=()):
+    def move_preview(self, ids, delta, lane_shift, mode="snap", fixed_tracks=(),
+                     allow_overlap=None):
         """Where clips would land for a drag, without mutating the model.
 
         Returns (placements, valid): placements is [(clip, target_track, start_frame)].
@@ -845,7 +1111,9 @@ class Timeline:
             placements.append((clip, target, start))
             if target.locked:
                 valid = False
-        if mode != "push":
+        if allow_overlap is None:
+            allow_overlap = mode == "crossfade"
+        if mode != "push" and not allow_overlap:
             for clip, target, start in placements:
                 for other in target.clips:
                     if other.id in moving_ids or other is clip:
@@ -853,7 +1121,47 @@ class Timeline:
                     if start < other.end and start + clip.duration > other.timeline_start:
                         valid = False
                         break
+        elif allow_overlap:
+            # Overlapping a locked track, an adjustment layer or a spot where three clips
+            # would cover the same frame is refused; two ordinary clips are a crossfade.
+            for clip, target, start in placements:
+                if target.locked:
+                    valid = False
+                    break
+                for other in target.clips:
+                    if other.id in moving_ids or other is clip:
+                        continue
+                    if not (start < other.end and start + clip.duration > other.timeline_start):
+                        continue
+                    if not self.transition_compatible(clip, other):
+                        valid = False
+                        break
+                if not valid:
+                    break
+            if valid:
+                for target in {target for _clip, target, _start in placements}:
+                    spans = [(start, start + clip.duration)
+                             for clip, lane, start in placements if lane is target]
+                    spans += [(other.timeline_start, other.end)
+                              for other in target.clips if other.id not in moving_ids]
+                    if self._overlap_depth(spans) > 2:
+                        valid = False
+                        break
         return placements, valid
+
+    @staticmethod
+    def _overlap_depth(spans):
+        """Largest number of spans covering one frame (adjacent spans do not overlap)."""
+        events = []
+        for start, end in spans:
+            if end > start:
+                events.append((start, 1))
+                events.append((end, -1))
+        depth = deepest = 0
+        for _frame, delta in sorted(events, key=lambda event: (event[0], event[1])):
+            depth += delta
+            deepest = max(deepest, depth)
+        return deepest
 
     def apply_placements(self, placements, mode="snap"):
         """Apply placements produced by move_preview; the drag's single model mutation."""
@@ -869,6 +1177,7 @@ class Timeline:
         if mode == "push":
             for track in {target for _clip, target, _start in placements}:
                 self._push_neighbours(track, moving_ids)
+        self.prune_transitions()
 
     @staticmethod
     def _push_neighbours(track, fixed_ids):
@@ -966,6 +1275,7 @@ class Timeline:
         for clip in clips:
             self._trim_clip(clip, edge, delta)
             clip.clamp_fades("in" if edge == "left" else "out")
+        self.prune_transitions()
         return delta
 
     def apply_stretch(self, snap, clip_id, edge, target_frame, also=()):
@@ -1015,6 +1325,7 @@ class Timeline:
             member.speed = speed
             member.loop = False
             member.clamp_fades("in" if edge == "left" else "out")
+        self.prune_transitions()
         return speed
 
     def split_clip(self, clip_id, frame):
@@ -1059,6 +1370,7 @@ class Timeline:
         clip.fade_out = 0
         clip.clamp_fades("in")
         right.clamp_fades("out")
+        self.prune_transitions()
         return right.id
 
     # ---- clipboard -------------------------------------------------------
@@ -1184,6 +1496,7 @@ class Timeline:
         if mode == "push":
             for track in touched:
                 self._push_neighbours(track, set(new_ids))
+        self.prune_transitions()
         return new_ids
 
     # ---- placement -------------------------------------------------------
@@ -1344,6 +1657,7 @@ class Timeline:
             if ripple:
                 for clip in track.clips:
                     clip.timeline_start -= sum(r.duration for r in removed if r.timeline_start < clip.timeline_start)
+        self.prune_transitions()
 
 
 class CommandStack:
