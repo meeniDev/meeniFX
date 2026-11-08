@@ -80,7 +80,15 @@ off the GUI thread with progress and Cancel. Signed Discord-style queries are pr
 never logged or put in the file name, only `http(s)` and public addresses are opened (also
 across redirects), and the bytes must sniff and decode as media before the file leaves its
 `.part` name. Animated GIFs keep their original file, their per-frame timing and their alpha;
-choosing *Preserve original file* off re-encodes a downloaded still as PNG.
+choosing *Preserve original file* off re-encodes a downloaded still as PNG. A copied
+**YouTube** link opens **Import YouTube Video** instead: thumbnail, title, channel and
+duration arrive while the window is open, with only the qualities the video offers, three
+modes (**Video + Audio**, **Video Only**, **Audio Only**) and a start/end range with a
+draggable bar and exact timecodes. yt-dlp fetches the chosen streams and ffmpeg trims and
+muxes them into `Media` (audio only becomes `.m4a`); exact format ids sit behind *Advanced
+format settings*, and Import needs the permission confirmation. Live, private, members-only,
+age-gated, geo-blocked and DRM-protected videos are explained and refused rather than worked
+around, with a local file offered instead.
 
 **Auto Captions** — optional local speech recognition (`faster-whisper`, CPU/int8, no
 account or key; a model is downloaded only after consent, kept under
@@ -432,8 +440,8 @@ The panel lives in the **Graph Editor** dock (`G`) and edits the selected clip's
   therefore also moves later, unrelated clips on those same tracks; other tracks are left
   alone. **Audio only** deliberately cuts just the audio and can move it out of sync with a
   linked picture; that is the explicit request, not a fallback.
-- Smart Paste of a link never downloads before the Import dialog is accepted, never fetches a
-  page or a video-platform URL, refuses loopback and private addresses (including through
+- Smart Paste of a link never downloads before the Import dialog is accepted,never fetches a page, explains other video-platform links rather than scraping them (YouTube
+  has its own window and the same permission rule), refuses loopback and private addresses (including through
   redirects), and only keeps a response that sniffs and decodes as media within the size and
   time limits. An expired signed link is reported as expired rather than retried; Smart Paste
   does not try to bypass it.

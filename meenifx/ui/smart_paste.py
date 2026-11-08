@@ -19,16 +19,16 @@ import os
 import time
 from urllib.parse import urlsplit
 
-from PyQt6.QtCore import QObject, QRunnable, Qt, pyqtSignal
+from PyQt6.QtCore import QObject, QRunnable, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QImage
 from PyQt6.QtWidgets import (QApplication, QCheckBox, QDialog, QDialogButtonBox, QFormLayout,
                              QLabel, QLineEdit, QPlainTextEdit, QProgressBar, QPushButton,
                              QTextEdit, QVBoxLayout)
 
 from ..constants import AUDIO_EXT, IMAGE_EXT, VIDEO_EXT
-from ..media import link_import
+from ..media import link_import, youtube
 from ..project.storage import DATA_DIR
-from . import layout
+from . import layout, youtube_import
 
 log = logging.getLogger("meenifx.smart_paste")
 
@@ -395,6 +395,12 @@ class SmartPaste(QObject):
         self._links = {}            # url -> running probe/download job (owned, never dropped)
         self._progress = {}         # url -> DownloadProgressDialog
         self._options = {}          # url -> the choices made in the import dialog
+        self._youtube_jobs = {}     # video URL -> running metadata or import job (owned)
+        self._youtube_dialogs = {}  # video URL -> the window still receiving metadata
+        self._youtube_open = set()  # video URLs whose window is inside exec() right now
+        self._retired = []          # finished runnables, released only after their thread ends
+        self._youtube_progress = {}  # video URL -> YouTubeProgressDialog
+        self._youtube_requests = {}  # video URL -> the ImportRequest being downloaded
         self._still_queue = []
         self._queue_frame = None
         clipboard = QApplication.clipboard()
@@ -402,6 +408,26 @@ class SmartPaste(QObject):
             clipboard.dataChanged.connect(self._clipboard_changed)
 
     # ---- state ---------------------------------------------------------
+    def _retire(self, job):
+        """Release a job a moment after it reported, never while its thread may still run.
+
+        ``setAutoDelete(False)`` means Python owns the runnable; dropping the last reference
+        during ``run()`` destroys it under the worker thread and takes the process down with
+        no traceback. The signal is emitted before ``run()`` returns, so the reference is kept
+        for a beat longer.
+        """
+        if job is None:
+            return
+        self._retired.append(job)
+
+        def release():
+            try:
+                self._retired.remove(job)
+            except ValueError:
+                pass
+
+        QTimer.singleShot(1500, release)
+
     def _clipboard_changed(self):
         self._serial += 1
 
@@ -440,8 +466,15 @@ class SmartPaste(QObject):
             if not image.isNull():
                 return {"kind": "image", "image": image}
         if mime.hasText():
+            text = mime.text()
             try:
-                info = link_import.classify(mime.text())
+                link = youtube.parse_url(text)
+            except youtube.YouTubeError as exc:
+                return {"kind": "youtube_error", "message": exc.message}
+            if link is not None:
+                return {"kind": "youtube", "link": link}
+            try:
+                info = link_import.classify(text)
             except link_import.UnsupportedLink:
                 info = None
             if info is not None:
@@ -493,14 +526,20 @@ class SmartPaste(QObject):
         return False
 
     def _import_payload(self, payload):
+        kind = payload.get("kind")
+        if kind == "youtube_error":
+            self.w.toast_message(payload["message"], kind="error", duration_ms=8000)
+            return
         project = self.w.projects.project
         if project is None:
             self.w.toast_message("Open or create a project before pasting media", kind="error")
             return
         folder = managed_folder(project)
-        kind = payload.get("kind")
         if kind == "url":
             self._probe_link(payload["info"])
+            return
+        if kind == "youtube":
+            self._open_youtube(payload["link"])
             return
         try:
             if kind == "image":
@@ -536,7 +575,7 @@ class SmartPaste(QObject):
         self.w.pool.start(job)
 
     def _link_probed(self, url, info):
-        self._links.pop(url, None)
+        self._retire(self._links.pop(url, None))
         if self.w.projects.project is None:
             self.w.toast_message("Open or create a project before importing media", kind="error")
             return
@@ -548,7 +587,7 @@ class SmartPaste(QObject):
         self._start_download(info, dialog.options())
 
     def _link_failed(self, url, message):
-        self._links.pop(url, None)
+        self._retire(self._links.pop(url, None))
         log.warning("link %s could not be imported: %s", link_import.redact(url), message)
         self.w.toast_message(message, kind="error", duration_ms=7000)
 
@@ -574,7 +613,7 @@ class SmartPaste(QObject):
         self.w.pool.start(job)
 
     def _end_link(self, url):
-        self._links.pop(url, None)
+        self._retire(self._links.pop(url, None))
         self._options.pop(url, None)
         progress = self._progress.pop(url, None)
         if progress is not None:
@@ -606,6 +645,125 @@ class SmartPaste(QObject):
         self._end_link(url)
         log.info("link download cancelled: %s", link_import.redact(url))
         self.w.toast_message("Import cancelled", kind="info")
+
+    # ---- YouTube -------------------------------------------------------
+    def _open_youtube(self, link):
+        """Show the window straight away, then fill it as the details arrive."""
+        if link.url in self._youtube_jobs:
+            self.w.toast_message("That video is already being imported", kind="info")
+            return
+        dialog = youtube_import.YouTubeImportDialog(
+            self.w, link, insert_default=not self._media_panel_active())
+        job = youtube_import.MetadataJob(link)
+        job.signals.ready.connect(dialog.set_meta)
+        job.signals.failed.connect(dialog.set_error)
+        job.signals.ready.connect(lambda _meta, url=link.url: self._youtube_meta_finished(url))
+        job.signals.failed.connect(lambda _text, url=link.url: self._youtube_meta_finished(url))
+        self._youtube_jobs[link.url] = job      # owned while the worker runs
+        self._youtube_dialogs[link.url] = dialog
+        self.w.pool.start(job)
+        self._youtube_open.add(link.url)
+        try:
+            accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        finally:
+            self._youtube_open.discard(link.url)
+        options = dialog.options() if accepted else None
+        if link.url in self._youtube_jobs:
+            dialog.hide()                       # details still arriving: keep it alive
+        else:
+            self._youtube_dialogs.pop(link.url, None)
+            dialog.deleteLater()
+        if not accepted or options is None:
+            log.info("YouTube import cancelled before download: %s", link.video_id)
+            return
+        request = options["request"]
+        if options.get("local_path"):
+            self._import_local_choice([options["local_path"]], request)
+            return
+        self._start_youtube(link, dialog.meta, request)
+
+    def _youtube_meta_finished(self, url):
+        """The metadata job reported; delete the window only once it is really closed."""
+        self._retire(self._youtube_jobs.pop(url, None))
+        if url in self._youtube_open:
+            return                              # still inside exec(): the window is in use
+        dialog = self._youtube_dialogs.pop(url, None)
+        if dialog is not None:
+            dialog.deleteLater()
+
+    def _import_local_choice(self, paths, request):
+        """The way out when a video cannot be downloaded: import a file the user already has."""
+        if request.add:
+            added = self.w.project_panel.add_files(paths)
+            if not added and request.insert:
+                pass                            # already in the library: insert it anyway
+        if request.insert:
+            self._insert(paths)
+        else:
+            self.w._refresh_panels()
+
+    def _start_youtube(self, link, meta, request):
+        project = self.w.projects.project
+        if project is None:
+            self.w.toast_message("Open or create a project before importing media", kind="error")
+            return
+        if meta is None:
+            self.w.toast_message("The video details were not ready, so nothing was imported",
+                                 kind="error")
+            return
+        if link.url in self._youtube_jobs:
+            self.w.toast_message("That video is already being imported", kind="info")
+            return
+        job = youtube_import.ImportJob(link, meta, request, managed_folder(project))
+        progress = youtube_import.YouTubeProgressDialog(self.w, meta)
+        job.signals.progress.connect(progress.set_progress)
+        job.signals.ready.connect(self._youtube_ready)
+        job.signals.failed.connect(self._youtube_failed)
+        job.signals.cancelled.connect(self._youtube_cancelled)
+        progress.cancel_requested.connect(job.cancel)
+        self._youtube_jobs[link.url] = job
+        self._youtube_progress[link.url] = progress
+        self._youtube_requests[link.url] = request
+        progress.show()
+        self.w.pool.start(job)
+
+    def _end_youtube(self, url):
+        self._retire(self._youtube_jobs.pop(url, None))
+        self._youtube_requests.pop(url, None)
+        progress = self._youtube_progress.pop(url, None)
+        if progress is not None:
+            progress.finish()
+
+    def _youtube_ready(self, url, imported):
+        request = self._youtube_requests.get(url) or youtube.ImportRequest()
+        self._end_youtube(url)
+        if self.w.projects.project is None:
+            self.w.toast_message(f"Downloaded {os.path.basename(imported.path)}",
+                                 kind="info", duration_ms=5000)
+            return
+        summary = imported.summary()
+        self.w.toast_message(f"Imported {os.path.basename(imported.path)}"
+                             + (f" \u00b7 {summary}" if summary else ""))
+        if request.add:
+            self.w.project_panel.add_files([imported.path])
+        if request.insert:
+            self.w.import_paths([imported.path], self.w.engine.session.playhead, None, True)
+        else:
+            self.w._refresh_panels()
+        self.w.projects.mark_dirty()
+        self.w._refresh_audio()
+        self.w._request_preview()
+        self.w.timeline_panel.canvas.update()
+
+    def _youtube_failed(self, url, message):
+        self._end_youtube(url)
+        log.warning("YouTube import failed: %s", message)
+        self.w.toast_message(f"YouTube import failed: {message}", kind="error", duration_ms=9000)
+
+    def _youtube_cancelled(self, url):
+        self._end_youtube(url)
+        log.info("YouTube import cancelled: %s", url.split("v=")[-1])
+        self.w.toast_message("YouTube import cancelled", kind="info")
 
     # ---- insertion -----------------------------------------------------
     def _insert_frame(self):
@@ -643,7 +801,7 @@ class SmartPaste(QObject):
         self._decode_still(path)
 
     def _still_ready(self, path, kind, frames, fps):
-        self._decoding.pop(path, None)
+        self._retire(self._decoding.pop(path, None))
         project = self.w.projects.project
         if project is None:
             self._still_queue = []
@@ -667,7 +825,7 @@ class SmartPaste(QObject):
         self._next_still()
 
     def _still_failed(self, path, message):
-        self._decoding.pop(path, None)
+        self._retire(self._decoding.pop(path, None))
         self.w.toast_message(f"Paste failed: {os.path.basename(path)}: {message}", kind="error",
                              duration_ms=4000)
         self._next_still()

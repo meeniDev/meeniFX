@@ -9,7 +9,7 @@ assets += [('flight-reacts-flight.gif', '.')]
 assets += [('assets', 'assets')]
 datas, binaries, hiddenimports = list(assets), [], []
 # Pillow draws text clips (fonts, stroke, shadow), imageio/cv2 handle media and Qt is the UI.
-for package in ('PyQt6', 'cv2', 'imageio', 'imageio_ffmpeg', 'PIL'):
+for package in ('PyQt6', 'cv2', 'imageio', 'imageio_ffmpeg', 'PIL', 'yt_dlp'):
     collected = collect_all(package)
     datas += collected[0]
     binaries += collected[1]

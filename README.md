@@ -541,20 +541,43 @@ The application resolves bundled tile images, the demo clip, and default output 
   is downloaded until **Import** is chosen, which is true: only headers are read before that.
   Direct links to images, animated GIFs, videos and audio work, including Discord
   attachments, whose signed `ex`/`is`/`hm` query is sent untouched and kept out of the file
-  name and out of the log. Video-platform pages and ordinary web pages are explained rather
-  than fetched, and an expired signed link says it needs a fresh copy.
+  name and out of the log. Other video-platform pages (Vimeo, TikTok and the rest) and
+  ordinary web pages are explained rather than fetched, and an expired signed link says it
+  needs a fresh copy.
 - The download runs on the thread pool in a small progress window with its own Cancel, under
   a 32 MB and 20 s limit, and loopback or private addresses are refused even when a redirect
   leads to one. Bytes are sniffed and decoded before the `.part` file is renamed, so a broken,
   oversized or cancelled import can never become a project asset. Animated GIFs keep their
   original `.gif` file and stay animated: per-frame delays are resampled onto a steady frame
   rate and transparency becomes alpha, so it composites like any other layer.
+- A copied **YouTube** link opens **Import YouTube Video** instead of the generic link
+  dialog: thumbnail, title, channel and duration arrive while the window is already open,
+  with the qualities that video really offers (Best available, then its own 1080p/720p/...),
+  three modes (**Video + Audio**, **Video Only**, **Audio Only**) and a start/end range with
+  a draggable bar and exact `HH:MM:SS.mmm` fields. Exact format ids stay behind **Advanced
+  format settings**, collapsed until asked for; a timestamp in the pasted link becomes the
+  start time, and Import stays disabled until the permission box is ticked.
+- The selection is fetched and trimmed by the bundled ffmpeg (H.264/AAC MP4; audio-only
+  becomes `.m4a`, an ordinary timeline/waveform/captions asset) in a temporary folder inside
+  `Media`, validated, then moved into place atomically. A ranged download is requested when
+  the source allows it, otherwise the video is fetched once and trimmed locally; a whole file
+  that needs no conversion is copied rather than re-encoded. Progress and Cancel live on
+  their own window, free disk space is checked first, and a cancel or failure removes the
+  temporary folder and leaves no asset.
+- YouTube access is respected: live/upcoming streams, private, members-only, age-gated,
+  geo-blocked and DRM-protected videos are refused with a reason (no sign-in, region or DRM
+  workaround), and **Use a Local File...** imports media you already have. Extraction is a
+  maintained dependency (`yt-dlp`) behind `meenifx/media/youtube.py`; no webpage is scraped.
 - Every paste is one undo step. `tests/test_smart_paste.py` covers a transparent PNG
   (alpha preserved in the saved file), save/reopen, the preferences, Explorer files, text
   field behaviour, the Media-panel rule, internal copy precedence and GIF bytes;
   `tests/test_link_import.py` covers link recognition, signed queries, refusals, redirects,
   size/time limits, cancel, interrupted transfers and GIF timing, and
   `tests/test_smart_paste_links.py` drives paste > dialog > download > timeline/save.
+  `tests/test_youtube_media.py` covers the link forms, impostor hosts, metadata refusals,
+  real-quality planning and a real local download/trim/mute/audio-only pass, while
+  `tests/test_smart_paste_youtube.py` drives the window, permission gate, modes, range
+  validation, cancellation, the local-file fallback, undo and save/reopen.
 
 ## Auto Captions
 

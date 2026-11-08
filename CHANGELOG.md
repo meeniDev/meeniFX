@@ -2,6 +2,40 @@
 
 ## Unreleased (2026-11-05)
 
+### YouTube links in Smart Paste
+
+- **Import YouTube Video.** A pasted `youtube.com/watch`, `youtu.be`, `/shorts/`, `/live/` or
+  `/embed/` link opens its own window, and a `t=`/`#t=` timestamp becomes the start time.
+  Lookalike domains (`notyoutube.com`, `youtube.example.com`), playlist/channel links and
+  invalid IDs are explained instead of guessed at. Thumbnail, title, channel and duration are
+  read off the GUI thread while the window is already open.
+- **Only what the video offers.** The quality list comes from the formats yt-dlp reported -
+  Best available, then the heights that really exist - and Audio Only lists the real bitrate
+  streams. Exact format ids stay collapsed under *Advanced format settings*. The three modes
+  are Video + Audio, Video Only and Audio Only (`.m4a`, an ordinary timeline, waveform and
+  Auto Captions asset), and nothing is upscaled to fill a missing resolution.
+- **A real range.** Start and end are exact `HH:MM:SS.mmm` fields with a draggable two-handle
+  bar and a *Full Video* reset; negative, inverted, too-short and past-the-end ranges disable
+  Import and say why. A ranged download is requested when the source supports it, and the
+  bundled ffmpeg trims and muxes either way; a whole file that already fits is copied instead
+  of re-encoded.
+- **Isolated and safe.** `meenifx/media/youtube.py` is the only code that touches yt-dlp.
+  Streams download into a temporary folder inside `Media`, free space is checked first, the
+  result is validated and moved into place atomically, and Cancel (or a failure) removes the
+  folder and leaves no asset. DRM, sign-in, paywall and region workarounds are deliberately
+  absent: the permission box must be ticked, and *Use a Local File...* is always offered.
+- **Ordinary project media.** The import lands in the Project panel with its thumbnail or
+  waveform, inserts at the playhead when asked, is one undo step, and survives `.mfxpf`
+  save/reopen through a relative `Media/...` path.
+- **Fixed while testing it.** The first version of the import job emitted its result without
+  the URL the slot expected; PyQt turns that argument mismatch into a process abort with no
+  traceback. The signal now carries the URL, and finished runnables are held briefly after
+  reporting so none is collected under its own thread.
+- `tests/test_youtube_media.py` covers link forms, impostor hosts, metadata refusals,
+  real-quality planning, the disk check and a real local download/trim/mute/audio-only pass;
+  `tests/test_smart_paste_youtube.py` covers the window, permission gate, modes, range
+  validation, cancel, the local fallback, undo and save/reopen.
+
 ### Smart Paste media links (and the Discord GIF crash)
 
 - **Fixed the crash.** The download worker was a local variable, and a `QRunnable` with

@@ -232,7 +232,8 @@ def test_a_running_download_is_owned_by_smart_paste(window, tmp_path, media_serv
     url = clipboard().text()
 
     assert editor.smart_paste.paste()
-    assert wait_for(lambda: url in editor.smart_paste._links, 12, "the download never started")
+    assert wait_for(lambda: isinstance(editor.smart_paste._links.get(url), SP._DownloadJob), 20,
+                    "the download never started")
     job = editor.smart_paste._links[url]
     assert isinstance(job, SP._DownloadJob)
     assert not job.autoDelete(), "the thread pool must not delete the runnable under itself"
