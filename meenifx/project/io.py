@@ -9,7 +9,8 @@ from ..media.cache import entry_size
 from . import container as C
 from .convert import convert_timeline_fps
 from .media import MediaLibrary, media_type_for
-from .serialize import sections_to_timeline, timeline_to_sections
+from .serialize import (compositions_to_sections, sections_to_compositions,
+                        sections_to_timeline, timeline_to_sections)
 from .settings import ProjectSettings
 
 THUMB_WIDTH = 320
@@ -75,16 +76,27 @@ def register_media(engine, library, path, audio_duration=None):
 
 def collect(engine, project, ui=None, window_state=None, thumb=None, audio_duration=None):
     """Snapshot the live editor into a ProjectData (no I/O)."""
-    timeline, library = engine.timeline, project.library
+    timeline = getattr(engine, "root_timeline", None) or engine.timeline
+    library = project.library
     folder = project.folder
-    sections = timeline_to_sections(
-        timeline, lambda p: register_media(engine, library, p, audio_duration).id)
+
+    def media_id(path):
+        return register_media(engine, library, path, audio_duration).id
+
+    sections = timeline_to_sections(timeline, media_id)
+    # Media referenced only by a nested composition still has to exist in the library.
+    for comp in getattr(engine, "compositions", ()) or ():
+        timeline_to_sections(comp.timeline, media_id)
     data = C.ProjectData()
     for key, value in sections.items():
         data[key] = value
+    data["compositions"] = compositions_to_sections(getattr(engine, "compositions", None),
+                                                    media_id)
     data["settings"] = project.settings.to_dict()
     data["media"] = library.to_dict(folder)
     clip_count = sum(len(t.clips) for t in timeline.tracks)
+    clip_count += sum(len(t.clips) for comp in getattr(engine, "compositions", ()) or ()
+                      for t in comp.timeline.tracks)
     data["meta"] = C.make_meta(project.settings.name, project.settings, timeline.duration, clip_count)
     data["ui"] = ui if ui is not None else project.ui
     data.window_state = window_state if window_state is not None else project.window_state
@@ -105,8 +117,12 @@ def apply(engine, data, path):
         return item.path if item else ""
 
     timeline = sections_to_timeline(data.sections, settings.nominal_fps, path_for)
+    compositions = sections_to_compositions(data.sections.get("compositions"), path_for)
     engine.reset_media()
     engine.timeline.adopt(timeline)
+    engine.root_timeline = engine.timeline
+    engine.compositions = compositions
+    engine.timeline.compositions = compositions
     engine.apply_project_settings(settings, folder)
     # Older projects may carry a picture effect on an audio clip (or the reverse). Keep
     # the entry and its settings but switch it off, so opening never crashes or renders it.

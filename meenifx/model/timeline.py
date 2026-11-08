@@ -124,7 +124,8 @@ class Clip:
                  freeze=False, source_offset=0, source_min=None, source_max=None, volume=1.0,
                  fade_in=0, fade_out=0, fade_in_curve=0.0, fade_out_curve=0.0,
                  link_id=0, stream=None, transform=None, transform_meta=None, text=None,
-                 shape=None, gain=0.0, presets=None, blend="normal", adjustment=False):
+                 shape=None, gain=0.0, presets=None, blend="normal", adjustment=False,
+                 composition_id=""):
         self.id = clip_id
         self.name = name
         self.source_path = source_path
@@ -181,6 +182,13 @@ class Clip:
         # An adjustment layer carries no picture: its effects run on everything already
         # composited below it. It is a normal clip otherwise (trim, fades, keyframes).
         self.adjustment = bool(adjustment)
+        # A nested composition clip points at a reusable definition by stable id. It
+        # carries no copied media; the renderer resolves the definition every time.
+        self.composition_id = str(composition_id or "")
+
+    @property
+    def is_composition(self):
+        return bool(self.composition_id)
 
     @property
     def is_text(self):
@@ -259,6 +267,8 @@ class Clip:
     def kind(self):
         if self.track is not None and self.track.type == "audio":
             return "audio"
+        if self.is_composition:
+            return "video"
         ext = os.path.splitext(self.source_path or "")[1].lower()
         return "image" if ext in IMAGE_EXTENSIONS else "video"
 
@@ -287,7 +297,8 @@ class Clip:
                 self.link_id, self.stream, copy.deepcopy(self.transform),
                 copy.deepcopy(self.transform_meta), copy.deepcopy(self.text),
                 copy.deepcopy(self.gain), copy.deepcopy(self.presets),
-                self.blend, bool(self.adjustment), copy.deepcopy(getattr(self, "shape", None)))
+                self.blend, bool(self.adjustment), copy.deepcopy(getattr(self, "shape", None)),
+                self.composition_id)
 
 
 # Fade shape presets. The stored truth is the number; the names are a convenience.
@@ -534,12 +545,12 @@ class Timeline:
                  source_min=None, source_max=None, volume=1.0, fade_in=0, fade_out=0,
                  fade_in_curve=0.0, fade_out_curve=0.0, link_id=0, stream=None,
                  transform=None, transform_meta=None, text=None, gain=0.0, presets=None,
-                 blend="normal", adjustment=False, shape=None):
+                 blend="normal", adjustment=False, shape=None, composition_id=""):
         clip = Clip(next(self._clip_ids), name, source_path, track, start, duration, source_in, effects,
                     source_out, source_fps, self.fps, speed, reverse, loop, freeze,
                     source_offset, source_min, source_max, volume, fade_in, fade_out,
                     fade_in_curve, fade_out_curve, link_id, stream, transform, transform_meta, text,
-                    shape, gain, presets, blend, adjustment)
+                    shape, gain, presets, blend, adjustment, composition_id)
         track.clips.append(clip)
         return clip
 
@@ -655,10 +666,17 @@ class Timeline:
     # ---- snapshots -------------------------------------------------------
     def snapshot(self):
         tracks = tuple((t, t.attrs(), tuple(c.state() for c in t.clips)) for t in self.tracks)
-        return (tracks, tuple(m.state() for m in self.markers), self.loop_in, self.loop_out)
+        # A composition library is part of the edit state too: creating a pre-composition
+        # must undo as one action, including the definition it created. Composition
+        # timelines deliberately have no library back-reference, so this cannot recurse.
+        comps = self.compositions.snapshot() if getattr(self, "compositions", None) else None
+        return (tracks, tuple(m.state() for m in self.markers), self.loop_in,
+                self.loop_out, comps)
 
     def restore(self, snap):
-        tracks, markers, loop_in, loop_out = snap
+        tracks, markers, loop_in, loop_out = snap[:4]
+        if len(snap) > 4 and getattr(self, "compositions", None) is not None:
+            self.compositions.restore(snap[4])
         self.tracks = []
         for track, attrs, clips in tracks:
             track.name, track.muted, track.solo, track.locked, track.visible, track.volume = attrs
@@ -667,7 +685,7 @@ class Timeline:
                  speed, reverse, loop, freeze, source_offset, source_min, source_max, effects, volume,
                  fade_in, fade_out, fade_in_curve, fade_out_curve, link_id, stream,
                  transform, transform_meta, text, gain, presets, blend, adjustment,
-                 shape) in clips:
+                 shape, composition_id) in clips:
                 # Everything from `shape` on goes by name: a generated shape sits between
                 # text and gain in the constructor and a positional call would shift it.
                 track.clips.append(Clip(cid, name, path, track, start, dur, src_in, clone_effects(effects),
@@ -676,7 +694,7 @@ class Timeline:
                                         fade_in, fade_out, fade_in_curve, fade_out_curve,
                                         link_id, stream, transform, transform_meta, text,
                                         shape=shape, gain=gain, presets=presets, blend=blend,
-                                        adjustment=adjustment))
+                                        adjustment=adjustment, composition_id=composition_id))
             self.tracks.append(track)
         self.markers = [Marker(mid, frame, name, color) for mid, frame, name, color in markers]
         self.markers.sort(key=lambda m: (m.frame, m.id))
@@ -1021,6 +1039,7 @@ class Timeline:
             link_id=clip.link_id, stream=clip.stream, transform=right_transform,
             transform_meta=right_meta, text=right_text, gain=right_gain["gain"],
             presets=right_presets, shape=copy.deepcopy(clip.shape),
+            composition_id=clip.composition_id,
         )
         right.source_offset = clip.source_offset + left_len * clip.source_fps / max(1.0, clip.timeline_fps) * clip.speed
         clip.effects = left_effects
@@ -1061,6 +1080,7 @@ class Timeline:
             "shape": copy.deepcopy(getattr(clip, "shape", None)),
             "gain": copy.deepcopy(clip.gain),
             "presets": copy.deepcopy(getattr(clip, "presets", [])),
+            "composition_id": getattr(clip, "composition_id", ""),
         }
 
     def paste_records(self, records, at_frame, anchor_track=None, mode="snap"):
@@ -1144,7 +1164,8 @@ class Timeline:
                                  rec.get("source_offset", 0), rec.get("source_min"), rec.get("source_max"),
                                  rec.get("volume", 1.0), rec.get("fade_in", 0), rec.get("fade_out", 0),
                                  rec.get("fade_in_curve", 0.0), rec.get("fade_out_curve", 0.0),
-                                 stream=rec.get("stream"), gain=rec.get("gain", 0.0))
+                                 stream=rec.get("stream"), gain=rec.get("gain", 0.0),
+                                 composition_id=rec.get("composition_id", ""))
             clip.presets = copy.deepcopy(rec.get("presets") or [])
             clip.text = copy.deepcopy(rec.get("text"))
             clip.shape = copy.deepcopy(rec.get("shape"))

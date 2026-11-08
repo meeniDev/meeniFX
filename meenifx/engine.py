@@ -29,6 +29,7 @@ from .effects.warp import (CornerPinEffect, DistortionEffect, MeshWarpEffect,
 from .media.cache import MediaCache, MediaEntry
 from .media.reader import load_default_tiles
 from .model import transform as transforms
+from .model.composition import CompositionLibrary
 from .model.keyframes import parameter_value_at
 from .model.session import TimelineSession
 from .model.timeline import Timeline
@@ -61,6 +62,9 @@ class EditorEngine:
 
     def __init__(self, fps=30):
         self.timeline = Timeline(fps=fps)
+        self.root_timeline = self.timeline
+        self.compositions = CompositionLibrary()
+        self.timeline.compositions = self.compositions
         self.media = MediaCache()
         # Preview-only rendering settings (proxy media, hardware decode, GPU compositing).
         self.proxy_auto = False
@@ -349,6 +353,7 @@ class EditorEngine:
                 # Adjustment layers carry no picture but occupy their track: they are part
                 # of the stack so their effects can see everything composited below them.
                 if ((clip.source_path or clip.is_text or clip.is_shape
+                        or getattr(clip, "is_composition", False)
                         or getattr(clip, "adjustment", False))
                         and clip.timeline_start <= frame_no < clip.end):
                     stack.append(clip)
@@ -373,6 +378,15 @@ class EditorEngine:
                 return None, None
             return layer, (0.0, 0.0, float(self.project_size()[0]),
                            float(self.project_size()[1]))
+        if clip.is_composition:
+            comp = self.compositions.get(clip.composition_id)
+            if comp is None:
+                return None, None
+            comp_frame = clip.source_frame_at(frame_no)
+            sub = self._render_composition_frame(comp, comp_frame, scale)
+            if sub is None:
+                return None, None
+            return layer_ops.fit_layer(layer_ops.to_bgra(sub), self.project_size(), scale)
         if clip.is_text:
             # Text lives in project space, so its layer is the whole frame: the transform
             # then moves/scales it exactly like a fitted picture.
@@ -390,6 +404,38 @@ class EditorEngine:
         if src is None:
             return None, None
         return layer_ops.fit_layer(src, self.project_size(), scale)
+
+    def _render_composition_frame(self, comp, frame_no, scale=1.0):
+        """Render one composition definition at its own native size.
+
+        The engine has one active timeline; composing a nested composition temporarily
+        swaps that context (and restores it in `finally`). This is deliberate: every
+        effect, preset, text layout and transform then runs through the exact same code
+        as the parent timeline, with no second compositor to drift out of sync.
+        """
+        stack = getattr(self, "_composition_render_stack", None)
+        if stack is None:
+            stack = self._composition_render_stack = set()
+        if comp.id in stack:
+            return None
+        stack.add(comp.id)
+        old = (self.timeline, self.source_width, self.source_height, self.source_fps,
+               self.background_bgr, getattr(self.session, "project_size", None))
+        try:
+            self.timeline = comp.timeline
+            self.source_width, self.source_height = comp.width, comp.height
+            self.source_fps = float(comp.fps)
+            self.background_bgr = tuple(comp.background)
+            self.session.project_size = (comp.width, comp.height)
+            frame = self.compose_frame(int(frame_no), scale)
+            if frame is None:
+                frame = self.blank_frame()
+            return frame
+        finally:
+            (self.timeline, self.source_width, self.source_height, self.source_fps,
+             self.background_bgr, project_size) = old
+            self.session.project_size = project_size
+            stack.discard(comp.id)
 
     def compose_frame(self, frame_no, scale=1.0):
         """Composite the visible video layers into one frame at `frame_no`.
@@ -673,7 +719,8 @@ class EditorEngine:
 
     def has_media(self):
         clips = self.timeline.all_clips()
-        return (any(c.source_path for c in clips) or any(c.is_text or c.is_shape for c in clips)) and self.source_width > 0
+        return (any(c.source_path or c.is_text or c.is_shape or c.is_composition
+                    for c in clips)) and self.source_width > 0
 
     @staticmethod
     def normalize_even_size(width, height):

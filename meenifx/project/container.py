@@ -24,7 +24,7 @@ import time
 import zipfile
 
 FORMAT_NAME = "mfxpf"
-FORMAT_VERSION = 7
+FORMAT_VERSION = 8
 
 JSON_ENTRIES = {
     "meta": "meta.json",
@@ -35,6 +35,7 @@ JSON_ENTRIES = {
     "effects": "timeline/effects.json",
     "keyframes": "timeline/keyframes.json",
     "markers": "timeline/markers.json",
+    "compositions": "compositions.json",
     "ui": "ui/layout.json",
 }
 REQUIRED = ("meta", "settings", "media", "tracks", "clips", "effects", "keyframes", "markers")
@@ -155,6 +156,22 @@ def _migrate_6_to_7(sections):
 MIGRATIONS[6] = _migrate_6_to_7
 
 
+def _migrate_7_to_8(sections):
+    """Format 8 adds reusable nested compositions.
+
+    Older projects have no composition definitions and no nested clip references; the
+    loader treats both missing columns as empty.
+    """
+    sections.setdefault("compositions", {"compositions": []})
+    clips = sections.get("clips")
+    if isinstance(clips, dict):
+        count = len(clips.get("id") or ())
+        clips.setdefault("composition", ["" for _ in range(count)])
+    return sections
+
+
+MIGRATIONS[7] = _migrate_7_to_8
+
 def migrate(sections, version):
     while version < FORMAT_VERSION:
         step = MIGRATIONS.get(version)
@@ -243,6 +260,8 @@ def read_container(path):
         names = set(zf.namelist())
         if JSON_ENTRIES["ui"] in names:
             data.sections["ui"] = _read_json(zf, JSON_ENTRIES["ui"])
+        if JSON_ENTRIES["compositions"] in names:
+            data.sections["compositions"] = _read_json(zf, JSON_ENTRIES["compositions"])
         if WINDOW_STATE_ENTRY in names:
             data.window_state = zf.read(WINDOW_STATE_ENTRY)
         for name in names:

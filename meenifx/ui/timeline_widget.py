@@ -3570,6 +3570,8 @@ class TimelineCanvas(QWidget):
         menu.addAction("Split at Playhead", self.session.split_at_playhead)
         menu.addAction("Freeze frame", lambda: self.session.freeze_selected_clip(clip.id))
         menu.addAction("Duplicate", self.session.duplicate_selected)
+        precompose = menu.addAction("Pre-compose...", self._precompose_selected)
+        precompose.setEnabled(not self.session.precompose_problem())
         menu.addSeparator()
         if self.animation_rows(clip):
             menu.addAction("Open Keyframe Editor",
@@ -3596,6 +3598,17 @@ class TimelineCanvas(QWidget):
         menu.addAction("Delete", self.session.delete_selected)
         menu.addAction("Ripple Delete", lambda: self.session.delete_selected(True))
         menu.exec(point)
+
+    def _precompose_selected(self):
+        problem = self.session.precompose_problem()
+        if problem:
+            self.session.status.emit(problem)
+            return
+        from PyQt6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(self, "Pre-compose", "Composition name:",
+                                        text="Composition")
+        if ok:
+            self.session.precompose(name)
 
     def _clip_has_audio(self, clip):
         """True when this clip, or a clip linked to it, can supply the analysed audio."""

@@ -345,6 +345,70 @@ class TimelineSession:
         self.stack.run("Move clip" if len(ids) == 1 else f"Move {len(ids)} clips", action)
         return True
 
+    # ------------------------------------------------------------ pre-compose
+    def precompose_problem(self, ids=None):
+        """A user-facing reason the current selection cannot be pre-composed, or ''."""
+        clips = self._clips_for(ids)
+        if not clips:
+            return "Select one or more clips first"
+        if any(clip.track.locked for clip in clips):
+            return "Unlock the selected clips before pre-composing them"
+        if not any(clip.track.type == "video" for clip in clips):
+            return "Pre-compose needs at least one video clip; use linked audio with the picture"
+        start = min(clip.timeline_start for clip in clips)
+        end = max(clip.end for clip in clips)
+        chosen = {clip.id for clip in clips}
+        overlapping = [clip for clip in self.timeline.all_clips()
+                       if clip.timeline_start < end and clip.end > start
+                       and clip.id not in chosen]
+        if overlapping:
+            names = ", ".join(clip.name for clip in overlapping[:3])
+            more = "..." if len(overlapping) > 3 else ""
+            return (f"Select every clip that overlaps {start}-{end} first; otherwise "
+                    f"{names}{more} would be left behind")
+        if getattr(self.timeline, "compositions", None) is None:
+            return "This project has no composition library"
+        return ""
+
+    def precompose(self, name, ids=None):
+        """Replace the selected clips with one editable nested composition clip."""
+        problem = self.precompose_problem(ids)
+        if problem:
+            self.status.emit(problem)
+            return None
+        clips = self._clips_for(ids)
+        start = min(clip.timeline_start for clip in clips)
+        end = max(clip.end for clip in clips)
+        anchor = next((clip for clip in sorted(clips, key=lambda c: (c.timeline_start, c.id))
+                       if clip.track.type == "video"), clips[0])
+        name = str(name or "Composition").strip() or "Composition"
+        settings = self.timeline.settings if hasattr(self.timeline, "settings") else None
+        width = int(getattr(settings, "width", 0) or (self.project_size or (1920, 1080))[0])
+        height = int(getattr(settings, "height", 0) or (self.project_size or (1920, 1080))[1])
+        background = getattr(self.timeline, "background", (0, 0, 0))
+        holder = {}
+
+        def action():
+            comp = self.timeline.compositions.precompose(
+                self.timeline, [clip.id for clip in clips], name, start, end,
+                width, height, background)
+            holder["comp"] = comp
+            self.timeline.delete_clips([clip.id for clip in clips])
+            nested = self.timeline.new_clip(
+                comp.name, "", anchor.track, start, end - start,
+                source_out=comp.duration, source_fps=comp.fps, stream="video",
+                composition_id=comp.id)
+            holder["clip"] = nested
+
+        self.stack.run("Pre-compose", action)
+        nested = holder.get("clip")
+        if nested is None:
+            return None
+        self.set_selection({nested.id})
+        self.reveal_requested.emit(nested.timeline_start)
+        self.status.emit(f"Pre-composed {len(clips)} clip(s) into {holder['comp'].name}")
+        return nested.id
+
     def add_clip(self, path, name, duration, track=None, start=None, source_in=0):
         tl = self.timeline
         if track is None:
