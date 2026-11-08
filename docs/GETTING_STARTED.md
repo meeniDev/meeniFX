@@ -5,6 +5,9 @@ your first exported video.
 
 ## Install
 
+The [Releases page](https://github.com/meeniDev/meeniFX/releases) is the source of truth.
+If it does not list an Alpha build yet, use the portable ZIP or run from source.
+
 ### Installer (recommended)
 
 1. Open the [Releases page](https://github.com/meeniDev/meeniFX/releases).

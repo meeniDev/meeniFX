@@ -10,8 +10,9 @@ Windows only for now.
 
 ### Added
 
-- Windows installer (per user, no administrator prompt) and a portable ZIP, with SHA-256
-  checksums published beside every release.
+- A Windows release pipeline: a per-user Inno Setup installer, a portable ZIP and SHA-256
+  checksums published beside each release. The portable ZIP has been built and smoke-tested
+  locally; the installer still needs a clean Windows install test.
 - Automatic update checks against GitHub Releases through the Alpha channel, with a
   non-modal notice offering **View Update**, **Remind Me Later** and **Skip This Version**.
 - A dedicated **Updates** page with the installed version, channel, last check, release
@@ -43,6 +44,8 @@ Windows only for now.
 
 - Windows only. The editor is not supported on Linux, and Linux support is planned but
   not implemented.
+- The installer has not yet been verified on a clean Windows machine without Python. Only
+  the portable build has been smoke-tested in this environment.
 - Installers are checksum-verified but not publisher-signed. Windows SmartScreen may warn
   about the first downloads.
 - Updates replace the installed version in place; there is no rollback yet.

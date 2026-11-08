@@ -15,7 +15,7 @@ are still experimental.
 
 [**Download the newest Alpha release →**](https://github.com/meeniDev/meeniFX/releases)
 
-The newest release provides:
+Each published release contains:
 
 - `meeniFX-Studios-<version>-Windows-Setup.exe` - the installer, recommended.
 - `meeniFX-Studios-<version>-Windows-Portable.zip` - no installation required.
