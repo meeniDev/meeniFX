@@ -230,8 +230,10 @@ def replace_recent(old, new, file=None):
 # ---- crash detection -----------------------------------------------------
 def mark_session_open(project_path, file=None):
     """Remember the open project and that the app is running; cleared on a clean exit."""
-    if recents_disabled():
+    if file is None and recents_disabled():
         # A throwaway run must not leave a marker that makes the next start claim it crashed.
+        # An explicit path is the caller's own temporary marker (tests do this), so it is
+        # still written - otherwise the crash-detection helpers could never be tested.
         return
     _write_json(file or SESSION_FILE, {"project": project_path or "", "running": True, "time": time.time()})
 
