@@ -25,6 +25,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r meenifx/requirements.txt
+          python -m pip install "pytest==9.2.0"
           python -m pip install "pyinstaller==6.11.1"
 
       - name: Run automated tests
