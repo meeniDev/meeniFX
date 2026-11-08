@@ -263,7 +263,7 @@ class EmptyState(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         height = event.size().height()
-        self._art.setVisible(height >= 230)
+        self._art.setVisible(height >= 230 and event.size().width() >= 190)
         self.message.setVisible(bool(self.message.text()) and height >= 120)
 
     def set_text(self, title, message=""):

@@ -555,8 +555,8 @@ class EffectsPanel(QWidget):
                 item.widget().hide()
                 item.widget().deleteLater()
         if not clips:
-            empty = EmptyState("Nothing selected", "Click a clip on the timeline to adjust its size, "
-                               "position and effects.", "sparkles")
+            empty = EmptyState("Nothing selected",             "Select a clip on the timeline to edit its properties.",
+                                           "selection")
             self.properties_layout.addWidget(empty, 1)
             return
         clip = clips[0]
