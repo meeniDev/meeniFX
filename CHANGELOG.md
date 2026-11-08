@@ -1,6 +1,58 @@
 # Changelog
 
-## Unreleased (2026-11-05)
+All notable changes to meeniFX Studios. The current public build is an **Alpha**: it is
+usable and tested, but unfinished, and some features are still experimental.
+
+## 0.1.0-alpha.1 - 8 November 2026
+
+First public Alpha, and the first build with Windows packaging and in-app updates.
+Windows only for now.
+
+### Added
+
+- Windows installer (per user, no administrator prompt) and a portable ZIP, with SHA-256
+  checksums published beside every release.
+- Automatic update checks against GitHub Releases through the Alpha channel, with a
+  non-modal notice offering **View Update**, **Remind Me Later** and **Skip This Version**.
+- A dedicated **Updates** page with the installed version, channel, last check, release
+  date, size and notes, plus a verified background download and installer handoff.
+- **What's New** on the first launch after an update, reopenable from Help.
+- A multi-track timeline with snapping, markers, fades, linked video/audio, and undo/redo.
+- Compositing with blend modes and adjustment layers, the Stylize, Warp, Light, Time, Glow
+  and keying effects, and one-click Looks.
+- Keyframes on every numeric parameter, with the Keyframe Editor and Graph Editor.
+- Vector shapes, styled text clips, motion paths and animation presets.
+- Recording from a webcam, screen, microphone and system audio, including voice-over.
+- Auto Captions with a local speech model, a transcript editor and SRT import/export.
+- Smart Paste for clipboard pictures, files, direct media links and YouTube videos.
+
+### Improved
+
+- Preview playback keeps the newest finished frame and shows a cache indicator above the
+  ruler, so the picture follows the playhead instead of freezing on one frame.
+- Posterize Time now takes a frame rate in fps instead of a count of frames per hold.
+- The README is a short project homepage; detailed references moved to `docs/`.
+
+### Fixed
+
+- Smart Paste no longer loses a download job while its worker thread is still running.
+- Posterize Time no longer samples backwards when its rate is keyframed.
+- Discord GIF downloads no longer crash the application.
+
+### Known Issues
+
+- Windows only. The editor is not supported on Linux, and Linux support is planned but
+  not implemented.
+- Installers are checksum-verified but not publisher-signed. Windows SmartScreen may warn
+  about the first downloads.
+- Updates replace the installed version in place; there is no rollback yet.
+- Portable builds must be updated manually with the new ZIP.
+- Auto Captions needs `faster-whisper` and a downloaded model before the first run.
+- Screen recording and hardware codecs depend on the machine's drivers.
+- Heavy effect stacks are not 30 fps at 1080p; preview quality, proxies and the cache are the
+  supported ways to keep playback responsive.
+
+## Earlier development (2026-11-05)
 
 ### Posterize Time: a Frame Rate control
 
