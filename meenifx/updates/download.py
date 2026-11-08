@@ -20,6 +20,7 @@ from .model import is_trusted_asset_url, is_trusted_redirect_url
 
 CHUNK = 128 * 1024
 MAX_INSTALLER_BYTES = 400 * 1024 * 1024
+MAX_CHECKSUM_BYTES = 128 * 1024
 MIN_FREE_BYTES = 16 * 1024 * 1024
 _SHA = re.compile(r"^[0-9a-f]{64}$")
 
@@ -52,6 +53,31 @@ def checksum_for(text, asset_name):
     checksums = parse_checksums(text)
     wanted = str(asset_name)
     return checksums.get(wanted) or checksums.get(os.path.basename(wanted))
+
+
+def fetch_checksums(url, opener=urlopen, timeout=20):
+    """Download and parse a release's ``SHA256SUMS.txt`` (small, trusted URL only)."""
+    url = str(url or "")
+    if not is_trusted_asset_url(url):
+        raise DownloadError("untrusted", "The checksum file is not from the official release.")
+    try:
+        with opener(url, timeout=timeout) as response:
+            final_url = None
+            geturl = getattr(response, "geturl", None)
+            if callable(geturl):
+                final_url = geturl()
+            if final_url and not is_trusted_redirect_url(final_url):
+                raise DownloadError("untrusted", "The checksum download left GitHub.")
+            data = response.read(MAX_CHECKSUM_BYTES + 1)
+    except DownloadError:
+        raise
+    except HTTPError as exc:
+        raise DownloadError("network", f"GitHub returned HTTP {exc.code} for the checksums.") from exc
+    except (URLError, TimeoutError, OSError) as exc:
+        raise DownloadError("network", f"The checksum file could not be downloaded: {exc}") from exc
+    if len(data) > MAX_CHECKSUM_BYTES:
+        raise DownloadError("invalid", "The release checksum file is unexpectedly large.")
+    return parse_checksums(data.decode("utf-8", "replace"))
 
 
 def verify_file(path, expected_sha256):

@@ -12,6 +12,7 @@ from .ui.branding import app_icon
 from .ui.dialogs import CrashReportDialog
 from .ui.filedialogs import open_file
 from .ui.main_window import MainWindow
+from .version import VERSION
 
 
 class MosaicApp(MainWindow):
@@ -64,6 +65,12 @@ class AppController:
         self.start.browse_requested.connect(self.browse_project)
         self.projects.project_changed.connect(self._project_changed)
         self.projects.closed.connect(self.show_start)
+        self.updater = self.window.update_manager
+        # After the first window is up: read the notes if this build is an update, then a
+        # background check. Both are single-shot, so opening a project is never delayed.
+        # A quiet test/automation run never writes the user's update settings or calls GitHub.
+        if not self.quiet_recents:
+            QTimer.singleShot(1800, self._startup_updates)
 
         if unclean:
             # Report after the start window (or the recovered project) is on screen.
@@ -124,6 +131,17 @@ class AppController:
         """Preferences: drop recent entries whose file is gone, without a word unless asked."""
         if storage.prune_missing():
             self.start.reload()
+
+    def _startup_updates(self):
+        """Record this launch, offer the notes of a real update, and check in the background."""
+        settings = self.updater.settings
+        due = settings.record_launch(VERSION)
+        settings.save(self.updater.store)
+        if settings.auto_check and settings.should_auto_check():
+            self.updater.check(manual=False)
+        if due:
+            version = settings.pending_whats_new or VERSION
+            self.window.show_whats_new(version)
 
     def show_start(self):
         self.window.hide()

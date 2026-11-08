@@ -493,6 +493,7 @@ class PreferencesDialog(QDialog):
         self._build_paste_section(layout)
         self._build_caption_section(layout)
         self._build_preview_section(layout)
+        self._build_updates_section(layout)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -860,6 +861,69 @@ class PreferencesDialog(QDialog):
         if callable(reload_thumbs):
             reload_thumbs()
 
+    # --------------------------------------------------------------- updates
+    def _build_updates_section(self, layout):
+        """Automatic checks, the channel, and the versions the user chose to skip."""
+        from PyQt6.QtWidgets import QComboBox, QFormLayout, QGroupBox
+        from ..updates.settings import UpdateSettings
+        from ..version import display_version
+        self.update_settings = UpdateSettings.load()
+        settings = self.update_settings
+
+        group = QGroupBox("Updates", self)
+        form = QFormLayout(group)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        form.addRow("Version", QLabel(display_version()))
+
+        self.update_auto = QCheckBox("Check for updates automatically")
+        self.update_auto.setChecked(bool(settings.auto_check))
+        self.update_auto.setToolTip("Checks GitHub Releases in the background on startup. "
+                                    "A check never interrupts editing.")
+        form.addRow("", self.update_auto)
+
+        self.update_channel = QComboBox()
+        self.update_channel.addItem("Alpha / Preview", "alpha")
+        self.update_channel.addItem("Stable", "stable")
+        self.update_channel.setCurrentIndex(max(0, self.update_channel.findData(
+            settings.channel if settings.channel in ("alpha", "stable") else "alpha")))
+        self.update_channel.setToolTip("Alpha includes prereleases. Stable only offers "
+                                       "finished releases and is reserved for later.")
+        form.addRow("Update channel", self.update_channel)
+
+        self.update_skipped = QLabel(", ".join(settings.skipped) or "None")
+        self.update_skipped.setWordWrap(True)
+        form.addRow("Skipped versions", self.update_skipped)
+        clear = QPushButton("Clear skipped versions")
+        clear.clicked.connect(self._clear_skipped_updates)
+        form.addRow("", clear)
+
+        self.update_last_check = QLabel(settings.last_check or "Never")
+        form.addRow("Last check", self.update_last_check)
+        check = QPushButton("Check for Updates\u2026")
+        check.clicked.connect(self._check_updates_now)
+        form.addRow("", check)
+        layout.addWidget(group)
+
+    def _apply_update_settings(self):
+        self.update_settings.auto_check = self.update_auto.isChecked()
+        self.update_settings.channel = str(self.update_channel.currentData() or "alpha")
+        self.update_settings.save()
+
+    def _clear_skipped_updates(self):
+        self.update_settings.clear_skipped()
+        self.update_settings.save()
+        self.update_skipped.setText("None")
+
+    def _check_updates_now(self):
+        """Close Preferences first: the Updates page is a separate, non-modal window."""
+        from PyQt6.QtCore import QTimer
+        self._apply_update_settings()
+        parent = self.parent()
+        show = getattr(parent, "show_updates", None)
+        self.accept()
+        if callable(show):
+            QTimer.singleShot(0, show)
+
     def accept(self):
         set_show_on_startup(self.startup.isChecked())
         set_prune_missing_on_startup(self.prune_missing.isChecked())
@@ -869,6 +933,7 @@ class PreferencesDialog(QDialog):
         self._apply_playback_settings()
         self._apply_paste_settings()
         self._apply_preview_settings()
+        self._apply_update_settings()
         super().accept()
 
     def _apply_playback_settings(self):

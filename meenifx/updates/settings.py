@@ -155,13 +155,19 @@ class UpdateSettings:
         notes are never shown before the new build is actually running.
         """
         previous = self.last_seen_version.strip()
-        self.pending_whats_new = ""
         if not previous:
+            self.pending_whats_new = ""
             self.last_seen_version = version_text
             self.last_ack_version = version_text
             return False
         if previous == version_text:
+            # Still waiting for the user to read them: keep offering the notes.
+            if self.last_ack_version != version_text:
+                self.pending_whats_new = version_text
+                return True
+            self.pending_whats_new = ""
             return False
+        self.pending_whats_new = ""
         self.last_seen_version = version_text
         if self.last_ack_version != version_text:
             self.pending_whats_new = version_text

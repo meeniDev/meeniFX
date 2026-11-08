@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QF
 
 from .. import tokens
 from ..config import APP_TITLE, APP_VERSION
+from ..version import display_version
 from ..tokens import COLORS
 from ..model.timeline import timecode_text
 from .branding import wordmark
@@ -272,7 +273,7 @@ class AboutDialog(QDialog):
         title.setStyleSheet(f"font-size:{tokens.FONT_TITLE + 6}px;font-weight:600;")
         layout.addWidget(title)
 
-        version = QLabel(f"Version {APP_VERSION}")
+        version = QLabel(f"Version {display_version(APP_VERSION)}")
         version.setAlignment(Qt.AlignmentFlag.AlignCenter)
         version.setStyleSheet(f"color:{COLORS['muted']};font-size:{tokens.FONT_SMALL}px;")
         layout.addWidget(version)

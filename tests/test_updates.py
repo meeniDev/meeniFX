@@ -279,6 +279,18 @@ def test_automatic_checks_respect_the_interval():
     assert not settings.should_auto_check(now + timedelta(days=2))
 
 
+def test_whats_new_stays_pending_until_it_is_acknowledged():
+    settings = UpdateSettings(last_seen_version="0.1.0-alpha.1",
+                              last_ack_version="0.1.0-alpha.1")
+    assert settings.record_launch("0.1.0-alpha.2") is True
+    store = Store()
+    settings.save(store)
+    loaded = UpdateSettings.load(store)
+    assert loaded.record_launch("0.1.0-alpha.2") is True, "unread notes were dropped"
+    loaded.acknowledge_whats_new()
+    assert loaded.record_launch("0.1.0-alpha.2") is False
+
+
 def test_whats_new_is_shown_once_only_after_a_real_update():
     settings = UpdateSettings()
     assert settings.record_launch("0.1.0-alpha.1") is False, "a first install is not an update"
@@ -292,6 +304,16 @@ def test_whats_new_is_shown_once_only_after_a_real_update():
 
 
 # --------------------------------------------------------------------- checksums
+def test_a_checksum_file_is_fetched_only_from_the_official_release(tmp_path):
+    body = f"{'c' * 64}  installer.exe\n".encode()
+    url = "https://github.com/meeniDev/meeniFX/releases/download/v0.1.0-alpha.2/SHA256SUMS.txt"
+    parsed = download.fetch_checksums(url, opener=Opener(download_response(body, url=url)))
+    assert parsed["installer.exe"] == "c" * 64
+    with pytest.raises(download.DownloadError) as caught:
+        download.fetch_checksums("https://evil.example/SHA256SUMS.txt")
+    assert caught.value.kind == "untrusted"
+
+
 def test_checksums_parse_common_sha256sum_shapes():
     digest = "a" * 64
     parsed = download.parse_checksums(f"{digest}  installer.exe\n# comment\n"

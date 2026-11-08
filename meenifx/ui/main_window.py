@@ -29,6 +29,8 @@ from ..preview import gpu as render_backend
 from ..preview.invalidation import changed_ranges, fingerprint, timeline_digests
 from ..preview.metrics import PerfOverlay
 from ..theme import configure_theme, resolve_theme
+from ..updates.manager import UpdateManager
+from ..version import VERSION
 from . import layout as dock_layout
 from .branding import app_icon
 from .dialogs import AboutDialog, MarkerListDialog
@@ -39,6 +41,7 @@ from .project_controller import ProjectController
 from .timeline_widget import TimelinePanel, timecode
 from .toast import Toast
 from .undo import QtCommandStack
+from .update_notice import UpdateNotice
 
 
 class ModelBridge(QObject):
@@ -139,6 +142,10 @@ class MainWindow(QMainWindow):
         self._demo_import_paths=set()
         # INI file in the user config folder, so the layout survives crashes and is easy to inspect.
         self._settings=dock_layout.app_settings()
+        # Updates: checks and downloads run off the GUI thread; the manager also holds the
+        # remind/skip state, so the notice and the Updates page always agree.
+        self.update_manager=UpdateManager(self)
+        self._updates_dialog=None
         # ---- preview pipeline: disk+RAM cache, one render thread, real measurements ----
         # Built before the UI so the menu can read the saved options and the canvas can
         # ask the cache for its state from the very first paint.
@@ -299,8 +306,17 @@ class MainWindow(QMainWindow):
         help_menu=self.menuBar().addMenu("Help")
         self._add_action(help_menu,"Open sample project",None,lambda:self.projects.open_sample())
         self._add_action(help_menu,"Keyboard Shortcuts...",None,self.show_shortcuts)
+        self._add_action(help_menu,"Check for Updates...",None,self.show_updates)
+        self._add_action(help_menu,"What's New...",None,self.show_whats_new)
+        help_menu.addSeparator()
         self._add_action(help_menu,"About meeniFX Studios",None,self.show_about)
         self.toast=Toast(self)
+        # Non-modal, so a background check can never interrupt playback, recording or export.
+        self.update_notice=UpdateNotice(self)
+        self.update_notice.view_requested.connect(self.show_updates)
+        self.update_notice.remind_requested.connect(self._remind_update)
+        self.update_notice.skip_requested.connect(self._skip_update)
+        self.update_manager.update_available.connect(self._on_update_available)
         self.engine.session.tool.trace_add("write",lambda *_:self._update_hints())
         self.engine.session.snap_enabled.trace_add("write",lambda *_:self._update_hints())
         self.engine.session.loop_changed.connect(self._sync_loop_state)
@@ -1722,6 +1738,58 @@ class MainWindow(QMainWindow):
     def _show_error(self,message):QMessageBox.critical(self,"meeniFX Studios",str(message))
     def show_about(self):AboutDialog(self).exec()
 
+    # ------------------------------------------------------------------ updates
+    def show_updates(self,manual=True):
+        """Open the Updates page; a manual open also asks GitHub straight away."""
+        from .updates_dialog import UpdatesDialog
+        if self._updates_dialog is None:
+            self._updates_dialog=UpdatesDialog(self.update_manager,self)
+            self._updates_dialog.finished.connect(self._forget_updates_dialog)
+        self._updates_dialog.refresh()
+        self._updates_dialog.show()
+        self._updates_dialog.raise_()
+        self._updates_dialog.activateWindow()
+        if manual:
+            self._updates_dialog.check_now()
+
+    def _forget_updates_dialog(self,_result):
+        self._updates_dialog=None
+
+    def _on_update_available(self,update):
+        """A background check found a newer build: a small notice, never a modal dialog."""
+        if self._updates_dialog is not None and self._updates_dialog.isVisible():
+            return
+        self.update_notice.show_update(update)
+
+    def _remind_update(self):
+        self.update_manager.remind_later()
+
+    def _skip_update(self):
+        self.update_manager.skip()
+
+    def _acknowledge_whats_new(self,version_text):
+        self.update_manager.settings.acknowledge_whats_new(version_text)
+        self.update_manager.settings.save(self.update_manager.store)
+
+    def show_whats_new(self,version_text=None,notes=None,date_text=""):
+        """Open the release notes; Help shows the last acknowledged version."""
+        from ..updates import whats_new as notes_module
+        from .whats_new import WhatsNewDialog
+        from .updates_dialog import friendly_date
+        settings=self.update_manager.settings
+        version_text=version_text or settings.pending_whats_new or settings.last_ack_version or VERSION
+        update=self.update_manager.pending_update
+        release_url=None
+        if update is not None and update.version_text==version_text:
+            notes=notes or update.notes
+            date_text=date_text or friendly_date(update.published_at)
+            release_url=update.html_url
+        dialog=WhatsNewDialog(version_text,notes_module.notes_text(version_text,notes),self,
+                              date_text=date_text,
+                              release_url=release_url,
+                              acknowledge=self._acknowledge_whats_new)
+        dialog.exec()
+
     # ------------------------------------------------------- proxy media
     def _ensure_proxies(self,delay_ms=0):
         """Queue a background proxy encode for heavy sources missing one.
@@ -2336,4 +2404,5 @@ class MainWindow(QMainWindow):
         self.frame_cache.clear(disk=False)
         self.playback_settings.save()
         self.projects.shutdown()
+        self.update_manager.cancel_download()
         super().closeEvent(event)
