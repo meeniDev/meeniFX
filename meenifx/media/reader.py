@@ -208,20 +208,48 @@ def _gif_fps(meta):
 
 
 def read_gif_frames(path):
-    reader = imageio.get_reader(path)
-    fps = _gif_fps(reader.get_meta_data())
+    """Decode every GIF frame with its own delay, as a steady-rate BGRA or BGR sequence.
 
-    frames = []
-    try:
-        for arr in reader:
-            if arr.shape[-1] == 4:
-                arr = arr[:, :, :3]
-            frame_bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-            frames.append(frame_bgr)
-    finally:
-        reader.close()
+    A GIF stores a delay per frame, which one ``fps`` cannot hold exactly, so the frames are
+    resampled onto the average rate and repeated where a frame stays on screen longer: the
+    clip's duration and the visible timing come out right. Transparency is kept as alpha
+    instead of being flattened into the background, so a transparent GIF still composites
+    over the tracks below it.
+    """
+    from PIL import Image, ImageSequence
 
-    return frames, fps
+    pictures, delays, transparent = [], [], False
+    with Image.open(path) as image:
+        for frame in ImageSequence.Iterator(image):
+            rgba = np.array(frame.convert("RGBA"), dtype=np.uint8)
+            if rgba.ndim == 2 or rgba.shape[2] != 4:
+                continue
+            if int(rgba[:, :, 3].min()) < 255:
+                transparent = True
+            pictures.append(rgba)
+            delays.append(max(0.02, float(frame.info.get("duration", 0) or 0) / 1000.0))
+    if not pictures:
+        raise RuntimeError("Unable to read image.")
+
+    starts, running = [], 0.0
+    for delay in delays:
+        starts.append(running)
+        running += delay
+    # Sample fast enough that the shortest delay gets its own frame; that is what makes a
+    # long frame repeat instead of the whole animation being squeezed into one slot per frame.
+    fps = 12.0 if running <= 0 else max(1.0, min(30.0, 1.0 / min(delays)))
+    count = max(len(pictures), int(round(running * fps)))
+
+    picks, index = [], 0
+    for number in range(count):
+        moment = number / fps
+        while index + 1 < len(pictures) and moment >= starts[index + 1]:
+            index += 1
+        picks.append(index)
+
+    code = cv2.COLOR_RGBA2BGRA if transparent else cv2.COLOR_RGB2BGR
+    converted = [cv2.cvtColor(picture, code) for picture in pictures]
+    return [converted[index] for index in picks], float(fps)
 
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}

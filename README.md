@@ -536,12 +536,25 @@ The application resolves bundled tile images, the demo clip, and default output 
 - Preferences > **Smart Paste**: default image duration (5 s), placement (at the playhead
   or after the selected clip), select the pasted clip, and fit pasted images to the frame.
   These are app preferences, never project data.
-- A copied *link* to a picture (plain text URL ending in an image type) offers an optional
-  download. It is never trusted: the response must be an image content type, must decode
-  and must stay under 32 MB, and the saved file is the re-encoded picture.
+- A copied **link** opens **Import Media from Link** with the source host, the media type,
+  the file name, the size and, for a signed link, when it expires. It also says that nothing
+  is downloaded until **Import** is chosen, which is true: only headers are read before that.
+  Direct links to images, animated GIFs, videos and audio work, including Discord
+  attachments, whose signed `ex`/`is`/`hm` query is sent untouched and kept out of the file
+  name and out of the log. Video-platform pages and ordinary web pages are explained rather
+  than fetched, and an expired signed link says it needs a fresh copy.
+- The download runs on the thread pool in a small progress window with its own Cancel, under
+  a 32 MB and 20 s limit, and loopback or private addresses are refused even when a redirect
+  leads to one. Bytes are sniffed and decoded before the `.part` file is renamed, so a broken,
+  oversized or cancelled import can never become a project asset. Animated GIFs keep their
+  original `.gif` file and stay animated: per-frame delays are resampled onto a steady frame
+  rate and transparency becomes alpha, so it composites like any other layer.
 - Every paste is one undo step. `tests/test_smart_paste.py` covers a transparent PNG
   (alpha preserved in the saved file), save/reopen, the preferences, Explorer files, text
-  field behaviour, the Media-panel rule, internal copy precedence and GIF bytes.
+  field behaviour, the Media-panel rule, internal copy precedence and GIF bytes;
+  `tests/test_link_import.py` covers link recognition, signed queries, refusals, redirects,
+  size/time limits, cancel, interrupted transfers and GIF timing, and
+  `tests/test_smart_paste_links.py` drives paste > dialog > download > timeline/save.
 
 ## Auto Captions
 

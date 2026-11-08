@@ -74,7 +74,13 @@ PNGs in the project's `Media` folder (alpha preserved), Explorer files are linke
 numeric fields keep their text paste, the Media panel imports without touching the timeline
 and everywhere else the picture lands at the playhead. Preferences set duration, placement,
 selection and fit; a clipboard picture wins over an older in-app clip copy; the whole paste
-is one undo step.
+is one undo step. A copied **link** goes through **Import Media from Link**: host, media type,
+file name, size and expiry are shown, nothing is fetched before Import, and the download runs
+off the GUI thread with progress and Cancel. Signed Discord-style queries are preserved and
+never logged or put in the file name, only `http(s)` and public addresses are opened (also
+across redirects), and the bytes must sniff and decode as media before the file leaves its
+`.part` name. Animated GIFs keep their original file, their per-frame timing and their alpha;
+choosing *Preserve original file* off re-encodes a downloaded still as PNG.
 
 **Auto Captions** — optional local speech recognition (`faster-whisper`, CPU/int8, no
 account or key; a model is downloaded only after consent, kept under
@@ -426,8 +432,11 @@ The panel lives in the **Graph Editor** dock (`G`) and edits the selected clip's
   therefore also moves later, unrelated clips on those same tracks; other tracks are left
   alone. **Audio only** deliberately cuts just the audio and can move it out of sync with a
   linked picture; that is the explicit request, not a fallback.
-- Smart Paste of a picture URL downloads only when explicitly chosen and only accepts an
-  image response that decodes; other links are ignored.
+- Smart Paste of a link never downloads before the Import dialog is accepted, never fetches a
+  page or a video-platform URL, refuses loopback and private addresses (including through
+  redirects), and only keeps a response that sniffs and decodes as media within the size and
+  time limits. An expired signed link is reported as expired rather than retried; Smart Paste
+  does not try to bypass it.
 - The recorder is Windows-only (WASAPI). Screen recording is written by the bundled
   ffmpeg (gdigrab) rather than by Qt, because DXGI desktop duplication - what Qt uses -
   delivers a pointer-free image and QScreenCapture has no cursor option. gdigrab draws the

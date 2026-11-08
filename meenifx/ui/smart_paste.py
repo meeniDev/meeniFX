@@ -1,37 +1,43 @@
 """Smart Paste: Ctrl+V turns whatever is on the clipboard into project media.
 
-The browser's "Copy Image", a screenshot tool, Explorer files and a plain picture URL all
-arrive here. Nothing is written before the decision is made: a text field keeps its own
-paste, the Media panel imports without touching the timeline, and everywhere else the
-timeline inserts at the playhead (or after the selection).
+The browser's "Copy Image", a screenshot tool, Explorer files, a plain picture URL and a
+Discord attachment link all arrive here. Nothing is written before the decision is made: a
+text field keeps its own paste, the Media panel imports without touching the timeline, and
+everywhere else the timeline inserts at the playhead (or after the selection).
 
 Clipboard pictures are saved as real PNG files in the project's ``Media`` folder, so they
 survive restarts, saves and relinking like any other imported file. Nothing depends on the
 clipboard after the paste.
+
+A link is only ever fetched after the "Import Media from Link" dialog is accepted, and the
+download itself runs on the thread pool (see :mod:`meenifx.media.link_import`): the editor
+never blocks, and a cancel leaves no file behind.
 """
 
+import logging
 import os
-import re
 import time
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
 
-from PyQt6.QtCore import QObject, QRunnable, pyqtSignal
+from PyQt6.QtCore import QObject, QRunnable, Qt, pyqtSignal
 from PyQt6.QtGui import QImage
-from PyQt6.QtWidgets import QApplication, QLineEdit, QPlainTextEdit, QTextEdit
+from PyQt6.QtWidgets import (QApplication, QCheckBox, QDialog, QDialogButtonBox, QFormLayout,
+                             QLabel, QLineEdit, QPlainTextEdit, QProgressBar, QPushButton,
+                             QTextEdit, QVBoxLayout)
 
 from ..constants import AUDIO_EXT, IMAGE_EXT, VIDEO_EXT
+from ..media import link_import
 from ..project.storage import DATA_DIR
 from . import layout
+
+log = logging.getLogger("meenifx.smart_paste")
 
 SUPPORTED = tuple(IMAGE_EXT + VIDEO_EXT + AUDIO_EXT)
 # Animated GIFs carry their own frame data: as a file they are a video, not a still.
 STILLS = tuple(ext for ext in IMAGE_EXT if ext != ".gif")
-DOWNLOAD_LIMIT = 32 * 1024 * 1024
+DOWNLOAD_LIMIT = link_import.MAX_BYTES
 
 _PLACEMENTS = ("playhead", "after")
-_URL = re.compile(r"^https?://\S+$", re.IGNORECASE)
-_PICTURE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif")
 
 
 def _flag(value):
@@ -111,43 +117,19 @@ def save_clipboard_image(image, folder):
     return path
 
 
-def fetch_image(url, folder, limit=DOWNLOAD_LIMIT):
-    """Download a remote picture and save it as PNG, or raise ValueError.
-
-    The URL is never trusted: the response must be an image content type, must decode as a
-    picture and must stay under the size limit. Since the bytes are re-encoded, the file on
-    disk is a validated picture rather than whatever the server returned.
-    """
-    if urlsplit(url).scheme.lower() not in ("http", "https"):
-        raise ValueError("only http(s) links can be downloaded")
-    request = Request(url, headers={"User-Agent": "meeniFX Smart Paste"})
-    with urlopen(request, timeout=20) as response:
-        content_type = str(response.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-        if not content_type.startswith("image/"):
-            raise ValueError(f"that link is {content_type or 'not an image'}, not a picture")
-        payload = response.read(limit + 1)
-    if len(payload) > limit:
-        raise ValueError("the picture is larger than 32 MB")
-    import cv2
-    import numpy as np
-
-    frame = cv2.imdecode(np.frombuffer(payload, np.uint8), cv2.IMREAD_UNCHANGED)
-    if frame is None:
-        raise ValueError("the downloaded file is not a picture this build can read")
-    path = unique_path(folder, "Pasted", ".png")
-    ok, buffer = cv2.imencode(".png", frame)
-    if not ok:
-        raise ValueError("the downloaded picture could not be converted")
-    buffer.tofile(path)
-    return path
-
-
 def image_url(text):
-    """The URL a plain-text clipboard holds, when it points at a picture."""
-    text = (text or "").strip()
-    if not text or len(text) > 2048 or not _URL.match(text):
+    """The URL a plain-text clipboard holds, when it points at a picture.
+
+    Kept apart from :func:`classify_clipboard` because a still is the only shape the older
+    Smart Paste knew about; a web page or a platform link answers "".
+    """
+    try:
+        info = link_import.classify(text)
+    except link_import.UnsupportedLink:
         return ""
-    return text if urlsplit(text).path.lower().endswith(_PICTURE_SUFFIXES) else ""
+    if info is None or info.kind not in ("image", "animation"):
+        return ""
+    return info.url
 
 
 def gif_bytes(mime):
@@ -184,31 +166,225 @@ class _DecodeJob(QRunnable):
         self.signals.ready.emit(self.path, kind, frames, float(fps))
 
 
-class _FetchSignals(QObject):
-    ready = pyqtSignal(str, str)
+class _ProbeSignals(QObject):
+    ready = pyqtSignal(str, object)
     failed = pyqtSignal(str, str)
 
 
-class _FetchJob(QRunnable):
-    def __init__(self, url, folder):
+class _ProbeJob(QRunnable):
+    """Ask the server for the link's headers only. No media bytes are fetched here."""
+
+    def __init__(self, info):
         super().__init__()
-        self.url = url
-        self.folder = folder
-        self.signals = _FetchSignals()
+        self.info = info
+        self.signals = _ProbeSignals()
         self.setAutoDelete(False)
 
     def run(self):
         try:
-            path = fetch_image(self.url, self.folder)
-        except Exception as exc:
-            self.signals.failed.emit(self.url, str(exc))
+            probed = link_import.probe(self.info.url)
+        except link_import.LinkError as exc:
+            self.signals.failed.emit(self.info.url, exc.message)
             return
-        self.signals.ready.emit(self.url, path)
+        except Exception:
+            # Never let a worker exception vanish: it would look like a crash to the user.
+            log.exception("link probe failed for %s", link_import.redact(self.info.url))
+            self.signals.failed.emit(self.info.url, "That link could not be checked.")
+            return
+        self.signals.ready.emit(self.info.url, probed)
+
+
+class _DownloadSignals(QObject):
+    progress = pyqtSignal(int, int)
+    ready = pyqtSignal(str, object)
+    failed = pyqtSignal(str, str)
+    cancelled = pyqtSignal(str)
+
+
+class _DownloadJob(QRunnable):
+    """One link download. SmartPaste keeps a reference until it reports back.
+
+    ``setAutoDelete(False)`` means the Python object owns the runnable, so dropping the only
+    reference while ``run()`` is executing destroys the object under the worker thread and
+    takes the whole process down. That was the Discord GIF crash: the job used to be a local
+    variable, so it was collected the moment the dialog returned.
+    """
+
+    def __init__(self, info, folder, limit=DOWNLOAD_LIMIT, preserve=True):
+        super().__init__()
+        self.info = info
+        self.folder = folder
+        self.limit = limit
+        self.preserve = preserve
+        self.signals = _DownloadSignals()
+        self._cancel = False
+        self.setAutoDelete(False)
+
+    def cancel(self):
+        self._cancel = True
+
+    def _cancelled(self):
+        return self._cancel
+
+    def run(self):
+        try:
+            result = link_import.download(self.info, self.folder, limit=self.limit,
+                                          preserve=self.preserve,
+                                          progress=self.signals.progress.emit,
+                                          cancelled=self._cancelled)
+        except link_import.Cancelled:
+            self.signals.cancelled.emit(self.info.url)
+            return
+        except link_import.LinkError as exc:
+            self.signals.failed.emit(self.info.url, exc.message)
+            return
+        except Exception as exc:
+            log.exception("link download crashed for %s", link_import.redact(self.info.url))
+            self.signals.failed.emit(self.info.url, f"Unexpected error: {exc}")
+            return
+        self.signals.ready.emit(self.info.url, result)
+
+
+# ---------------------------------------------------------------------- dialogs
+class ImportLinkDialog(QDialog):
+    """The consent step: what the link is, and what to do with it once it is here."""
+
+    def __init__(self, parent, info, insert_default=True):
+        super().__init__(parent)
+        self.info = info
+        self.setWindowTitle("Import Media from Link")
+        self.setModal(True)
+        self.setMinimumWidth(470)
+        outer = QVBoxLayout(self)
+        outer.setSpacing(10)
+
+        heading = QLabel("Import Media from Link", self)
+        heading.setObjectName("dialogHeading")
+        outer.addWidget(heading)
+        note = QLabel("Nothing is downloaded until you choose Import. The file is saved into "
+                      "the project's Media folder.", self)
+        note.setObjectName("dialogNote")
+        note.setWordWrap(True)
+        outer.addWidget(note)
+
+        form = QFormLayout()
+        form.setHorizontalSpacing(16)
+        form.setVerticalSpacing(6)
+        form.addRow("Source", self._text(info.host))
+        form.addRow("Media", self._text(info.type_label))
+        form.addRow("File", self._text(info.filename or "Unknown"))
+        form.addRow("Size", self._text(link_import.human_size(info.size) if info.size
+                                       else "Checked while downloading"))
+        if info.expires:
+            stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(info.expires))
+            form.addRow("Link expires", self._text(stamp))
+        details = QLabel("Dimensions, duration and frame count are read from the file once "
+                         "it has downloaded.", self)
+        details.setObjectName("dialogNote")
+        details.setWordWrap(True)
+        outer.addLayout(form)
+        outer.addWidget(details)
+
+        self.add_box = QCheckBox("Add to Project Media", self)
+        self.add_box.setChecked(True)
+        self.insert_box = QCheckBox("Insert at Playhead", self)
+        self.insert_box.setChecked(bool(insert_default))
+        self.preserve_box = QCheckBox("Preserve original file when possible", self)
+        self.preserve_box.setChecked(True)
+        self.preserve_box.setEnabled(info.kind == "image")
+        self.preserve_box.setToolTip(
+            "Off: a downloaded still is re-encoded as PNG. GIFs, videos and audio always keep "
+            "their original file." if info.kind == "image" else
+            "Animated GIFs, videos and audio are always kept as their original file.")
+        for box in (self.add_box, self.insert_box, self.preserve_box):
+            outer.addWidget(box)
+
+        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
+                                        | QDialogButtonBox.StandardButton.Cancel, self)
+        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Import")
+        self.buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Cancel")
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        self.add_box.toggled.connect(self._sync)
+        self.insert_box.toggled.connect(self._sync)
+        outer.addWidget(self.buttons)
+        self._sync()
+        self.setToolTip(link_import.redact(info.url))
+
+    def _text(self, value):
+        label = QLabel(str(value), self)
+        label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        return label
+
+    def _sync(self):
+        """Import needs a destination: adding to the panel, the timeline, or both."""
+        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(
+            self.add_box.isChecked() or self.insert_box.isChecked())
+
+    def options(self):
+        return {"add": self.add_box.isChecked(), "insert": self.insert_box.isChecked(),
+                "preserve": self.preserve_box.isChecked()}
+
+
+class DownloadProgressDialog(QDialog):
+    """A non-blocking progress window with a Cancel button of its own."""
+
+    cancel_requested = pyqtSignal()
+
+    def __init__(self, parent, info):
+        super().__init__(parent)
+        self.setWindowTitle("Importing Media")
+        self.setModal(False)
+        self.setMinimumWidth(380)
+        self._finished = False
+        outer = QVBoxLayout(self)
+        outer.setSpacing(8)
+        self.label = QLabel(f"Downloading {info.filename or info.host}", self)
+        self.label.setWordWrap(True)
+        outer.addWidget(self.label)
+        self.bar = QProgressBar(self)
+        self.bar.setRange(0, 0)                    # busy until the server declares a size
+        self.bar.setTextVisible(False)
+        outer.addWidget(self.bar)
+        self.status = QLabel("Starting\u2026", self)
+        self.status.setObjectName("dialogNote")
+        outer.addWidget(self.status)
+        self.cancel_button = QPushButton("Cancel", self)
+        self.cancel_button.clicked.connect(self._cancel)
+        outer.addWidget(self.cancel_button, alignment=Qt.AlignmentFlag.AlignRight)
+
+    def set_progress(self, done, total):
+        if self._finished:
+            return
+        if total > 0:
+            self.bar.setRange(0, int(total))
+            self.bar.setValue(min(int(done), int(total)))
+            self.status.setText(f"{link_import.human_size(done)} of {link_import.human_size(total)}")
+        else:
+            self.status.setText(link_import.human_size(done))
+
+    def _cancel(self):
+        if self._finished:
+            return
+        self.cancel_button.setEnabled(False)
+        self.status.setText("Cancelling\u2026")
+        self.cancel_requested.emit()
+
+    def closeEvent(self, event):
+        # Closing the window is a cancel, not a silent "keep downloading in the background".
+        if not self._finished:
+            self._cancel()
+        super().closeEvent(event)
+
+    def finish(self):
+        self._finished = True
+        self.close()
+        self.deleteLater()
 
 
 # ------------------------------------------------------------------- controller
 class SmartPaste(QObject):
-    """The Ctrl+V dispatcher: text stays text, pictures and files become media."""
+    """The Ctrl+V dispatcher: text stays text, pictures, files and links become media."""
 
     def __init__(self, window):
         super().__init__(window)
@@ -216,7 +392,9 @@ class SmartPaste(QObject):
         self._serial = 0
         self._internal_copy_serial = -1
         self._decoding = {}
-        self._fetching = set()
+        self._links = {}            # url -> running probe/download job (owned, never dropped)
+        self._progress = {}         # url -> DownloadProgressDialog
+        self._options = {}          # url -> the choices made in the import dialog
         self._still_queue = []
         self._queue_frame = None
         clipboard = QApplication.clipboard()
@@ -262,13 +440,28 @@ class SmartPaste(QObject):
             if not image.isNull():
                 return {"kind": "image", "image": image}
         if mime.hasText():
-            url = image_url(mime.text())
-            if url:
-                return {"kind": "url", "url": url}
+            try:
+                info = link_import.classify(mime.text())
+            except link_import.UnsupportedLink:
+                info = None
+            if info is not None:
+                return {"kind": "url", "info": info}
         return None
 
     def has_media(self):
         return self.payload() is not None
+
+    def unsupported_link_note(self):
+        """Why a pasted link cannot be imported, when the clipboard holds one at all."""
+        clipboard = QApplication.clipboard()
+        mime = clipboard.mimeData()
+        if mime is None or not mime.hasText():
+            return ""
+        try:
+            link_import.classify(mime.text())
+        except link_import.UnsupportedLink as exc:
+            return exc.message
+        return ""
 
     # ---- paste ---------------------------------------------------------
     def paste(self):
@@ -292,6 +485,10 @@ class SmartPaste(QObject):
         if payload is not None:
             self._import_payload(payload)
             return True
+        note = self.unsupported_link_note()
+        if note:
+            self.w.toast_message(note, kind="info", duration_ms=6000)
+            return True
         self.w.toast_message("Nothing on the clipboard to paste", kind="info")
         return False
 
@@ -303,13 +500,7 @@ class SmartPaste(QObject):
         folder = managed_folder(project)
         kind = payload.get("kind")
         if kind == "url":
-            if not ask_import_url(self.w, payload["url"]):
-                return
-            job = _FetchJob(payload["url"], folder)
-            job.signals.ready.connect(self._fetched)
-            job.signals.failed.connect(self._fetch_failed)
-            self._fetching.add(payload["url"])
-            self.w.pool.start(job)
+            self._probe_link(payload["info"])
             return
         try:
             if kind == "image":
@@ -331,6 +522,91 @@ class SmartPaste(QObject):
             return
         self._insert(paths)
 
+    # ---- links ---------------------------------------------------------
+    def _probe_link(self, info):
+        """Check the link's headers first, off the GUI thread, then ask what to do."""
+        if info.url in self._links:
+            self.w.toast_message("That link is already being imported", kind="info")
+            return
+        job = _ProbeJob(info)
+        job.signals.ready.connect(self._link_probed)
+        job.signals.failed.connect(self._link_failed)
+        self._links[info.url] = job
+        self.w.toast_message(f"Checking {info.host}\u2026", kind="info", duration_ms=1500)
+        self.w.pool.start(job)
+
+    def _link_probed(self, url, info):
+        self._links.pop(url, None)
+        if self.w.projects.project is None:
+            self.w.toast_message("Open or create a project before importing media", kind="error")
+            return
+        dialog = ImportLinkDialog(self.w, info,
+                                  insert_default=not self._media_panel_active())
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            log.info("link import cancelled before download: %s", link_import.redact(url))
+            return
+        self._start_download(info, dialog.options())
+
+    def _link_failed(self, url, message):
+        self._links.pop(url, None)
+        log.warning("link %s could not be imported: %s", link_import.redact(url), message)
+        self.w.toast_message(message, kind="error", duration_ms=7000)
+
+    def _start_download(self, info, options):
+        project = self.w.projects.project
+        if project is None:
+            self.w.toast_message("Open or create a project before importing media", kind="error")
+            return
+        if info.url in self._links:
+            self.w.toast_message("That link is already being imported", kind="info")
+            return
+        job = _DownloadJob(info, managed_folder(project), preserve=options.get("preserve", True))
+        progress = DownloadProgressDialog(self.w, info)
+        job.signals.progress.connect(progress.set_progress)
+        job.signals.ready.connect(self._download_ready)
+        job.signals.failed.connect(self._download_failed)
+        job.signals.cancelled.connect(self._download_cancelled)
+        progress.cancel_requested.connect(job.cancel)
+        self._links[info.url] = job       # keeps the runnable alive while it runs
+        self._progress[info.url] = progress
+        self._options[info.url] = options
+        progress.show()
+        self.w.pool.start(job)
+
+    def _end_link(self, url):
+        self._links.pop(url, None)
+        self._options.pop(url, None)
+        progress = self._progress.pop(url, None)
+        if progress is not None:
+            progress.finish()
+
+    def _download_ready(self, url, result):
+        options = self._options.get(url) or {}
+        self._end_link(url)
+        if self.w.projects.project is None:
+            self.w.toast_message(f"Downloaded {os.path.basename(result.path)}",
+                                 kind="info", duration_ms=4000)
+            return
+        summary = result.summary()
+        self.w.toast_message(f"Imported {os.path.basename(result.path)}"
+                             + (f" \u00b7 {summary}" if summary else ""))
+        if options.get("add", True):
+            self._add_to_library([result.path])
+        if options.get("insert", True):
+            self._insert([result.path], self.w.engine.session.playhead)
+        elif options.get("add", True):
+            self.w._refresh_panels()
+
+    def _download_failed(self, url, message):
+        self._end_link(url)
+        log.warning("link download failed for %s: %s", link_import.redact(url), message)
+        self.w.toast_message(f"Import failed: {message}", kind="error", duration_ms=8000)
+
+    def _download_cancelled(self, url):
+        self._end_link(url)
+        log.info("link download cancelled: %s", link_import.redact(url))
+        self.w.toast_message("Import cancelled", kind="info")
+
     # ---- insertion -----------------------------------------------------
     def _insert_frame(self):
         if PasteSettings.load().placement == "after":
@@ -341,10 +617,10 @@ class SmartPaste(QObject):
                 return max(clip.end for clip in selected)
         return self.w.engine.session.playhead
 
-    def _insert(self, paths):
+    def _insert(self, paths, frame=None):
         stills = [p for p in paths if p.lower().endswith(STILLS)]
         moving = [p for p in paths if not p.lower().endswith(STILLS)]
-        frame = self._insert_frame()
+        frame = self._insert_frame() if frame is None else frame
         if stills:
             self._still_queue = stills[1:]
             self._queue_frame = frame
@@ -396,18 +672,6 @@ class SmartPaste(QObject):
                              duration_ms=4000)
         self._next_still()
 
-    def _fetched(self, url, path):
-        self._fetching.discard(url)
-        if self._media_panel_active():
-            self._add_to_library([path])
-        else:
-            self._insert([path])
-        self.w.toast_message(f"Downloaded {os.path.basename(path)}")
-
-    def _fetch_failed(self, url, message):
-        self._fetching.discard(url)
-        self.w.toast_message(f"Could not download that picture: {message}", kind="error", duration_ms=4000)
-
     # ---- library / refresh ---------------------------------------------
     def _register_library(self, path):
         from ..project import io as project_io
@@ -427,17 +691,3 @@ class SmartPaste(QObject):
         self.w._refresh_panels()
         self.w._request_preview()
         self.w.timeline_panel.canvas.update()
-
-
-# --------------------------------------------------------------------- dialogs
-def ask_import_url(parent, url):
-    """Ask before downloading: a pasted link is not a promise of a picture."""
-    from PyQt6.QtWidgets import QMessageBox
-
-    host = urlsplit(url).netloc or url
-    answer = QMessageBox.question(
-        parent, "Paste image from the web",
-        f"Import this picture from {host}?\n\n{url[:300]}\n\n"
-        "Nothing is downloaded until you agree, and the file is saved into the project's "
-        "Media folder.")
-    return answer == QMessageBox.StandardButton.Yes

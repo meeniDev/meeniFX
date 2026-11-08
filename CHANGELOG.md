@@ -2,6 +2,29 @@
 
 ## Unreleased (2026-11-05)
 
+### Smart Paste media links (and the Discord GIF crash)
+
+- **Fixed the crash.** The download worker was a local variable, and a `QRunnable` with
+  `autoDelete(False)` is owned by Python, so the job was collected while its thread was still
+  running: the app died on the first frame of a Discord GIF download with no traceback. Jobs
+  now live in `SmartPaste` until they report back, which `tests/test_smart_paste_links.py`
+  asserts directly.
+- **Import Media from Link.** A pasted direct link is probed (headers only) and then shows its
+  host, media type, file name, size and, for signed links, expiry, with Add to Project Media,
+  Insert at Playhead and Preserve original file; nothing is fetched before Import. From the
+  Media panel the default is import-only, from the timeline it inserts at the playhead.
+- **Real media, checked.** Images, animated GIFs, MP4/WebM/MOV, WAV/MP3/FLAC/OGG and Discord
+  attachments are recognised by a parsed URL and, after the transfer, by the bytes themselves:
+  the suffix on disk comes from a sniff plus a decode, not from the URL. Signed `ex`/`is`/`hm`
+  queries are sent untouched and kept out of the file name and the log; loopback and private
+  addresses are refused before a socket opens and again on every redirect; size, time and
+  total-length limits apply, the stream is written to `.part` and renamed only when valid, and
+  cancel or a broken transfer leaves nothing behind. Expired signed links say so.
+- **Animated GIFs stay animated.** The original `.gif` is preserved byte for byte, and
+  `read_gif_frames` now resamples each frame's own delay onto a steady rate (repeating long
+  frames) and keeps transparency as alpha instead of flattening it, so GIF clips keep their
+  duration, timing and alpha compositing.
+
 ### Simple Choker (Matte / Keying)
 
 - **New alpha-edge effect.** `Simple Choker` moves a layer's matte: positive Choke pulls the
