@@ -275,7 +275,7 @@ def test_timeline_keyframes_menu_only_opens_the_editor_when_triggered(qapp, monk
 
     from meenifx.ui.timeline_widget import TimelineCanvas
 
-    canvas = TimelineCanvas(build_engine(), None)
+    canvas = TimelineCanvas(build_engine()[0], None)
     opened = []
     canvas.keyframe_editor_requested.connect(opened.append)
     shown = []
