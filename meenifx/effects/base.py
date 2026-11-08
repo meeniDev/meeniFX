@@ -39,6 +39,9 @@ class ParamSpec:
     choice_labels: tuple = ()
     pixels: bool = False        # value is in logical-resolution pixels
     area: bool = False          # value is a pixel area (scales with quality^2)
+    # Decimal places the control shows and keeps. None = the old default (0 for an int,
+    # 2 for a float); a rate such as 23.976 sets 3 so typing it is not rounded to 23.98.
+    decimals: int = None
     help: str = ""
     advanced: bool = False      # raw technical value: shown under the "Advanced" fold
     # Optional collapsible section inside the effect card ("Detection", "Labels"...).

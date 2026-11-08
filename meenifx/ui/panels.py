@@ -2011,10 +2011,18 @@ class EffectsPanel(QWidget):
         current = spec.clamp(parameter_value_at(stored, self._clip_frame(clip)))
         tip = spec.help or spec.label
         if spec.kind in ("int", "float"):
+            decimals = (0 if spec.kind == "int" else 2)
+            if getattr(spec, "decimals", None) is not None:
+                decimals = int(spec.decimals)
+            # Labels are fixed-width so the controls line up; a longer name such as
+            # "Frame Rate" must still be readable instead of being elided.
+            from PyQt6.QtGui import QFontMetrics
+            label_width = max(LABEL_W,
+                              QFontMetrics(self.font()).horizontalAdvance(spec.label) + 10)
             field = ScrubField(spec.label, current, spec.minimum, spec.maximum,
                                 default=spec.default, step=spec.step, unit=spec.unit,
-                                decimals=0 if spec.kind == "int" else 2,
-                                label_width=LABEL_W, tooltip=tip)
+                                decimals=decimals,
+                                label_width=label_width, tooltip=tip)
             field.interaction_started.connect(self._begin_edit)
             field.edited.connect(lambda value, c=clip, e=entry, n=spec.name:
                                  self._set_param(c, e, n, value, live=True))

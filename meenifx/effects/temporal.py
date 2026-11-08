@@ -27,6 +27,46 @@ from .base import LayerEffect, ParamSpec, param_number
 
 DEFAULT_FPS = 12.0
 
+# The rates editors actually use. A value within a thousandth of one of these is treated
+# as the exact rational rate (24000/1001, 30000/1001...), so a rate typed as "23.976" holds
+# with the same timing as the exact NTSC rate instead of drifting by 0.00002 fps.
+COMMON_RATES = (
+    (24000 / 1001, (24000, 1001)),
+    (24.0, (24, 1)),
+    (25.0, (25, 1)),
+    (30000 / 1001, (30000, 1001)),
+    (30.0, (30, 1)),
+    (48.0, (48, 1)),
+    (50.0, (50, 1)),
+    (60000 / 1001, (60000, 1001)),
+    (60.0, (60, 1)),
+    (120.0, (120, 1)),
+)
+
+
+def exact_rate(fps):
+    """`fps` as an exact (numerator, denominator) rate for the common broadcast rates."""
+    try:
+        value = float(fps)
+    except (TypeError, ValueError):
+        value = DEFAULT_FPS
+    for rate, fraction in COMMON_RATES:
+        if abs(value - rate) <= 0.001:
+            return fraction
+    return (value, 1.0)
+
+
+def rate_text(fps):
+    """Short text for a rate: 23.976, 29.97, 12 - never a forced two decimals."""
+    try:
+        value = float(fps)
+    except (TypeError, ValueError):
+        value = DEFAULT_FPS
+    for rate, _fraction in COMMON_RATES:
+        if abs(value - rate) <= 0.001 and rate != round(rate):
+            return f"{rate:.3f}".rstrip("0").rstrip(".")
+    return f"{value:.3f}".rstrip("0").rstrip(".")
+
 
 def _fps_from_step(step, project_fps):
     """Frame rate represented by one old-style Step value (frames per hold)."""
@@ -90,15 +130,20 @@ def posterize_hold(frame, params, project_fps=30.0):
         fps = frame_rate_at(params, frame, project)
         if not 0.0 < fps < project:
             return frame
-        index = int(math.floor((frame - offset) * fps / project + 1e-9))
-        sample = offset + int(round(index * project / fps))
+        numerator, denominator = exact_rate(fps)
+        # One window is `project / fps` frames: exact integers here for 24/25/30/50/60
+        # and the precise NTSC fractions for 23.976/29.97/59.94, so no drift accumulates.
+        index = int(math.floor((frame - offset) * numerator
+                               / (denominator * project) + 1e-9))
+        sample = offset + int(round(index * denominator * project / numerator))
         return max(0, min(sample, frame))
     boundary = float(offset)
     while True:
         rate = frame_rate_at(params, int(round(boundary)), project)
         if not 0.0 < rate < project:
             return frame
-        following = boundary + project / rate
+        numerator, denominator = exact_rate(rate)
+        following = boundary + denominator * project / numerator
         if following > frame:
             return max(0, min(int(round(boundary)), frame))
         boundary = following
@@ -155,10 +200,10 @@ class PosterizeTimeEffect(LayerEffect):
     category = "Time"
 
     PARAMS = (
-        ParamSpec("fps", "Frame Rate", "float", 1.0, 60.0, DEFAULT_FPS, step=0.1,
-                  unit=" fps",
+        ParamSpec("fps", "Frame Rate", "float", 1.0, 60.0, DEFAULT_FPS, step=0.001,
+                  unit=" fps", decimals=3,
                   help="Pictures per second the layer is sampled at - a sampling rate, "
-                       "not playback speed"),
+                       "not playback speed (23.976, 29.97 and 59.94 are kept exact)"),
         ParamSpec("offset", "Offset", "int", 0, 59, 0, unit=" f",
                   help="Shift where each held picture begins on the timeline"),
     )
