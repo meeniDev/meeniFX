@@ -23,7 +23,7 @@ from .effects.lut import LutEffect
 from .effects.matte import SimpleChokerEffect
 from .effects.stylize import (DuotoneEffect, EdgeOutlineEffect, FilmGrainEffect, HalftoneEffect,
                               InvertEffect, PosterizeEffect, VhsCrtEffect, VignetteEffect)
-from .effects.temporal import EchoEffect, PosterizeTimeEffect, StutterEffect
+from .effects.temporal import EchoEffect, PosterizeTimeEffect, StutterEffect, posterize_hold
 from .effects.warp import (CornerPinEffect, DistortionEffect, MeshWarpEffect,
                            PerspectiveEffect, PuppetWarpEffect, SkewEffect)
 from .media.cache import MediaCache, MediaEntry
@@ -504,9 +504,9 @@ class EditorEngine:
             key = entry.get("effect_id")
             params = entry.get("params") or {}
             if key == "posterize_time":
-                step = max(1, int(round(parameter_value_at(params.get("step", 1), frame))))
-                offset = max(0, int(round(parameter_value_at(params.get("offset", 0), frame))))
-                frame = max(0, frame - ((frame - offset) % step))
+                # Frame Rate in fps. A project saved with the old Step control has been
+                # converted on load; `posterize_hold` still honours Step as a fallback.
+                frame = posterize_hold(frame, params, self.timeline.fps)
             elif key == "stutter":
                 interval = max(1, int(round(parameter_value_at(params.get("interval", 8), frame))))
                 hold = max(1, min(interval, int(round(parameter_value_at(params.get("hold", 3), frame)))))

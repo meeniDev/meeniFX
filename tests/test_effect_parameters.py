@@ -68,7 +68,7 @@ SYMMETRIC_EXTREMES = {("color_correct", "hue"), ("directional_blur", "angle"),
 TEMPORAL_CASES = {
     ("wave_warp", "speed"), ("exposure_flicker", "speed"),
     ("flash", "duration"), ("flash", "interval"), ("flash", "envelope"),
-    ("posterize_time", "step"), ("posterize_time", "offset"),
+    ("posterize_time", "fps"), ("posterize_time", "offset"),
     ("stutter", "interval"), ("stutter", "hold"), ("stutter", "offset"),
     ("echo", "count"), ("echo", "step"), ("echo", "decay"),
     ("echo", "offset_x"), ("echo", "offset_y"), ("echo", "blend"),

@@ -2,6 +2,33 @@
 
 ## Unreleased (2026-11-05)
 
+### Posterize Time: a Frame Rate control
+
+- **Frame Rate (fps), 12 fps by default.** The primary control is now a frame rate in fps
+  instead of a count of frames per hold, with its own ` fps` unit and the same compact
+  numeric field as every other property. 6, 8, 12, 15, 24 and 30 fps work directly, and a
+  fractional rate (for example 7.5) is accepted. Offset stays as the secondary control and
+  shifts where the holds begin. This is a sampling rate, not playback speed.
+- **Drift-free holds.** Each project frame is quantized by the index of its window
+  (`floor((frame - offset) * fps / project fps)`) and samples
+  `round(index * project fps / fps)`, so 60 fps / 12 fps holds five frames, 30 / 10 and
+  24 / 8 hold three, and 30 / 7 alternates four and five without accumulating error. A
+  rate at or above the project's own rate adds no hold, and the timing of the clip, its
+  duration and its audio are never touched.
+- **Keyframed, and the whole state is held.** Frame Rate keyframes like every parameter;
+  the rate curve is evaluated at the clip's local frame, and the sampled moment is used
+  for the source picture, transforms, effect parameters, text animation and presets in
+  both preview and export.
+- **Old projects keep their picture.** A saved `step` (frames per hold) is converted on
+  load using the project's frame rate (`fps = project fps / step`), with keyframed steps
+  turned into keyframed rates and every keyframe time preserved, so a static old project
+  holds exactly the same frames as before. Frames are cached by the existing source seek
+  cache, so a held picture is not decoded again for each held project frame.
+- `tests/test_posterize_time.py` covers the 60/12, 30/10 and 24/8 matrix, fractional
+  drift, animated transform and effect state, keyframed rates, trimmed and split clips,
+  preview/export parity, unchanged duration and audio, and legacy `step` migration; the
+  existing temporal tests keep pinning the legacy alias.
+
 ### YouTube links in Smart Paste
 
 - **Import YouTube Video.** A pasted `youtube.com/watch`, `youtu.be`, `/shorts/`, `/live/` or

@@ -282,6 +282,12 @@ def sections_to_timeline(sections, fps, path_for_media):
     timeline._clip_ids = itertools.count(max(tdata.get("max_clip", 0), max(c["id"], default=0)) + 1)
     timeline._link_ids = itertools.count(max((clip.link_id for clip in timeline.all_clips()), default=0) + 1)
 
+    # Posterize Time used to store "Step" (frames per hold). Convert it with the project's
+    # own rate here, so an older file holds exactly the frames it always did - animated
+    # steps included - and the Frame Rate control shows the rate the picture is using.
+    from ..effects.temporal import migrate_timeline
+    migrate_timeline(timeline)
+
     m = sections["markers"]
     timeline.markers = [Marker(r["id"], r["frame"], r.get("name", ""), r.get("color")) for r in m["markers"]]
     timeline.markers.sort(key=lambda x: (x.frame, x.id))

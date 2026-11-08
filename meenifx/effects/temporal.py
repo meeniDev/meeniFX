@@ -5,35 +5,167 @@ made by the engine (`EditorEngine.held_frame`), so the whole pipeline (picture,
 effects, transform) freezes together and the export matches the preview exactly.
 Echo samples the clip's own earlier source frames, which is deterministic no matter
 what order frames are rendered in.
+
+Posterize Time is expressed as a **Frame Rate** in fps, not as a number of frames per
+hold: the hold length then follows the project's own rate instead of breaking when the
+project frame rate changes. Projects saved before that control stored ``step`` (frames
+per hold); `migrate_timeline` converts them on load with the project's rate, so their
+picture holds for exactly the same frames it always did.
 """
 
 from __future__ import annotations
+
+import math
 
 import numpy as np
 
 import cv2
 
+from ..model.keyframes import AnimatedValue, Keyframe, parameter_value_at
 from ..model.values import Value
 from .base import LayerEffect, ParamSpec, param_number
 
+DEFAULT_FPS = 12.0
+
+
+def _fps_from_step(step, project_fps):
+    """Frame rate represented by one old-style Step value (frames per hold)."""
+    try:
+        step = float(step)
+    except (TypeError, ValueError):
+        return DEFAULT_FPS
+    return max(0.01, float(project_fps or 30.0) / max(1.0, step))
+
+
+def frame_rate_at(params, frame, project_fps=30.0):
+    """The Posterize Time rate (fps) of one entry, at a clip-local frame.
+
+    ``fps`` is the control; an entry saved with the old ``step`` is still honoured, so a
+    project that has not been through `migrate_timeline` cannot render differently.
+    """
+    params = params or {}
+    stored = params.get("fps")
+    if stored is None:
+        stored = params.get("step")
+        if stored is None:
+            return DEFAULT_FPS
+        try:
+            return _fps_from_step(parameter_value_at(stored, frame), project_fps)
+        except (TypeError, ValueError):
+            return DEFAULT_FPS
+    try:
+        return float(parameter_value_at(stored, frame))
+    except (TypeError, ValueError):
+        return DEFAULT_FPS
+
+
+def posterize_hold(frame, params, project_fps=30.0):
+    """The clip-local frame a Posterize Time entry samples at ``frame``.
+
+    With a fixed rate the hold comes from the *index* of the window
+    (``floor(t * fps / project)``) and the sample from that index
+    (``round(index * project / fps)``), so a fractional rate never accumulates drift:
+    60 fps / 12 fps holds 0..4, 5..9, 10..14, while 30 fps / 7 fps alternates four and
+    five frame holds and still lands exactly on frame 30 at the end.
+
+    A keyframed rate advances from one window start to the next by that start's own
+    window length in fractional frames. The start sequence depends only on the curve and
+    the offset, so it is monotonic - a rising rate can never make the picture jump
+    backwards - and it never drifts. A rate at or above the project's own rate adds no
+    hold, and the mapping only changes *which* picture is shown: clip time, duration and
+    audio are never touched.
+    """
+    frame = max(0, int(frame))
+    project = float(project_fps or 30.0)
+    params = params or {}
+    try:
+        offset = int(round(parameter_value_at(params.get("offset", 0), frame)))
+    except (TypeError, ValueError):
+        offset = 0
+    offset = max(0, offset)
+    if frame < offset:
+        return 0
+    animated = isinstance(params.get("fps", params.get("step")), AnimatedValue)
+    if not animated:
+        fps = frame_rate_at(params, frame, project)
+        if not 0.0 < fps < project:
+            return frame
+        index = int(math.floor((frame - offset) * fps / project + 1e-9))
+        sample = offset + int(round(index * project / fps))
+        return max(0, min(sample, frame))
+    boundary = float(offset)
+    while True:
+        rate = frame_rate_at(params, int(round(boundary)), project)
+        if not 0.0 < rate < project:
+            return frame
+        following = boundary + project / rate
+        if following > frame:
+            return max(0, min(int(round(boundary)), frame))
+        boundary = following
+
+
+def _converted_fps(value, project_fps):
+    """One stored Step value (or curve) rewritten as Frame Rate, keyframes included."""
+    if isinstance(value, AnimatedValue):
+        converted = AnimatedValue()
+        if value.base_value is not None:
+            converted.base_value = _fps_from_step(value.base_value, project_fps)
+        converted.keyframes = [
+            Keyframe(key.time, _fps_from_step(key.value, project_fps), key.interpolation,
+                     key.in_influence, key.out_influence, key.in_value_handle,
+                     key.out_value_handle)
+            for key in value.keyframes
+        ]
+        return converted
+    return _fps_from_step(value, project_fps)
+
+
+def migrate_effect_params(entry, project_fps=30.0):
+    """Convert one saved Posterize Time entry from Step to Frame Rate, in place.
+
+    Nothing is discarded: the hold length is preserved through the project's own frame
+    rate, and a keyframed Step curve becomes a keyframed Frame Rate curve with the same
+    keyframe times. Returns True when the entry changed.
+    """
+    params = (entry or {}).get("params")
+    if not isinstance(params, dict) or "step" not in params or "fps" in params:
+        return False
+    params["fps"] = _converted_fps(params.pop("step"), project_fps)
+    return True
+
+
+def migrate_timeline(timeline):
+    """Migrate every legacy Posterize Time on a loaded timeline; returns the count."""
+    fps = float(getattr(timeline, "fps", 30.0) or 30.0)
+    clips = timeline.all_clips() if hasattr(timeline, "all_clips") else (
+        clip for track in getattr(timeline, "tracks", ()) for clip in track.clips)
+    changed = 0
+    for clip in clips:
+        for entry in getattr(clip, "effects", None) or ():
+            if entry.get("effect_id") == "posterize_time" and migrate_effect_params(entry, fps):
+                changed += 1
+    return changed
+
 
 class PosterizeTimeEffect(LayerEffect):
-    """Hold the clip's picture for N frames: a lower effective frame rate."""
+    """Hold the picture at a chosen frame rate: a lower sampling rate, not a speed change."""
 
     key = "posterize_time"
     name = "Posterize Time"
     category = "Time"
 
     PARAMS = (
-        ParamSpec("step", "Step", "int", 1, 12, 3, unit=" f",
-                  help="Show each source frame for this many frames"),
-        ParamSpec("offset", "Offset", "int", 0, 11, 0, unit=" f",
-                  help="Shift where the held frames fall on the timeline"),
+        ParamSpec("fps", "Frame Rate", "float", 1.0, 60.0, DEFAULT_FPS, step=0.1,
+                  unit=" fps",
+                  help="Pictures per second the layer is sampled at - a sampling rate, "
+                       "not playback speed"),
+        ParamSpec("offset", "Offset", "int", 0, 59, 0, unit=" f",
+                  help="Shift where each held picture begins on the timeline"),
     )
 
     def __init__(self, app):
         super().__init__(app)
-        self.step = Value(3)
+        self.fps = Value(DEFAULT_FPS)
         self.offset = Value(0)
 
     def apply_layer(self, layer):

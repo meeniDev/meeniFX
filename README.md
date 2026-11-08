@@ -319,7 +319,7 @@ The application resolves bundled tile images, the demo clip, and default output 
     blurs cover the blur pack; their radii are project pixels at every quality.
   - *Light*: Flash / Strobe with a flash, fade or pulse envelope, Exposure Flicker,
     procedural Light Leak, Bloom Streaks.
-  - *Time*: Posterize Time (hold each picture for N frames), Stutter (hold, then jump) and
+  - *Time*: Posterize Time (hold each picture at a chosen frame rate in fps, 12 by default - a sampling rate, not playback speed), Stutter (hold, then jump) and
     Echo / Trail (blend the clip's own earlier frames). The frame timing is decided once in
     `EditorEngine.held_frame`, so picture, effects and transform freeze together.
   - *Color*: LUT with a `.cube` loader, an intensity value and three built-in tables; the

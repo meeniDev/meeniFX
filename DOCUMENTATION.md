@@ -267,7 +267,7 @@ member effects keep their own cards.
 **Effects and looks** — the Glitch & Distortion pack (RGB Split, Glitch, Wave Warp,
 Bulge/Pinch, Twirl, Mirror/Kaleidoscope), Stylize (VHS/CRT, Film Grain, Halftone, Posterize,
 Edge Outline, Duotone, Invert, Vignette), Light (Flash/Strobe, Exposure Flicker, Light Leak,
-Bloom Streaks), Time (Posterize Time, Stutter, Echo/Trail) and a LUT effect that reads
+Bloom Streaks), Time (Posterize Time with a Frame Rate control in fps, Stutter, Echo/Trail) and a LUT effect that reads
 `.cube` tables (plus three built-in ones) with an intensity value. Parameters follow the
 existing table (two or three visible, the rest under *Advanced*), pixel sizes scale with the
 preview quality, and randomness is seeded from the seed and the frame. Ten shipped
