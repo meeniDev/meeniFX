@@ -7,6 +7,19 @@ usable and tested, but unfinished, and some features are still experimental.
 
 _Nothing yet._
 
+## 0.1.0-alpha.5 - 9 November 2026
+
+### Fixed
+
+- Alpha 4 called a missing `content_corners_rect` function whenever it painted text or
+  shape transform handles. The function is restored, and its intrinsic-bounds behaviour is
+  covered by text, shape and transform-corner regression tests.
+- The composition breadcrumb no longer overwrites the project name in the window title.
+- An Alpha build on the Stable update channel now sees an explanation instead of a
+  misleading "latest build" message. Stable still excludes prereleases by design.
+- `SHA256SUMS.txt` is written with LF line endings so standard checksum verification works.
+
+
 ## 0.1.0-alpha.4 - 9 November 2026
 
 ### Added
