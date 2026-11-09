@@ -147,6 +147,12 @@ def _prepared_base(effect_id, name, params):
     if effect_id == "mesh_warp":
         # The grid resolution only matters once a node is displaced.
         base.update(node_1_1_x=0.2, node_1_1_y=-0.15)
+    if effect_id == "glow" and name == "saturation":
+        # Saturation changes chroma rather than coverage; at the default intensity the
+        # small highlights cover too little of the audit frame to clear its global mean
+        # threshold. A stronger halo makes the colour response measurable here, while
+        # tests/test_glow_advanced.py checks the halo directly at normal settings.
+        base.update(intensity=300.0)
     return base
 
 

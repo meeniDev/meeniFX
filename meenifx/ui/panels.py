@@ -1962,6 +1962,9 @@ class EffectsPanel(QWidget):
         Trackers therefore open on Detection and Visualization while Labels, Connectors
         and Face Effects stay folded until they are needed.
         """
+        presets = getattr(effect, "PRESETS", None)
+        if presets:
+            self._effect_preset_row(form, clip, effect, entry, presets)
         self._mix_row(form, clip, effect, entry)
         sections = {}
         color_done = False
@@ -2074,6 +2077,52 @@ class EffectsPanel(QWidget):
             self._rows.append({"kind": "text_param", "clip_id": clip.id, "entry": entry,
                                "name": spec.name, "field": edit, "spec": spec})
             target.addWidget(self._labelled(spec.label, edit, tip))
+
+    def _effect_preset_row(self, form, clip, effect, entry, presets):
+        """A starting-point menu that writes real, later-editable parameter values.
+
+        It is deliberately not a stored choice parameter: after applying a preset the
+        sliders are the only source of truth, so changing Radius cannot leave a preset
+        badge claiming values that are no longer in force.
+        """
+        combo = QComboBox()
+        combo.setObjectName("effectPreset")
+        combo.addItem("Choose a preset\u2026", "")
+        for key, (label, _values) in presets.items():
+            combo.addItem(label, key)
+        combo.setToolTip("Load a starting point; every value remains editable afterward")
+        combo.activated.connect(
+            lambda index, c=clip, e=entry, co=combo: self._apply_effect_preset(c, e, co, index))
+        form.addWidget(self._labelled("Preset", combo,
+                                      "Load a starting point; every value remains editable afterward"))
+        self._rows.append({"kind": "effect_preset", "clip_id": clip.id, "entry": entry,
+                           "effect": effect, "combo": combo})
+
+    def _apply_effect_preset(self, clip, entry, combo, index):
+        key = combo.itemData(index)
+        if not key:
+            return
+        runtime = self.engine.runtime_effects.get(entry.get("effect_id"))
+        presets = getattr(runtime, "PRESETS", None) or {}
+        item = presets.get(key)
+        if item is None:
+            return
+        label, values = item
+        valid = {spec.name for spec in runtime.param_specs()}
+
+        def write(target):
+            target_entry = self._entry(target, entry["effect_id"])
+            if target_entry is None:
+                return
+            for name, value in values.items():
+                if name in valid:
+                    self._write_param(target, target_entry, name, value,
+                                      self._clip_frame(clip))
+
+        self.engine.session.apply_to_clips([clip.id], f"Apply {label} preset", write)
+        combo.setCurrentIndex(0)
+        self._notify()
+        self.refresh_properties()
 
     def _mix_row(self, form, clip, effect, entry):
         """The Mix slider every effect card gets (animatable like any other parameter)."""

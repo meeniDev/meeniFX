@@ -227,6 +227,32 @@ def test_every_choice_parameter_has_readable_labels():
     assert ("color_correct", "preset") in labels
 
 
+def test_glow_preset_writes_editable_values_in_one_undo_step(editor):
+    window, clip = editor
+    window.effects_panel.add_effect("glow")
+    pump(0.05)
+    glow = next(item for item in clip.effects if item["effect_id"] == "glow")
+    combo = next(row["combo"] for row in window.effects_panel._rows
+                 if row.get("kind") == "effect_preset"
+                 and row.get("effect").key == "glow")
+    before = undo_count(window)
+
+    choose(combo, "dreamy_bloom")
+    pump(0.05)
+
+    assert glow["params"]["radius"] == 58.0
+    assert glow["params"]["bloom"] == 80.0
+    assert undo_count(window) == before + 1
+    assert combo.currentData() == "", "the menu returns to Choose a preset"
+
+    # A preset is a starting point, not a locked look: changing a slider afterward is
+    # a normal model edit and must win over the value the preset wrote.
+    window.effects_panel._set_param(clip, glow, "radius", 73.0)
+    pump(0.05)
+    assert glow["params"]["radius"] == 73.0
+    assert not isinstance(glow["params"]["radius"], AnimatedValue)
+
+
 def test_bool_and_text_parameters_are_undoable_too(editor):
     window, clip = editor
     window.effects_panel.add_effect("gaussian_blur")
