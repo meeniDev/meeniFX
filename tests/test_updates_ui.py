@@ -4,7 +4,8 @@ import pytest
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from meenifx.ui.update_notice import UpdateNotice
-from meenifx.ui.updates_dialog import UpdatesDialog, friendly_date, friendly_size
+from meenifx.ui.updates_dialog import (UpdatesDialog, friendly_date, friendly_size,
+                                      no_update_message)
 from meenifx.ui.whats_new import WhatsNewDialog
 from meenifx.updates import model
 from meenifx.updates.service import CheckResult, UpdateError
@@ -251,6 +252,16 @@ def test_preferences_carries_the_updates_section(qapp):
     finally:
         dialog.close()
         dialog.deleteLater()
+
+
+def test_no_update_message_explains_an_alpha_build_on_stable():
+    text, warning = no_update_message("stable", "0.1.0-alpha.3")
+    assert warning and "Alpha" in text and "Stable" in text
+    assert "Preferences > Updates" in text
+    text, warning = no_update_message("alpha", "0.1.0-alpha.3")
+    assert not warning and "latest build" in text
+    text, warning = no_update_message("stable", "0.1.0")
+    assert not warning and "latest build" in text
 
 
 def test_dates_and_sizes_are_readable():

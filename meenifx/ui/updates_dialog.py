@@ -17,7 +17,7 @@ from ..tokens import COLORS
 from ..updates import installer
 from ..updates.model import RELEASES_PAGE
 from ..updates.whats_new import notes_text
-from ..version import VERSION, channel_label, display_version
+from ..version import VERSION, channel_label, display_version, parse_version
 
 CHANNEL_NOTE = ("Alpha follows prereleases as well as stable builds. Stable is reserved "
                 "for later and only offers finished releases.")
@@ -29,6 +29,16 @@ def friendly_date(iso_text):
         return parsed.astimezone().strftime("%d %B %Y")
     except (TypeError, ValueError):
         return str(iso_text or "unknown")
+
+
+def no_update_message(channel, version=VERSION):
+    """Explain a no-update result, including the Alpha-build-on-Stable dead end."""
+    parsed = parse_version(version)
+    if parsed is not None and parsed.prerelease and str(channel).lower() == "stable":
+        return ("This is an Alpha build, but the Stable channel only offers finished "
+                "releases. Choose Alpha / Preview in Preferences > Updates to receive "
+                "Alpha builds.", True)
+    return ("You're on the latest build for this channel.", False)
 
 
 def friendly_size(size):
@@ -231,8 +241,11 @@ class UpdatesDialog(QDialog):
             self.status.setStyleSheet(f"color:{COLORS['warning']};")
             return
         if result.update is None:
-            self.status.setText("You're on the latest build for this channel.")
-            self.status.setStyleSheet(f"color:{COLORS['muted']};")
+            message, warning = no_update_message(
+                getattr(self.manager.settings, "channel", "alpha"))
+            self.status.setText(message)
+            self.status.setStyleSheet(
+                f"color:{COLORS['warning'] if warning else COLORS['muted']};")
             return
         self._show_update(result.update)
 
