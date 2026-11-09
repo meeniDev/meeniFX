@@ -91,11 +91,13 @@ class PreviewOverlay:
         self.roto_brush_size = 0.05
         self.roto_brush_mode = "foreground"      # foreground | background | refine
         self.roto_outline_visible = True
+        self.roto_choose_subject = False
         self.roto_hover = None
         # MainWindow hooks: a finished stroke invalidates cached masks and refreshes the
         # card, and exiting the mode has to put the transform toolbar back.
         self.on_roto_change = None
         self.on_mode_change = None
+        self.on_roto_ui_change = None
         self._roto_outline_cache = {}
         # While the shape tool is armed the next press starts a draft rectangle; it is
         # painted as a live outline and only becomes a clip on release.
@@ -533,10 +535,13 @@ class PreviewOverlay:
 
     def roto_brush_pixels(self, clip):
         """The brush radius in widget pixels, so the circle matches what is painted."""
+        return self.roto_brush_pixels_for(clip, self.roto_brush_size)
+
+    def roto_brush_pixels_for(self, clip, fraction):
         width, height = self.image_size(clip)
         rect = self.widget.frame_rect()
         project_scale = rect.width() / max(1e-9, float(self.project_size()[0]))
-        return max(1.5, float(self.roto_brush_size) * min(width, height) * project_scale)
+        return max(1.5, float(fraction) * min(width, height) * project_scale)
 
     def roto_matte(self, clip, entry, frame):
         """The raw matte for one source frame: from the cache, else from its strokes."""
@@ -586,7 +591,8 @@ class PreviewOverlay:
         clip, entry = self.roto_clip_and_entry()
         if clip is None:
             return
-        if self.roto_outline_visible and entry is not None:
+        if (self.roto_outline_visible and entry is not None
+                and not (self._drag is not None and self._drag.get("kind") == "roto")):
             frame = self.roto_source_frame(clip)
             for contour in self.roto_outline(clip, entry, frame):
                 points = [QPointF(self.to_widget(*self.roto_to_project(clip, point)))
@@ -604,6 +610,32 @@ class PreviewOverlay:
                 painter.drawPolygon(polygon)
                 painter.restore()
         drag = self._drag
+        frame = self.roto_source_frame(clip)
+        if entry is not None and not (drag is not None and drag.get("kind") == "roto"):
+            # Every committed correction stays visible on its frame. The active stroke
+            # is drawn at full opacity below, so painting always gives feedback without
+            # clearing the previous corrections from the picture.
+            from ..roto.strokes import strokes_for_frame
+            for stroke in strokes_for_frame(entry.get("strokes") or (), frame,
+                                            entry.get("base_frame", 0)):
+                points = [QPointF(self.to_widget(*self.roto_to_project(clip, point)))
+                          for point in stroke.get("points") or ()]
+                if not points:
+                    continue
+                colour = {"background": QColor(255, 82, 82, 185),
+                          "refine": QColor(120, 200, 255, 185)}.get(
+                    str(stroke.get("mode")), QColor(64, 220, 120, 185))
+                radius = self.roto_brush_pixels_for(clip, float(stroke.get(
+                    "radius", self.roto_brush_size)))
+                painter.save()
+                painter.setPen(QPen(colour, max(2.0, radius * 1.7),
+                                    Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
+                                    Qt.PenJoinStyle.RoundJoin))
+                if len(points) == 1:
+                    painter.drawPoint(points[0])
+                else:
+                    painter.drawPolyline(QPolygonF(points))
+                painter.restore()
         if drag is not None and drag.get("kind") == "roto":
             stroke = drag["stroke"]
             points = [QPointF(self.to_widget(*self.roto_to_project(clip, point)))
@@ -635,50 +667,13 @@ class PreviewOverlay:
             painter.drawLine(QPointF(hover.x(), hover.y() - 4),
                              QPointF(hover.x(), hover.y() + 4))
             painter.restore()
-        self._paint_roto_hud(painter, clip, entry)
-
-    def _paint_roto_hud(self, painter, clip, entry):
-        from ..roto.cache import MaskCache, mask_key
-        analysed, frozen = 0, False
-        if entry is not None:
-            try:
-                analysed, frozen = MaskCache().summary(clip, mask_key(entry))
-            except OSError:
-                analysed, frozen = 0, False
-        base = int((entry or {}).get("base_frame", 0) or 0)
-        lines = [
-            f"Roto Brush  |  {self.roto_mode_label()}  |  "
-            f"brush {int(round(self.roto_brush_size * 200))}%",
-            f"source frame {self.roto_source_frame(clip)}  |  base {base}  |  "
-            f"{analysed} analysed{'  (frozen)' if frozen else ''}",
-            "Green drag keep  ·  Alt red remove  ·  B refine edge  ·  [ ] size  ·  "
-            "O outline  ·  Esc done",
-        ]
-        painter.save()
-        font = painter.font()
-        font.setPointSizeF(max(8.0, font.pointSizeF()))
-        painter.setFont(font)
-        metrics = painter.fontMetrics()
-        width = max(metrics.horizontalAdvance(line) for line in lines) + 22
-        height = metrics.height() * len(lines) + 14
-        box = QRectF(10.0, 10.0, float(width), float(height))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QBrush(QColor(16, 20, 28, 214)))
-        painter.drawRoundedRect(box, 6.0, 6.0)
-        painter.setPen(QPen(QColor(230, 236, 245)))
-        for index, line in enumerate(lines):
-            painter.drawText(
-                QRectF(box.left() + 11, box.top() + 7 + index * metrics.height(),
-                       box.width() - 22, metrics.height()),
-                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, line)
-        painter.restore()
-
     def exit_roto(self):
         """Leave the rotoscoping mode and hand the normal transform tools back."""
         if self.mode != "roto":
             return False
         self.mode = "select"
         self.roto_hover = None
+        self.roto_choose_subject = False
         self._drag = None
         self.widget.setCursor(Qt.CursorShape.ArrowCursor)
         self.widget.update()
@@ -691,12 +686,16 @@ class PreviewOverlay:
             return False
         self.roto_brush_mode = str(mode)
         self.widget.update()
+        if callable(self.on_roto_ui_change):
+            self.on_roto_ui_change()
         return True
 
     def adjust_roto_brush(self, factor):
         self.roto_brush_size = max(0.005,
                                    min(0.35, float(self.roto_brush_size) * float(factor)))
         self.widget.update()
+        if callable(self.on_roto_ui_change):
+            self.on_roto_ui_change()
         return self.roto_brush_size
 
     def paint(self, painter):
@@ -985,6 +984,21 @@ class PreviewOverlay:
             point = self.roto_picture_point(pos)
             if clip is None or entry is None or point is None:
                 return False
+            if self.roto_choose_subject:
+                # The chosen point selects one component of the model matte. It is stored
+                # on the effect entry, so it survives reload and invalidates old masks.
+                self.session.begin_gesture()
+                entry["subject_point"] = [float(point[0]), float(point[1])]
+                entry.setdefault("params", {})["subject"] = "auto"
+                self.session.commit_gesture("Choose Roto subject")
+                self.roto_choose_subject = False
+                self._roto_outline_cache.clear()
+                self.widget.setCursor(Qt.CursorShape.BlankCursor)
+                self.widget.update()
+                self._notify()
+                if callable(self.on_roto_change):
+                    self.on_roto_change()
+                return True
             mode = ("background" if event.modifiers() & Qt.KeyboardModifier.AltModifier
                     else self.roto_brush_mode)
             frame = self.roto_source_frame(clip)
@@ -999,9 +1013,9 @@ class PreviewOverlay:
                       "mode": str(mode)}
             entry.setdefault("strokes", []).append(stroke)
             self._drag = {"kind": "roto", "clip": clip, "stroke": stroke}
-            self._roto_outline_cache.clear()
+            # No segmentation/render on press: the model runs once when the stroke is
+            # finished, not on every mouse sample.
             self.widget.update()
-            self._notify()
             return True
         clip = self.primary()
         # Warp handles win over the transform handles: corner-pin corners and mesh
@@ -1210,13 +1224,13 @@ class PreviewOverlay:
                         or abs(point[0] - points[-1][0]) + abs(point[1] - points[-1][1])
                         >= radius * 0.05):
                     points.append([point[0], point[1]])
-                    self._roto_outline_cache.clear()
                     self.widget.update()
-                    self._notify()
             return True
         if self.mode == "roto":
             self.roto_hover = QPointF(pos)
-            self.widget.setCursor(Qt.CursorShape.CrossCursor)
+            # The ring is the cursor. Hiding the native arrow makes it the actual brush
+            # footprint instead of an approximate decoration beside a crosshair.
+            self.widget.setCursor(Qt.CursorShape.BlankCursor)
             self.widget.update()
         if drag is None:
             if self.mode in ("shape", "roto"):

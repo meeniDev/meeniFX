@@ -126,10 +126,14 @@ def stored(clip, channel):
     if kind == "audio":
         return getattr(clip, GAIN, ANIM.GAIN_DEFAULT_DB)
     if kind == "text":
+        if not getattr(clip, "is_text", False):
+            return None
         if name == TXT.CONTENT:
             return TXT.content_at(clip, 0)
         return TXT.stored(clip, name)
     if kind == "shape":
+        if not getattr(clip, "is_shape", False):
+            return None
         if name in SHAPE.COLOR_FIELDS:
             return SHAPE.color_at(clip, name, 0)
         return SHAPE.stored(clip, name)
@@ -147,10 +151,14 @@ def value_at(clip, channel, frame):
     """Evaluated value at a clip-local frame."""
     kind, _effect_id, name = parse(channel)
     if kind == "text":
+        if not getattr(clip, "is_text", False):
+            return None
         if name == TXT.CONTENT:
             return TXT.content_at(clip, frame)
         return TXT.value_at(clip, name, frame)
     if kind == "shape":
+        if not getattr(clip, "is_shape", False):
+            return None
         if name in SHAPE.COLOR_FIELDS:
             return SHAPE.color_at(clip, name, frame)
         return SHAPE.value_at(clip, name, frame)
@@ -206,10 +214,14 @@ def numeric_value_at(clip, channel, frame):
 def is_animated(clip, channel):
     kind, _effect_id, name = parse(channel)
     if kind == "text":
+        if not getattr(clip, "is_text", False):
+            return False
         if name == TXT.CONTENT:
             return bool(TXT.content_keys(clip))
         return TXT.is_animated(clip, name)
     if kind == "shape":
+        if not getattr(clip, "is_shape", False):
+            return False
         if name in SHAPE.COLOR_FIELDS:
             return SHAPE.color_is_animated(clip, name)
         return SHAPE.is_animated(clip, name)
@@ -224,10 +236,14 @@ def set_value(clip, channel, value, frame=0, auto_key=False):
     if kind == "audio":
         return _set_gain(clip, value, frame, auto_key)
     if kind == "text":
+        if not getattr(clip, "is_text", False):
+            return False
         if name == TXT.CONTENT:
             return TXT.set_content(clip, value, frame, auto_key)
         return TXT.set_value(clip, name, value, frame, auto_key)
     if kind == "shape":
+        if not getattr(clip, "is_shape", False):
+            return False
         if name in SHAPE.COLOR_FIELDS:
             return SHAPE.set_color(clip, name, value, frame, auto_key)
         return SHAPE.set_value(clip, name, value, frame, auto_key)
@@ -702,6 +718,8 @@ def set_static(clip, channel, value):
         clip.gain = ANIM.clamp_gain_db(value)
         return
     if kind == "text":
+        if not getattr(clip, "is_text", False):
+            return
         if name == TXT.CONTENT:
             data = TXT.ensure_text(clip)
             data["keys"] = {}
@@ -710,6 +728,8 @@ def set_static(clip, channel, value):
         TXT.ensure_text(clip)[name] = float(value)
         return
     if kind == "shape":
+        if not getattr(clip, "is_shape", False):
+            return
         SHAPE.ensure_shape(clip)[name] = (str(value) if name in SHAPE.COLOR_FIELDS
                                          else float(value))
         return

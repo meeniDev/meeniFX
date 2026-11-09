@@ -30,9 +30,10 @@ applied effect removes it. Each apply or remove is one undo step.
   Skew/Shear.
 - **Keying and mattes** - Chroma Key, Smart Key, Roto Brush and Simple Choker. Smart Key
   samples the shot's border; Roto Brush is the stroke-driven rotoscoping mode (base frame,
-  purple outline, forward/backward propagation, Refine Edge brush, matte previews and a
-  frozen mask cache) built on the classical GrabCut + optical-flow fallback; Simple Choker
-  grows or shrinks any alpha edge. See `docs/ROTO_BRUSH.md`.
+  purple outline, forward/backward propagation, Refine Edge tool, six preview modes and a
+  frozen mask cache). Its preferred backend is the optional U^2-Net ONNX subject model;
+  the clearly labelled Basic GrabCut + optical-flow fallback works without a download.
+  Simple Choker grows or shrinks any alpha edge. See `docs/ROTO_BRUSH.md`.
 - **Time** - Posterize Time (a **Frame Rate** in fps; 23.976, 29.97 and 59.94 are kept as
   their exact 24000/1001 and 30000/1001 rates, and a keyframed rate never samples
   backwards), Stutter and Echo/Trail.

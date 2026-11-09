@@ -1,44 +1,40 @@
-"""Roto Brush: stroke-guided rotoscoping with analysis, propagation and freeze.
+"""Roto Brush: a guided subject matte with an optional learned segmenter.
 
-How the tool works
-------------------
-The preview paints green (subject) and Alt-red (background) strokes into the effect entry;
-those strokes are *hints*, never pixels. The brush backend segments the base frame from
-them, the outline shows the real matte boundary, and propagation carries the mask across
-the clip with optical flow so the picture is not cut out with one frozen shape.
+The preferred backend is U^2-Net (Apache-2.0, downloaded on demand). It predicts the main
+foreground subject from an ordinary picture, not from a screen colour. Green strokes mark
+parts that must stay, Alt-red strokes mark parts that must go, and the Refine Edge brush
+pushes the matte onto a difficult boundary. GrabCut remains available under an explicitly
+labelled Basic mode; it is never described as the AI segmenter.
 
-Coordinates are normalised inside the picture rectangle the engine hands the effect, which
-is what makes the matte survive moving, scaling or rotating the clip. Masks are keyed by
-*source* frame, so trims, source offsets, speed and reverse playback stay correct.
-
-Masks live in the per-clip disk cache (see `meenifx/roto/cache.py`), never in the project
-JSON; the entry keeps only strokes, the base frame, analysis settings and small cache
-metadata. A reopened project without its cache reports which frames need analysis instead
-of silently showing a stale cutout.
-
-Backend: the shipped segmenter is the classical GrabCut + guided-filter path from
-`meenifx/roto/segment.py`. It is labelled as such in the UI and docs; it is not a learned
-video-segmentation model.
+The mask is applied as the layer's alpha channel. Composite preview and export therefore
+show the clip underneath through the removed background; the diagnostic views
+(Isolated, Alpha Matte, Checkerboard) are previews only and are forced back to Composite
+for export.
 """
 
 from __future__ import annotations
-
-import hashlib
 
 import cv2
 import numpy as np
 
 from ..model.values import Value
-from ..roto import (MaskCache, decontaminate, finish_matte, mask_key, mask_size,
-                    rasterise, segment_frame, strokes_for_frame)
+from ..roto import (MaskCache, basic_fallback_note, decontaminate, finish_matte,
+                    mask_key, model_status, rasterise, segment_subject,
+                    strokes_for_frame)
 from ..roto.segment import quality_settings
 from .base import LayerEffect, ParamSpec, param_number
 
-MATTE_VIEWS = ("composite", "checkerboard", "alpha", "solid")
-MATTE_LABELS = ("Composite", "Transparent checkerboard", "Alpha matte", "Foreground on colour")
+MATTE_VIEWS = ("original", "outline", "isolated", "alpha", "checkerboard",
+               "solid", "composite")
+MATTE_LABELS = ("Original", "Outline", "Isolated Subject", "Alpha Matte",
+                "Transparency Checkerboard", "Foreground on Colour", "Composite")
+VISIBLE_VIEWS = ("original", "outline", "isolated", "alpha", "checkerboard", "composite")
+VISIBLE_LABELS = ("Original", "Outline", "Isolated Subject", "Alpha Matte",
+                  "Transparency Checkerboard", "Composite")
 QUALITIES = ("draft", "balanced", "high")
-QUALITY_LABELS = ("Draft (fast)", "Balanced", "High")
-ANALYSIS_PARAMS = ("refine", "quality", "search_radius", "tolerance")
+QUALITY_LABELS = ("Fast", "Balanced", "High")
+BACKENDS = ("auto", "model", "basic")
+BACKEND_LABELS = ("Automatic", "AI Model (U^2-Net)", "Basic (GrabCut)")
 MAX_MEMO = 8
 
 
@@ -51,58 +47,53 @@ def _colour(value, fallback=0):
 
 
 class RotoBrushEffect(LayerEffect):
-    """A stroke-guided subject matte with per-frame analysis and propagation."""
+    """A brush-guided subject matte with real segmentation and per-frame propagation."""
 
     key = "roto_brush"
     name = "Roto Brush"
     category = "Keying & Masking"
-    NOTE = ("Green strokes mark the subject, Alt-red strokes mark what to remove, and the "
-            "Refine Edge brush helps difficult boundaries. Segmenter: classical GrabCut "
-            "with guided-filter edge refinement (no model download).")
+    NOTE = ("Uses the optional U^2-Net subject model. Green strokes keep, Alt-red strokes "
+            "remove. The Basic mode is GrabCut and is not equivalent to the AI segmenter.")
 
     PARAMS = (
-        ParamSpec("smooth", "Smooth", "float", 0.0, 10.0, 1.0, step=0.5, unit=" px",
-                  pixels=True, group="Matte",
-                  help="Median smoothing of the matte before the edge is shaped"),
+        ParamSpec("subject", "Subject", "choice", default="auto",
+                  choices=("auto", "choose"), choice_labels=("Auto", "Choose"),
+                  help="Auto keeps the main subject. Choose then click a subject in the preview"),
+        ParamSpec("quality", "Quality", "choice", default="balanced",
+                  choices=QUALITIES, choice_labels=QUALITY_LABELS,
+                  help="Fast analyses at half size. High adds a flip-averaged model pass"),
+        ParamSpec("smooth", "Edge Smoothness", "float", 0.0, 10.0, 1.0, step=0.5,
+                  unit=" px", pixels=True, group="Matte",
+                  help="Smooth the matte before its edge is shaped"),
         ParamSpec("feather", "Feather", "float", 0.0, 40.0, 1.5, step=0.5, unit=" px",
                   pixels=True, group="Matte", help="Soften the finished matte edge"),
-        ParamSpec("choke", "Choke / expand", "float", -30.0, 30.0, 0.0, step=0.5,
+        ParamSpec("choke", "Expand / Shrink", "float", -30.0, 30.0, 0.0, step=0.5,
                   unit=" px", pixels=True, group="Matte",
-                  help="Positive pulls the matte inward; negative grows it outward"),
-        ParamSpec("edge_contrast", "Edge contrast", "float", 0.0, 100.0, 35.0, step=1.0,
+                  help="Positive expands the matte outward; negative shrinks it inward"),
+        ParamSpec("edge_contrast", "Edge Refinement", "float", 0.0, 100.0, 35.0, step=1.0,
                   unit=" %", group="Matte",
-                  help="Make the alpha ramp steeper without moving the boundary much"),
-        ParamSpec("decontaminate", "Edge colour cleanup", "float", 0.0, 100.0, 0.0,
-                  step=1.0, unit=" %", group="Matte",
-                  help="Pull the background colour out of the soft edge (composite view)"),
-        ParamSpec("search_radius", "Search radius", "float", 4.0, 120.0, 24.0, step=1.0,
-                  unit=" px", pixels=True, group="Analysis",
-                  help="How far GrabCut may look around the strokes and the carried mask"),
-        ParamSpec("tolerance", "Colour tolerance", "float", 1.0, 100.0, 28.0, step=1.0,
-                  unit=" %", group="Analysis",
-                  help="How far the colour model may follow the colours under the strokes"),
-        ParamSpec("refine", "Refine with GrabCut", "bool", default=True, group="Analysis",
-                  help="Fit the strokes (and each propagated mask) to the real pixels"),
-        ParamSpec("quality", "Quality", "choice", default="balanced",
-                  choices=QUALITIES, choice_labels=QUALITY_LABELS, group="Analysis",
-                  help="Draft analyses at half size; High runs more refinement passes"),
-        ParamSpec("transparency", "Transparency", "float", 0.0, 100.0, 100.0, step=1.0,
-                  unit=" %", help="How much of the unmasked background is removed"),
-        ParamSpec("matte_view", "Preview", "choice", default="composite",
-                  choices=MATTE_VIEWS, choice_labels=MATTE_LABELS,
-                  help="Inspect the cutout, its alpha, or the subject on a solid colour"),
-        ParamSpec("view_r", "Background red", "int", 0, 255, 24, group="Preview",
-                  help="Solid colour behind the subject in the solid preview"),
-        ParamSpec("view_g", "Background green", "int", 0, 255, 26, group="Preview",
-                  help="Solid colour behind the subject in the solid preview"),
-        ParamSpec("view_b", "Background blue", "int", 0, 255, 30, group="Preview",
-                  help="Solid colour behind the subject in the solid preview"),
-        ParamSpec("auto_seed", "Auto seed", "bool", default=False, advanced=True,
-                  help="Segment a centred region when no stroke has been painted yet"),
+                  help="Steepen the decision at the boundary without moving it far"),
+        ParamSpec("decontaminate", "Edge Colour Cleanup", "float", 0.0, 100.0, 0.0,
+                  step=1.0, unit=" %", advanced=True, group="Details",
+                  help="Pull the old background colour out of the soft edge"),
+        ParamSpec("search_radius", "Search Radius", "float", 4.0, 120.0, 24.0, step=1.0,
+                  unit=" px", pixels=True, advanced=True, group="Details",
+                  help="How far a correction stroke may search for a boundary"),
+        ParamSpec("tolerance", "Colour Tolerance", "float", 1.0, 100.0, 28.0, step=1.0,
+                  unit=" %", advanced=True, group="Details",
+                  help="Colour range used by the Basic fallback and correction fitting"),
+        ParamSpec("refine", "Refine Corrections", "bool", default=True, advanced=True,
+                  group="Details", help="Fit painted corrections to the local pixels"),
+        ParamSpec("backend", "Segmenter", "choice", default="auto",
+                  choices=BACKENDS, choice_labels=BACKEND_LABELS, advanced=True,
+                  group="Details",
+                  help="Automatic uses U^2-Net when installed and Basic otherwise"),
     )
 
     def __init__(self, app):
         super().__init__(app)
+        self.subject = Value("auto")
+        self.quality = Value("balanced")
         self.smooth = Value(1.0)
         self.feather = Value(1.5)
         self.choke = Value(0.0)
@@ -111,7 +102,9 @@ class RotoBrushEffect(LayerEffect):
         self.search_radius = Value(24.0)
         self.tolerance = Value(28.0)
         self.refine = Value(True)
-        self.quality = Value("balanced")
+        self.backend = Value("auto")
+        # Kept as hidden values so older projects and the existing tests can still set
+        # them. They are not workflow controls; preview mode lives on the context toolbar.
         self.transparency = Value(100.0)
         self.matte_view = Value("composite")
         self.view_r = Value(24)
@@ -119,6 +112,7 @@ class RotoBrushEffect(LayerEffect):
         self.view_b = Value(30)
         self.auto_seed = Value(False)
         self.last_note = ""
+        self.last_backend = "basic"
         self._memo = {}
         self._memo_order = []
 
@@ -134,7 +128,6 @@ class RotoBrushEffect(LayerEffect):
         return x, y, max(1.0, w), max(1.0, h)
 
     def _region(self, width, height):
-        """The picture's pixels inside the layer, or None when it is off screen."""
         x, y, rect_w, rect_h = self._rect(width, height)
         x0, y0 = max(0, int(round(x))), max(0, int(round(y)))
         x1, y1 = min(width, int(round(x + rect_w))), min(height, int(round(y + rect_h)))
@@ -143,12 +136,6 @@ class RotoBrushEffect(LayerEffect):
         return x0, y0, x1, y1
 
     def source_frame(self):
-        """The clip's *source* frame for the frame being rendered.
-
-        `local_frame` is on the clip's own clock; `source_frame_at` is what maps trims,
-        source offsets, speed and reverse playback onto the media. Masks are stored by
-        this index, never by the timeline frame.
-        """
         clip = self.clip
         local = int(self.local_frame)
         if clip is None or not hasattr(clip, "source_frame_at"):
@@ -159,15 +146,31 @@ class RotoBrushEffect(LayerEffect):
             return max(0, local)
 
     # ------------------------------------------------------------------ analysis
+    def _subject_point(self):
+        entry = self.clip_entry or {}
+        point = entry.get("subject_point")
+        try:
+            x, y = float(point[0]), float(point[1])
+        except (TypeError, ValueError, IndexError):
+            return None
+        return (max(0.0, min(1.0, x)), max(0.0, min(1.0, y)))
+
     def _analysis_settings(self):
         quality = quality_settings(str(self.quality.get()))
+        try:
+            point = self._subject_point()
+        except Exception:                                # noqa: BLE001 - live editing
+            point = None
         return {
+            "backend": str(self.backend.get() or "auto"),
             "refine": bool(self.refine.get()),
             "search_radius": float(self.search_radius.get()),
             "iterations": int(quality["iterations"]),
             "band": float(quality["band"]),
             "scale": float(quality["scale"]),
             "tolerance": max(1.0, float(self.tolerance.get())),
+            "quality": str(self.quality.get() or "balanced"),
+            "subject_point": point,
         }
 
     def _memo_get(self, key):
@@ -184,13 +187,59 @@ class RotoBrushEffect(LayerEffect):
             self._memo.pop(self._memo_order.pop(0), None)
         return matte
 
-    def raw_matte(self, rgb_region, source_frame, key=None):
-        """The unshaped matte for one source frame, from the cache or from the strokes.
+    def _work_region(self, rgb_region, settings):
+        scale = float(settings.get("scale", 1.0))
+        height, width = rgb_region.shape[:2]
+        work_w = max(8, int(round(width * scale)))
+        work_h = max(8, int(round(height * scale)))
+        work = cv2.resize(rgb_region, (work_w, work_h), interpolation=cv2.INTER_AREA) \
+            if (work_w, work_h) != (width, height) else rgb_region
+        return work
 
-        Returns a float32 0..1 array at the region's mask size, or None when there is
-        nothing to analyse yet. Never invents a mask for an unanalysed frame: a static
-        shape copied over the whole clip would look like a cutout and be a lie.
-        """
+    def _segment_region(self, rgb_region, source_frame, settings, prior=None):
+        height, width = rgb_region.shape[:2]
+        strokes = strokes_for_frame((self.clip_entry or {}).get("strokes") or (),
+                                    source_frame,
+                                    (self.clip_entry or {}).get("base_frame", 0))
+        if not strokes and not bool(self.auto_seed.get()):
+            backend = str(settings.get("backend") or "auto")
+            if backend == "basic" or not model_status().available:
+                return None, "basic"
+        work = self._work_region(rgb_region, settings)
+        work_h, work_w = work.shape[:2]
+        foreground, background, refine_mask = rasterise(
+            strokes, work_w, work_h, (0.0, 0.0, float(work_w), float(work_h)))
+        if not strokes and bool(self.auto_seed.get()):
+            # Hidden compatibility/audit seed. The real workflow always starts from a
+            # painted stroke; this gives old projects without strokes a real matte.
+            foreground = np.zeros((work_h, work_w), np.uint8)
+            cv2.ellipse(foreground, (work_w // 2, work_h // 2),
+                        (max(4, int(work_w * 0.28)), max(4, int(work_h * 0.34))),
+                        0, 0, 360, 255, -1)
+            background = np.zeros((work_h, work_w), np.uint8)
+            background[:max(1, work_h // 20), :] = 255
+            background[-max(1, work_h // 20):, :] = 255
+            background[:, :max(1, work_w // 20)] = 255
+            background[:, -max(1, work_w // 20):] = 255
+        previous = prior
+        if previous is not None and previous.shape[:2] != (work_h, work_w):
+            previous = cv2.resize(previous, (work_w, work_h), interpolation=cv2.INTER_LINEAR)
+        matte, backend = segment_subject(
+            work, foreground, background, refine_mask, settings,
+            subject_point=self._subject_point(), prior=previous)
+        if matte is None:
+            return None, backend
+        if (work_w, work_h) != (width, height):
+            matte = cv2.resize(matte, (width, height), interpolation=cv2.INTER_LINEAR)
+        return np.clip(matte, 0.0, 1.0).astype(np.float32), backend
+
+    def segment_frame(self, rgb_region, source_frame, prior=None):
+        """Segment one frame for the background propagation worker."""
+        return self._segment_region(rgb_region, int(source_frame),
+                                    self._analysis_settings(), prior=prior)[0]
+
+    def raw_matte(self, rgb_region, source_frame, key=None):
+        """The unshaped matte for one source frame, from cache or segmentation."""
         entry = self.clip_entry or {}
         key = key or mask_key(entry)
         cache = MaskCache()
@@ -205,40 +254,30 @@ class RotoBrushEffect(LayerEffect):
 
         if rgb_region is None or rgb_region.size == 0:
             return None
-        strokes = strokes_for_frame(entry.get("strokes") or (), source_frame,
-                                    entry.get("base_frame", 0))
-        if not strokes and bool(self.auto_seed.get()):
-            # An honest fallback for an effect dropped in with no strokes at all: a
-            # centred seed, replaced the moment the user paints. Off by default.
-            strokes = [{"frame": source_frame, "mode": "foreground", "radius": 0.28,
-                        "points": [[0.5, 0.45], [0.5, 0.55]]}]
-        if not strokes:
-            self.last_note = ("No mask on this frame yet. Paint the base frame, then use "
-                              "Propagate Forward or Analyze Entire Clip.")
-            return None
         settings = self._analysis_settings()
-        scale = float(settings["scale"])
-        height, width = rgb_region.shape[:2]
-        work_w = max(8, int(round(width * scale)))
-        work_h = max(8, int(round(height * scale)))
-        work = rgb_region if (work_w, work_h) == (width, height) else cv2.resize(
-            rgb_region, (work_w, work_h), interpolation=cv2.INTER_AREA)
-        foreground, background, refine_mask = rasterise(strokes, work_w, work_h,
-                                                        (0.0, 0.0, float(work_w), float(work_h)))
-        matte = segment_frame(work, foreground, background, refine_mask, settings)
+        matte, backend = self._segment_region(rgb_region, source_frame, settings)
+        self.last_backend = backend
         if matte is None:
-            self.last_note = "The strokes did not produce a matte; paint inside the subject."
+            if backend == "basic":
+                self.last_note = ("No mask on this frame yet. Paint the subject, then use "
+                                  "Propagate Forward or Analyze Clip.")
+            else:
+                self.last_note = "The segmenter did not find a subject on this frame."
             return None
-        self.last_note = ""
-        if (work_w, work_h) != (width, height):
-            matte = cv2.resize(matte, (width, height), interpolation=cv2.INTER_LINEAR)
+        note = basic_fallback_note(settings)
+        if backend == "u2net":
+            self.last_note = ""
+        elif note:
+            self.last_note = note
+        else:
+            self.last_note = ""
         return np.clip(matte, 0.0, 1.0).astype(np.float32)
 
     def matte_for_region(self, rgb_region, source_frame):
-        """The raw matte plus the memoised lookup used by preview and export."""
         entry = self.clip_entry or {}
         key = mask_key(entry)
-        memo_key = (int(source_frame), key, rgb_region.shape[1] if rgb_region is not None else 0,
+        memo_key = (int(source_frame), key,
+                    rgb_region.shape[1] if rgb_region is not None else 0,
                     rgb_region.shape[0] if rgb_region is not None else 0)
         cached = self._memo_get(memo_key)
         if cached is not None:
@@ -249,6 +288,12 @@ class RotoBrushEffect(LayerEffect):
         return self._memo_put(memo_key, matte)
 
     # ------------------------------------------------------------------ rendering
+    def _view(self):
+        if bool(getattr(self.app, "exporting", False)):
+            return "composite"
+        view = str(self.matte_view.get() or "composite")
+        return view if view in VISIBLE_VIEWS + ("solid",) else "composite"
+
     def _checkerboard(self, height, width):
         tile = max(4, int(round(16 * float(self.param_scale))))
         yy, xx = np.mgrid[0:height, 0:width]
@@ -262,25 +307,25 @@ class RotoBrushEffect(LayerEffect):
         height, width = layer.shape[:2]
         alpha = layer[:, :, 3].astype(np.float32) / 255.0
         transparency = max(0.0, min(1.0, param_number(self.transparency, frame) / 100.0))
-        view = str(self.matte_view.get() or "composite")
+        view = self._view()
         out = np.empty_like(layer)
+        if view in ("original", "outline"):
+            return layer
         if view == "alpha":
             grey = (np.clip(matte, 0.0, 1.0) * 255.0).astype(np.uint8)
             out[:, :, :3] = np.repeat(grey[:, :, None], 3, axis=2)
             out[:, :, 3] = 255
             return out
-        if view == "solid":
-            colour = np.array([_colour(self.view_b.get()), _colour(self.view_g.get()),
-                               _colour(self.view_r.get())], np.float32)
+        if view in ("solid", "checkerboard", "isolated"):
+            if view == "solid":
+                colour = np.array([_colour(self.view_b.get()), _colour(self.view_g.get()),
+                                   _colour(self.view_r.get())], np.float32)
+            elif view == "checkerboard":
+                colour = self._checkerboard(height, width)
+            else:
+                colour = np.array([24.0, 26.0, 30.0], np.float32)
             weight = np.clip(matte, 0.0, 1.0)[:, :, None]
             out[:, :, :3] = np.clip(layer[:, :, :3] * weight + colour * (1.0 - weight),
-                                    0.0, 255.0).astype(np.uint8)
-            out[:, :, 3] = 255
-            return out
-        if view == "checkerboard":
-            board = self._checkerboard(height, width)
-            weight = np.clip(matte, 0.0, 1.0)[:, :, None]
-            out[:, :, :3] = np.clip(layer[:, :, :3] * weight + board * (1.0 - weight),
                                     0.0, 255.0).astype(np.uint8)
             out[:, :, 3] = 255
             return out
@@ -290,7 +335,7 @@ class RotoBrushEffect(LayerEffect):
             colour = decontaminate(colour, matte, cleanup)
         out[:, :, :3] = colour
         if transparency > 0.0:
-            out[:, :, 3] = np.clip(alpha * (1.0 - transparency * (1.0 - matte)), 0.0, 1.0) \
+            out[:, :, 3] = np.clip(alpha * (1.0 - transparency * (1.0 - matte)), 0.0, 1.0)\
                 .__mul__(255.0).astype(np.uint8)
         else:
             out[:, :, 3] = layer[:, :, 3]
@@ -299,8 +344,11 @@ class RotoBrushEffect(LayerEffect):
     def apply_layer(self, layer):
         if layer is None or layer.ndim != 3 or layer.shape[2] < 4 or layer.size == 0:
             return layer
-        transparency = max(0.0, min(1.0, param_number(self.transparency, self.local_frame) / 100.0))
-        view = str(self.matte_view.get() or "composite")
+        view = self._view()
+        transparency = max(0.0, min(1.0, param_number(self.transparency, self.local_frame)
+                                    / 100.0))
+        if view in ("original", "outline"):
+            return layer
         if transparency <= 0.0 and view == "composite":
             return layer
         height, width = layer.shape[:2]
@@ -319,8 +367,6 @@ class RotoBrushEffect(LayerEffect):
             "choke": float(param_number(self.choke, self.local_frame)),
             "edge_contrast": float(param_number(self.edge_contrast, self.local_frame)),
         }
-        # Pixel-based shaping must shrink with the render scale, or a half-quality preview
-        # would feather/choke twice as much as the full-quality export.
         shaped = finish_matte(raw, settings, scale=max(0.05, float(self.param_scale)))
         matte = np.zeros((height, width), np.float32)
         matte[y0:y1, x0:x1] = cv2.resize(shaped, (x1 - x0, y1 - y0),

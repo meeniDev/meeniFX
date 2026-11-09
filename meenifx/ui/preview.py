@@ -24,6 +24,7 @@ from .. import tokens
 from ..constants import MEDIA_MIME
 from ..icons import icon
 from .master_meter import MasterMeter
+from .roto_toolbar import RotoToolbar
 from .themed import bind_theme
 
 # Preview quality choices -> render scale in percent (Auto is picked from the panel size).
@@ -372,6 +373,22 @@ class PreviewWidget(QWidget):
                 overlay.exit_roto()
                 event.accept()
                 return
+            if key == Qt.Key.Key_V and not (event.modifiers()
+                                            & (Qt.KeyboardModifier.ControlModifier
+                                               | Qt.KeyboardModifier.AltModifier)):
+                overlay.exit_roto()
+                event.accept()
+                return
+            if (key == Qt.Key.Key_Z
+                    and event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+                if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                    overlay.session.redo()
+                else:
+                    overlay.session.undo()
+                if callable(overlay.on_roto_change):
+                    overlay.on_roto_change()
+                event.accept()
+                return
             if key in (Qt.Key.Key_BracketLeft, Qt.Key.Key_BracketRight):
                 overlay.adjust_roto_brush(1.0 / 1.25 if key == Qt.Key.Key_BracketLeft else 1.25)
                 event.accept()
@@ -382,8 +399,9 @@ class PreviewWidget(QWidget):
                 self.update()
                 event.accept()
                 return
-            if key == Qt.Key.Key_B:
-                overlay.set_roto_brush_mode("refine")
+            if key == Qt.Key.Key_B and not (event.modifiers()
+                                            & Qt.KeyboardModifier.ShiftModifier):
+                overlay.set_roto_brush_mode("foreground")
                 event.accept()
                 return
             if key == Qt.Key.Key_G:
@@ -470,6 +488,10 @@ class PreviewPanel(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumSize(300, 220)
         self.view = PreviewWidget(self, quality_getter)
+        # The dedicated Roto Brush workspace toolbar sits above the picture, not in the
+        # Properties panel. It is hidden until the tool is entered.
+        self.roto_bar = RotoToolbar(self)
+        self.roto_bar.setVisible(False)
         # One control row under the picture: timecode | transport | view options.
         self.start_button = self._transport_button("skip_start", "Go to the start of the timeline (Home)")
         self.back_button = self._transport_button("step_back", "Step back one frame (Left)")
@@ -542,6 +564,7 @@ class PreviewPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(tokens.SP1, tokens.SP1, tokens.SP1, tokens.SP1)
         layout.setSpacing(tokens.SP1)
+        layout.addWidget(self.roto_bar, 0)
         layout.addLayout(top, 1)
         layout.addLayout(row)
 
@@ -565,6 +588,12 @@ class PreviewPanel(QWidget):
         name = "pause" if playing else "play"
         self.play_button.setIcon(icon(name, tokens.COLORS["on_accent"], 20))
         self.play_button.setToolTip("Pause (Space)" if playing else "Play (Space)")
+
+    def set_roto_workspace(self, active):
+        """Show the contextual Roto Brush toolbar directly above the picture."""
+        self.roto_bar.setVisible(bool(active))
+        if active:
+            self.roto_bar.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def set_timecode(self, text):
         if self.timecode.text() != text:

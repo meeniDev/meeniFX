@@ -610,6 +610,51 @@ def _draw(name, p, color):
             p.drawLine(QPointF(3, 12.4), QPointF(13, 3.6))
         else:
             p.drawRect(QRectF(2.5, 3.5, 11, 9))
+    elif name in ("roto_fg", "roto_bg", "roto_refine"):
+        p.drawEllipse(QPointF(8, 8), 4.4, 4.4)
+        if name == "roto_fg":
+            p.setBrush(fill)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawEllipse(QPointF(12.2, 3.8), 1.7, 1.7)
+        elif name == "roto_bg":
+            p.drawLine(QPointF(4.4, 11.6), QPointF(11.6, 4.4))
+            p.drawLine(QPointF(5.2, 4.4), QPointF(11.6, 4.4))
+        else:
+            p.setPen(QPen(color, 1.2, Qt.PenStyle.DashLine))
+            p.drawEllipse(QPointF(8, 8), 5.5, 5.5)
+    elif name in ("propagate_back", "propagate_forward"):
+        back = name == "propagate_back"
+        x = 3.0 if back else 5.0
+        p.drawRoundedRect(QRectF(x, 3.4, 8, 9.2), 1.0, 1.0)
+        p.setBrush(fill)
+        p.setPen(Qt.PenStyle.NoPen)
+        if back:
+            p.drawPolygon(_pts(15.0, 5.0, 10.8, 8.0, 15.0, 11.0))
+        else:
+            p.drawPolygon(_pts(1.0, 5.0, 5.2, 8.0, 1.0, 11.0))
+    elif name == "freeze":
+        for angle in (0, 60, 120):
+            p.save()
+            p.translate(8, 8)
+            p.rotate(angle)
+            p.drawLine(QPointF(0, -5.4), QPointF(0, 5.4))
+            p.drawLine(QPointF(0, -4.0), QPointF(-1.8, -5.3))
+            p.drawLine(QPointF(0, 4.0), QPointF(1.8, 5.3))
+            p.restore()
+    elif name == "subject":
+        p.drawEllipse(QPointF(8, 5.2), 2.7, 2.7)
+        path = QPainterPath(QPointF(3.0, 13.5))
+        path.cubicTo(3.7, 9.4, 12.3, 9.4, 13.0, 13.5)
+        p.drawPath(path)
+    elif name == "ai":
+        p.drawPolygon(_pts(8, 2.2, 9.2, 6.8, 13.8, 8, 9.2, 9.2, 8, 13.8,
+                           6.8, 9.2, 2.2, 8, 6.8, 6.8))
+        p.drawLine(QPointF(12.6, 2.2), QPointF(12.6, 4.8))
+        p.drawLine(QPointF(11.3, 3.5), QPointF(13.9, 3.5))
+    elif name == "download":
+        p.drawLine(QPointF(8, 2.5), QPointF(8, 10.5))
+        p.drawPolyline(_pts(4.5, 7.2, 8, 10.8, 11.5, 7.2))
+        p.drawLine(QPointF(3, 13), QPointF(13, 13))
     elif name == "trash":
         p.drawLine(QPointF(3, 4.8), QPointF(13, 4.8))
         p.drawPolyline(_pts(6.2, 4.6, 6.2, 3, 9.8, 3, 9.8, 4.6))

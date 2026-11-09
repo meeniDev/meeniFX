@@ -89,6 +89,7 @@ class EditorEngine:
         self.palette_cache = {}
         self.effects = [kind(self) for kind in self.EFFECT_TYPES]
         self.runtime_effects = {effect.key: effect for effect in self.effects}
+        self.exporting = False
         for effect in self.effects:
             effect.on_registered()
             effect.defaults = effect.capture_params()
@@ -1011,9 +1012,13 @@ class EditorEngine:
     def export(self, settings, progress=None, cancelled=None):
         # A reduced-resolution proxy must never reach the final file.
         self.media.suspend_proxy(True)
+        # Diagnostic effect previews (alpha, checkerboard, isolated) are screen-only.
+        # The exporter always renders the real composite frame.
+        self.exporting = True
         try:
             return self._export(settings, progress, cancelled)
         finally:
+            self.exporting = False
             self.media.suspend_proxy(False)
 
     def _export(self, settings, progress=None, cancelled=None):

@@ -99,11 +99,14 @@ def _refine(warped, rgb, settings):
 
 
 def propagate_seed(seed_matte, seed_frame, frames, read_frame, settings,
-                   on_mask=None, should_stop=None, on_progress=None):
+                   on_mask=None, should_stop=None, on_progress=None,
+                   mask_refiner=None):
     """Carry `seed_matte` across `frames` (in order, excluding the seed).
 
-    `read_frame(source_frame)` must return the BGR frame for a source index. Returns the
-    list of frames that were finished, so a cancelled run can report exactly what exists.
+    `read_frame(source_frame)` must return the BGR frame for a source index. When
+    `mask_refiner(frame, warped, rgb)` is supplied, it runs the learned subject model on
+    every frame using the flow-warped matte as its temporal prior. Without it the classic
+    GrabCut propagation remains available as the Basic fallback.
     """
     seed_frame = int(seed_frame)
     frames = [int(frame) for frame in frames if int(frame) != seed_frame]
@@ -130,9 +133,17 @@ def propagate_seed(seed_matte, seed_frame, frames, read_frame, settings,
         small_matte = cv2.resize(previous_matte, (work_w, work_h),
                                  interpolation=cv2.INTER_LINEAR)
         warped = np.clip(warp_matte(small_matte, flow), 0.0, 1.0)
-        small_rgb = cv2.resize(rgb, (work_w, work_h), interpolation=cv2.INTER_AREA)
-        refined = _refine(warped, small_rgb, settings)
-        matte = cv2.resize(refined, (width, height), interpolation=cv2.INTER_LINEAR)
+        if mask_refiner is not None:
+            refined = mask_refiner(frame, warped, rgb)
+            if refined is None:
+                break
+            matte = np.asarray(refined, np.float32)
+            if matte.shape[:2] != (height, width):
+                matte = cv2.resize(matte, (width, height), interpolation=cv2.INTER_LINEAR)
+        else:
+            small_rgb = cv2.resize(rgb, (work_w, work_h), interpolation=cv2.INTER_AREA)
+            refined = _refine(warped, small_rgb, settings)
+            matte = cv2.resize(refined, (width, height), interpolation=cv2.INTER_LINEAR)
         matte = np.clip(matte, 0.0, 1.0).astype(np.float32)
         if on_mask is not None:
             on_mask(frame, matte)

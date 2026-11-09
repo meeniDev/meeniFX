@@ -5,4 +5,5 @@ pillow
 imageio
 imageio-ffmpeg
 faster-whisper
+onnxruntime>=1.18
 yt-dlp

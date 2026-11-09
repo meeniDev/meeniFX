@@ -164,6 +164,47 @@ def test_the_window_runs_the_whole_rotoscoping_workflow(qapp, tmp_path, monkeypa
         pump(0.08)
         assert overlay.mode == "select"
         assert overlay.roto_hover is None
+        assert window.preview_panel.roto_bar.isHidden()
+
+        # 8. Re-enter, choose a diagnostic preview, and leave with V. The toolbar must be
+        # visible above the picture and the clip underneath must not leak into the matte.
+        from PyQt6.QtCore import QEvent, Qt
+        from PyQt6.QtGui import QKeyEvent
+        from PyQt6.QtWidgets import QLineEdit
+        window.effects_panel.roto_requested.emit()
+        pump(0.12)
+        assert overlay.mode == "roto"
+        assert not window.preview_panel.roto_bar.isHidden()
+        bar = window.preview_panel.roto_bar
+        bar.preview_combo.setCurrentIndex(bar.preview_combo.findData("isolated"))
+        pump(0.12)
+        entry = next(item for item in clip.effects if item.get("effect_id") == "roto_brush")
+        assert entry["params"]["matte_view"] == "isolated"
+
+        bar.set_tool("refine")
+        overlay.roto_brush_mode = "refine"
+        event = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_B,
+                          Qt.KeyboardModifier.NoModifier)
+        assert window.eventFilter(window, event)
+        assert overlay.roto_brush_mode == "foreground"
+
+        editor = QLineEdit(window)
+        editor.show()
+        editor.setFocus()
+        pump(0.06)
+        event = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_V,
+                          Qt.KeyboardModifier.NoModifier)
+        window.eventFilter(editor, event)
+        assert overlay.mode == "roto", "V in a text field must not exit the workspace"
+        editor.close()
+        editor.deleteLater()
+
+        window.preview_panel.view.setFocus()
+        event = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_V,
+                          Qt.KeyboardModifier.NoModifier)
+        assert window.eventFilter(window, event)
+        assert overlay.mode == "select"
+        assert window.preview_panel.roto_bar.isHidden()
     finally:
         window.projects._set_clean()
         window.close()

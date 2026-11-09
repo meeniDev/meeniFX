@@ -108,6 +108,118 @@ def test_preview_modes_and_solid_colour_are_real_views():
         "the solid preview uses the configured colour"
 
 
+def test_every_preview_view_has_the_expected_alpha_or_background():
+    engine, clip = build_engine(duration=30)
+    layer = layer_from(plate())
+    views = {view: apply(engine, clip, layer, roto_entry(matte_view=view))
+             for view in ("original", "outline", "isolated", "alpha", "checkerboard",
+                          "composite")}
+    np.testing.assert_array_equal(views["original"], layer)
+    np.testing.assert_array_equal(views["outline"], layer)
+
+    alpha = views["alpha"]
+    assert int(alpha[4, 4, :3].max()) == 0, "alpha matte is black where the background was"
+    assert int(alpha[4, 4, 3]) == 255 and int(alpha[90, 160, 3]) == 255
+    assert int(alpha[90, 160, :3].max()) == 255, "the subject is white in the matte"
+
+    composite = views["composite"]
+    assert int(composite[4, 4, 3]) == 0, "composite leaves the removed background transparent"
+    assert int(composite[90, 160, 3]) == 255, "the subject stays opaque"
+    np.testing.assert_array_equal(composite[4, 4, :3], layer[4, 4, :3]), \
+        "the effect does not paint black or green over transparent pixels"
+
+    checker = views["checkerboard"]
+    assert int(checker[4, 4, 3]) == 255 and int(checker[4, 4, :3].max()) > 20
+    assert not np.array_equal(checker[4, 4, :3], composite[4, 4, :3]), \
+        "the checker is a diagnostic background, not a black fill"
+
+    isolated = views["isolated"]
+    assert int(isolated[4, 4, 3]) == 255 and int(isolated[4, 4, :3].max()) < 45
+    assert int(isolated[90, 160, 3]) == 255
+
+    # A diagnostic preview must never reach an export. The exporter sets this flag while
+    # rendering, and the effect then evaluates Composite regardless of the popup state.
+    effect = runtime(engine, clip, roto_entry(matte_view="alpha"))
+    engine.exporting = True
+    try:
+        exported = effect.apply_layer(layer.copy())
+    finally:
+        engine.exporting = False
+    assert int(exported[4, 4, 3]) == 0
+    np.testing.assert_array_equal(exported[4, 4, :3], layer[4, 4, :3])
+
+
+def test_underlying_clip_shows_through_the_removed_background():
+    engine, clip = build_engine(frame=plate(), duration=30)
+    lower_track = engine.timeline.add_track("video", index=len(engine.timeline.tracks))
+    lower_path = "synthetic-roto-lower.png"
+    from meenifx.media.cache import MediaEntry
+    lower = np.zeros((HEIGHT, WIDTH, 3), np.uint8)
+    lower[:] = (180, 40, 120)          # BGR magenta, unmistakable against black
+    media = MediaEntry("video", 30, 30.0)
+    media.frames = [lower.copy() for _ in range(30)]
+    engine.media._entries[lower_path] = media
+    engine.timeline.new_clip("lower", lower_path, lower_track, 0, 30, source_out=30,
+                             source_fps=30.0)
+    clip.effects = [roto_entry()]
+    _raw, processed = engine.render_frame(0, 1.0)
+    np.testing.assert_array_equal(processed[8, 8], lower[8, 8])
+    assert int(processed[90, 160].max()) > 150, "the subject still covers the lower clip"
+
+
+def test_export_writes_the_composite_and_never_the_alpha_preview(tmp_path):
+    engine, clip = build_engine(frame=plate(), duration=30)
+    from meenifx.media.cache import MediaEntry
+    lower_track = engine.timeline.add_track("video", index=len(engine.timeline.tracks))
+    lower_path = "synthetic-roto-lower-export.png"
+    lower = np.zeros((HEIGHT, WIDTH, 3), np.uint8)
+    lower[:] = (180, 40, 120)
+    media = MediaEntry("video", 30, 30.0)
+    media.frames = [lower.copy() for _ in range(30)]
+    engine.media._entries[lower_path] = media
+    engine.timeline.new_clip("lower", lower_path, lower_track, 0, 30, source_out=30,
+                             source_fps=30.0)
+    # A diagnostic view is selected, but the exporter must render the real composite.
+    clip.effects = [roto_entry(matte_view="alpha")]
+    settings = {"output_path": str(tmp_path / "roto.png"), "format": "png",
+                "range_start": 0, "range_end": 1, "use_source_size": True,
+                "use_source_fps": True}
+    written, count, _fps, size = engine.export(settings)
+    assert count == 1 and size == (WIDTH, HEIGHT)
+    exported = cv2.imread(written)
+    assert exported is not None
+    np.testing.assert_array_equal(exported[8, 8], lower[8, 8]), \
+        "the removed background must show the lower clip, not the black alpha preview"
+    assert int(exported[90, 160].max()) > 150, "the subject is still in the exported frame"
+
+
+def test_roto_cutout_composites_inside_a_nested_composition():
+    from meenifx.media.cache import MediaEntry
+    from meenifx.project.settings import ProjectSettings
+    engine, clip = build_engine(frame=plate(), duration=30)
+    engine.apply_project_settings(ProjectSettings(name="Nested roto", width=WIDTH,
+                                                  height=HEIGHT, fps=30.0))
+    lower_track = engine.timeline.add_track("video", index=len(engine.timeline.tracks))
+    lower_path = "synthetic-roto-nested-lower.png"
+    lower = np.zeros((HEIGHT, WIDTH, 3), np.uint8)
+    lower[:] = (180, 40, 120)
+    media = MediaEntry("video", 30, 30.0)
+    media.frames = [lower.copy() for _ in range(30)]
+    engine.media._entries[lower_path] = media
+    lower_clip = engine.timeline.new_clip("lower", lower_path, lower_track, 0, 30,
+                                          source_out=30, source_fps=30.0)
+    clip.effects = [roto_entry()]
+    nested_id = engine.session.precompose("Roto nested", [clip.id, lower_clip.id])
+    assert nested_id is not None
+    nested = engine.timeline.find_clip(nested_id)
+    assert nested is not None and nested.is_composition
+    _raw, frame = engine.render_frame(0, 1.0)
+    assert frame.shape[:2] == (HEIGHT, WIDTH)
+    np.testing.assert_array_equal(frame[8, 8], lower[8, 8]), \
+        "the cutout reveals the lower clip inside the nested composition"
+    assert int(frame[90, 160].max()) > 150, "the subject survives the nested render"
+
+
 def test_refine_edge_stroke_changes_the_soft_boundary():
     height, width = 120, 160
     frame = np.zeros((height, width, 3), np.uint8)
@@ -148,10 +260,10 @@ def test_every_matte_control_changes_the_matte():
     feather = finish_matte(disc, dict(base, feather=8.0))
     soft = lambda matte: int(((matte > 0.05) & (matte < 0.95)).sum())
     assert soft(feather) > soft(reference), "feather widens the ramp"
-    choke = finish_matte(disc, dict(base, choke=6.0))
-    assert choke.mean() < reference.mean(), "positive choke eats into the matte"
-    grow = finish_matte(disc, dict(base, choke=-6.0))
-    assert grow.mean() > reference.mean(), "negative choke expands the matte"
+    grow = finish_matte(disc, dict(base, choke=6.0))
+    assert grow.mean() > reference.mean(), "positive Expand grows the matte"
+    choke = finish_matte(disc, dict(base, choke=-6.0))
+    assert choke.mean() < reference.mean(), "negative Shrink eats into the matte"
     contrast = finish_matte(disc, dict(base, edge_contrast=90.0))
     assert soft(contrast) < soft(reference), "edge contrast steepens the ramp"
     for value in (smooth, feather, choke, grow, contrast):

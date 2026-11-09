@@ -11,6 +11,7 @@ from __future__ import annotations
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from .model import DEFAULT_MODEL, DownloadCancelled, download_model, model_path
 from .propagate import propagate_seed
 
 
@@ -22,7 +23,7 @@ class PropagationWorker(QThread):
     failed = pyqtSignal(str)
 
     def __init__(self, engine, clip, key, seed_frame, seed_matte, frames, settings,
-                 cache, parent=None):
+                 cache, mask_refiner=None, parent=None):
         super().__init__(parent)
         self.engine = engine
         self.clip = clip
@@ -32,6 +33,7 @@ class PropagationWorker(QThread):
         self.frames = [int(frame) for frame in frames]
         self.settings = dict(settings or {})
         self.cache = cache
+        self.mask_refiner = mask_refiner
         self._stop = False
         self.total = len(self.frames)
 
@@ -67,7 +69,39 @@ class PropagationWorker(QThread):
 
             propagate_seed(self.seed_matte, self.seed_frame, self.frames, read,
                            self.settings, on_mask=on_mask,
-                           should_stop=self.stopped, on_progress=on_progress)
+                           should_stop=self.stopped, on_progress=on_progress,
+                           mask_refiner=self.mask_refiner)
             self.completed.emit(sorted(set(analysed)))
+        except Exception as error:                     # noqa: BLE001 - reported to the UI
+            self.failed.emit(str(error))
+
+
+class ModelDownloadWorker(QThread):
+    """Download the optional segmentation weights without blocking the editor."""
+
+    progressed = pyqtSignal(int, int)
+    completed = pyqtSignal(str)
+    failed = pyqtSignal(str)
+    cancelled = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._stop = False
+
+    def stop(self):
+        self._stop = True
+
+    def stopped(self):
+        return self._stop
+
+    def run(self):
+        try:
+            path = download_model(DEFAULT_MODEL,
+                                  on_progress=lambda done, total:
+                                  self.progressed.emit(int(done), int(total)),
+                                  should_stop=self.stopped)
+            self.completed.emit(path)
+        except DownloadCancelled:
+            self.cancelled.emit()
         except Exception as error:                     # noqa: BLE001 - reported to the UI
             self.failed.emit(str(error))

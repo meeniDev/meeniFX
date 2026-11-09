@@ -3,8 +3,8 @@
 import cv2
 import numpy as np
 import pytest
-from PyQt6.QtCore import QPointF, Qt
-from PyQt6.QtGui import QColor, QImage, QPainter
+from PyQt6.QtCore import QEvent, QPointF, Qt
+from PyQt6.QtGui import QColor, QImage, QKeyEvent, QPainter
 
 from conftest import build_engine
 from meenifx.ui.preview import PreviewWidget
@@ -184,6 +184,35 @@ def test_strokes_stay_aligned_when_the_preview_is_resized(qapp, monkeypatch, tmp
     assert abs(aligned[0][0] - aligned[1][0]) < 0.02
     assert abs(aligned[0][1] - aligned[1][1]) < 0.02
     assert 0.45 < aligned[0][0] < 0.55 and 0.45 < aligned[0][1] < 0.55
+
+
+def _key(view, key, modifiers=Qt.KeyboardModifier.NoModifier):
+    event = QKeyEvent(QEvent.Type.KeyPress, key, modifiers)
+    view.keyPressEvent(event)
+    return event
+
+
+def test_workspace_shortcuts_switch_tools_and_exit(qapp, monkeypatch, tmp_path):
+    _engine, _clip, _entry, view, overlay = build(qapp, monkeypatch, tmp_path)
+    overlay.set_roto_brush_mode("refine")
+    assert _key(view, Qt.Key.Key_B).isAccepted()
+    assert overlay.roto_brush_mode == "foreground", "B selects the Roto Brush"
+
+    start, end = stroke_points(overlay, view)
+    overlay.mouse_press(_Event(start))
+    overlay.mouse_move(_Event(end))
+    overlay.mouse_release(_Event(end))
+    _engine.session.undo()
+    assert _engine.timeline.find_clip(_clip.id).effects[0]["strokes"] == []
+    _key(view, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier
+         | Qt.KeyboardModifier.ShiftModifier)
+    assert len(_engine.timeline.find_clip(_clip.id).effects[0]["strokes"]) == 1
+
+    assert _key(view, Qt.Key.Key_V).isAccepted()
+    assert overlay.mode == "select", "V restores Selection and leaves painting"
+    overlay.mode = "roto"
+    assert _key(view, Qt.Key.Key_Escape).isAccepted()
+    assert overlay.mode == "select", "Esc leaves the Roto workspace"
 
 
 def test_done_restores_the_normal_tools(qapp, monkeypatch, tmp_path):

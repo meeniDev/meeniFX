@@ -16,7 +16,8 @@ assets += [('figure_cafe.png', '.'), ('examples', 'examples')]
 assets += [('docs/releases', 'docs/releases')]
 datas, binaries, hiddenimports = list(assets), [], []
 # Pillow draws text clips (fonts, stroke, shadow), imageio/cv2 handle media and Qt is the UI.
-for package in ('PyQt6', 'cv2', 'imageio', 'imageio_ffmpeg', 'PIL', 'yt_dlp'):
+for package in ('PyQt6', 'cv2', 'imageio', 'imageio_ffmpeg', 'PIL', 'yt_dlp',
+                'onnxruntime'):
     collected = collect_all(package)
     datas += collected[0]
     binaries += collected[1]

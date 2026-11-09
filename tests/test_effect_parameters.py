@@ -102,7 +102,15 @@ CONTEXT_SWITCHES = {("gaussian_blur", "keep_edges"), ("motion_blur", "follow_mot
                     # Edge colour cleanup only repaints the 2 %..98 % alpha band; on a
                     # 320x180 audit that is a few dozen pixels, below the global mean
                     # threshold. tests/test_roto_brush.py measures it on a bright fringe.
-                    ("roto_brush", "decontaminate")}
+                    ("roto_brush", "decontaminate"),
+                    # The AI model is intentionally unavailable in the synthetic audit;
+                    # Automatic, Model and Basic therefore resolve to the same Basic
+                    # matte here. The model path is measured separately.
+                    ("roto_brush", "backend"),
+                    # Choosing a subject only changes a multi-subject matte when the user
+                    # clicks a point; the audit picture has one subject. Selection is
+                    # covered by the model tests.
+                    ("roto_brush", "subject")}
 
 
 def roto_frame(width=320, height=180):

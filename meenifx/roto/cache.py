@@ -28,11 +28,12 @@ import numpy as np
 
 from ..config import user_config_dir
 
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 MAX_MASK_EDGE = 640
-# Parameters that change the *raw* segmentation. Feather, choke, contrast and the preview
-# mode are applied after the cache, so moving those sliders must not throw masks away.
-ANALYSIS_PARAMS = ("refine", "quality", "search_radius", "tolerance")
+# Parameters that change the *raw* segmentation. Feather, expand/shrink, edge refinement
+# and the preview mode are applied after the cache, so moving those sliders must not throw
+# masks away. Backend and subject choice do change the mask and invalidate it.
+ANALYSIS_PARAMS = ("backend", "refine", "quality", "search_radius", "tolerance")
 _META = "meta.json"
 
 
@@ -64,11 +65,18 @@ def mask_key(entry):
     """Digest of everything that changes the raw matte of a clip."""
     entry = entry or {}
     params = entry.get("params") or {}
+    try:
+        from .model import model_signature
+        model = model_signature()
+    except Exception:                                  # noqa: BLE001 - never break render
+        model = "unknown"
     materials = {
         "version": CACHE_VERSION,
         "base": int(entry.get("base_frame", 0) or 0),
         "strokes": entry.get("strokes") or [],
         "analysis": {name: params.get(name) for name in ANALYSIS_PARAMS},
+        "subject_point": entry.get("subject_point"),
+        "model": model,
         "seed": bool(params.get("auto_seed", False)),
     }
     return hashlib.blake2b(_canonical(materials).encode("utf-8"), digest_size=16).hexdigest()

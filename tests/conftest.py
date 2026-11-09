@@ -16,6 +16,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # session marker behind): every test that builds one would otherwise appear in the start
 # window as a temp-folder entry, and its autosave would be offered for recovery.
 os.environ.setdefault("MEENIFX_NO_RECENT", "1")
+# Synthetic tests must never spend seconds loading or running the optional 176 MB model
+# just because it happens to be installed on the developer's machine. Model-specific
+# tests opt back in with monkeypatch.delenv.
+os.environ.setdefault("MEENIFX_DISABLE_ROTO_MODEL", "1")
 
 WIDTH, HEIGHT = 320, 180
 

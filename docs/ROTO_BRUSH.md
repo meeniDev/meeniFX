@@ -7,36 +7,60 @@ are hints for a segmenter, they are never painted into the footage.
 
 ## The workflow
 
-1. Select a picture clip and press the **Roto Brush** tool (or **Paint Mask** on its effect
-   card). The preview switches to a dedicated rotoscoping mode.
-2. Paint a green stroke inside the subject. Paint more strokes, and Alt-drag red strokes
-   over anything the matte wrongly included.
-3. The purple outline is the real segmented boundary, not a box around the clip. `O` hides
-   it.
-4. **Forward** / **Backward** / **Analyze All** carry the matte through the source frames.
-   **Stop** cancels; finished frames are already on disk.
-5. Scrub to a weak frame and paint correction strokes there. Corrections belong to that one
-   source frame.
-6. **Freeze** marks the analysed masks as final so previews stop re-checking them.
-   **Unfreeze** allows edits, **Recalculate** re-runs the analysis and **Clear Cache**
-   deletes the masks from disk.
-7. **Done** (or `Esc`) leaves the mode and brings the normal transform tools back. The clip
-   transform is never changed by rotoscoping.
+1. Select a picture clip and press the **Roto Brush** tool (or **Edit Mask** on its effect
+   card). A contextual toolbar appears directly above the Preview. The preview is the
+   dedicated rotoscoping workspace; a separate window is never opened.
+2. The first visit offers the optional AI model download. The toolbar shows its status.
+   If it is not installed, the clearly labelled Basic GrabCut mode is used.
+3. Paint a green foreground stroke inside the subject. Paint more corrections, and Alt-drag
+   red background strokes over anything the matte wrongly included.
+4. The purple outline is the real segmented boundary, not a box around the clip. Use the
+   preview popup to switch between Original, Outline, Isolated Subject, Alpha Matte,
+   Transparency Checkerboard and Composite.
+5. **Propagate Backward**, **Propagate Forward** or **Analyze Clip** carry the matte through
+   the source frames. The stop button cancels; finished frames are already on disk.
+6. Scrub to a weak frame and paint correction strokes there. Corrections belong to that one
+   source frame. Undo and Redo are on the toolbar and on Ctrl+Z / Ctrl+Shift+Z.
+7. **Freeze** marks the analysed masks as final so playback does not re-run segmentation.
+   Unfreeze allows edits; changing a stroke or an analysis setting invalidates stale masks.
+8. **Done**, `Esc` or `V` leaves the mode and brings the normal Selection tool and transform
+   handles back. The clip transform is never changed by rotoscoping.
 
 While the mode is active the bounding box, resize handles, rotation knob, anchor and motion
 path are hidden, and the pointer is a circular brush that matches the real painted radius.
 
 ## Preview modes and matte controls
 
-Composite, transparent checkerboard, alpha matte, and foreground on a solid colour are all
-available from the effect's **Preview** parameter. Smooth, feather, choke/expand, edge
-contrast and edge colour cleanup run on the cached raw matte, so changing them re-shapes
-every analysed frame without segmenting again. Search radius, colour tolerance, GrabCut
-refinement and quality change the analysis itself and therefore reset the mask key.
+The toolbar preview popup offers Original, Outline, Isolated Subject, Alpha Matte,
+Transparency Checkerboard and Composite. Isolated Subject shows the cutout immediately;
+Composite leaves the removed area transparent so a lower clip shows through. Diagnostic
+views are preview-only: export is always rendered as Composite.
 
-## What the backend is, and what it is not
+The Properties panel contains only effect values. Smooth, Feather, Expand/Shrink, Edge
+Refinement and Edge Colour Cleanup run on the cached raw matte, so changing them re-shapes
+every analysed frame without segmenting again. Subject choice, Quality, Search Radius,
+Colour Tolerance, correction fitting and the segmenter choice live under **Details**;
+they change the analysis and therefore reset the mask key. AI model status and download
+are in the toolbar, not buried in Properties.
 
-The shipped segmenter is the classical path in `meenifx/roto/segment.py`:
+## Segmentation backends
+
+The preferred backend is **U^2-Net**, an Apache-2.0 salient-subject segmentation model.
+The ONNX weights are optional and downloaded from the AI button on the Roto Brush toolbar:
+
+- size: 175,997,641 bytes (about 168 MB),
+- SHA-256 is verified before the file is installed,
+- inference runs on the CPU through ONNX Runtime (no GPU or PyTorch required),
+- the download has progress, cancellation and clear error reporting,
+- the model is not bundled in the installer and is not committed to the repository.
+
+For each analysed frame the model predicts the subject from the picture itself. Green and
+red strokes are applied as corrections, the flow-warped previous matte is used as a
+temporal prior, and the result is refined along the picture edge. The model is run again on
+every propagated frame instead of copying the base mask.
+
+**Basic** mode remains available without a download. It is the classical path in
+`meenifx/roto/segment.py`:
 
 - OpenCV GrabCut seeded by the painted foreground/background strokes,
 - a LAB colour-distance model sampled from the strokes,
@@ -44,22 +68,26 @@ The shipped segmenter is the classical path in `meenifx/roto/segment.py`:
 - frame-to-frame propagation through Farneback optical flow plus a per-frame GrabCut
   refinement in `meenifx/roto/propagate.py`.
 
-It runs on the CPU at a bounded analysis size, needs no model download, and keeps the
-Windows release a single package. It is **not** a learned video-segmentation model: there
-is no object memory, so fast motion, occlusion, motion blur and crowded scenes still need
-correction strokes, and hair, fur and semi-transparent edges are approximate. The panel and
-this document say so instead of pretending otherwise.
+Basic is **not** AI-assisted rotoscoping, and the UI labels it accordingly. It has no
+learned object prior and no object memory.
 
-### Models evaluated for the upgrade path
+### What remains approximate
 
-| Option | Licence | Runtime / size | Windows packaging |
-| --- | --- | --- | --- |
-| SAM 2 / SAM 2.1 | Apache-2.0 | PyTorch ≥ 2.5; 110–770 MB checkpoints | WSL strongly recommended; a bundled Python/PyTorch runtime would dwarf the editor |
-| SAM 2 ONNX exports | Apache-2.0 | ONNX Runtime; same weights (hiera-tiny ~111 MB … large ~768 MB) | Portable in principle, but untested on this machine and adds a large download |
+Neither backend is a learned video-object tracker with memory. Fast motion, occlusion,
+motion blur, crowded scenes and subjects that leave and re-enter the frame still need
+correction strokes. Hair, fur, thin straps and semi-transparent edges remain approximate,
+and the Refine Edge brush is a guided filter rather than a dedicated alpha-matting network.
 
-None is bundled: shipping a multi-hundred-megabyte model we cannot test here would be worse
-than an honest fallback. The segmentation entry points (`segment_frame`, `propagate_seed`,
-`raw_matte`) are the seams where a model backend can be added without touching the UI.
+Pre-compositions render their own background. A cutout inside a pre-composition reveals
+clips on lower tracks inside that composition, but the nested clip itself still paints its
+background, so the transparency does not pass through to tracks below it on the parent
+timeline.
+
+SAM 2 and SAM 2.1 were evaluated. They are Apache-2.0, but require PyTorch (roughly 2.5 or
+newer) and a 110 to 770 MB checkpoint; bundling that runtime would dwarf the editor and is
+difficult to package reliably on Windows. U^2-Net keeps the release portable while giving
+a real learned subject prior on CPU. The segmentation entry points (`segment_subject`,
+`propagate_seed`, `raw_matte`) remain the seams for a future matting backend.
 
 ## Coordinates, trims and transforms
 
@@ -97,11 +125,16 @@ cache, invalidating a key or unfreezing never touches the source media.
 | --- | --- |
 | drag | paint a green (keep) stroke |
 | Alt + drag | paint a red (remove) stroke |
-| `B` | Refine Edge brush |
-| `G` | back to the green foreground brush |
+| `B` | Roto Brush (green foreground brush) |
+| `V` | leave Roto Brush and restore Selection |
+| `Esc` | leave Roto Brush (same as **Done**) |
+| `Ctrl+Z` | undo the last stroke |
+| `Ctrl+Shift+Z` | redo the undone stroke |
 | `[` / `]` | smaller / larger brush |
 | `O` | show or hide the segmentation outline |
-| `Esc` | leave Roto Brush (same as **Done**) |
+
+Shortcuts are ignored while a text field or a dialog has focus. In particular, pressing
+`V` in a text input never leaves the workspace.
 
 ## Verification
 
@@ -109,8 +142,13 @@ Run the focused suites with the offscreen platform:
 
 ```bash
 QT_QPA_PLATFORM=offscreen PYTHONPATH=".;tests" python -m pytest \
-  tests/test_roto_brush.py tests/test_roto_brush_ui.py -q -p no:cacheprovider
+  tests/test_roto_brush.py tests/test_roto_brush_ui.py tests/test_roto_toolbar.py \
+  tests/test_roto_brush_window.py -q -p no:cacheprovider
 ```
+
+The real-model checks in `tests/test_roto_model.py` run when
+`artifacts/roto-model-test/u2net.onnx` is present. They verify the downloaded weights, the
+alpha cutout and model propagation on a moving subject; otherwise they skip.
 
 The backend suite checks that strokes segment without painting or deleting pixels, that red
 corrections are hints, that every matte control changes the matte, that the outline follows

@@ -1,26 +1,14 @@
-"""Stroke-guided segmentation.
+"""Classical stroke-guided segmentation, retained as Roto Brush's Basic fallback.
 
-What this backend is
---------------------
-OpenCV GrabCut seeded by the green/red brush strokes, blended with a colour-distance
-model and refined along the painted Refine Edge strokes with a guided filter. It runs on
-the CPU, needs no model download and is deterministic, which is why it ships as the
-built-in fallback.
+This module is OpenCV GrabCut seeded by the green/red brush strokes, blended with a
+colour-distance model and refined along the painted Refine Edge strokes with a guided
+filter. It runs on the CPU and needs no model download.
 
-What it is NOT
---------------
-It is not a learned video-segmentation model. There is no appearance memory, no learned
-object prior and no temporal reasoning of its own; propagation comes from optical flow in
-`propagate.py`. On a clear subject against a contrasting background the stroke workflow
-works well; on hair, fur, motion blur or a crowded scene the matte will be noticeably
-worse than a model such as SAM 2 would produce. The Refine Edge brush is an edge-aware
-guided filter, not a matting network, and the UI/docs say so.
-
-Model options evaluated (see docs/ROTO_BRUSH.md): SAM 2 / SAM 2.1 (Apache-2.0, needs
-PyTorch and a 110-770 MB checkpoint, WSL recommended on Windows) and its ONNX exports
-(portable runtime, same weights) are the realistic upgrade path. None is bundled: the
-release build must stay a single Windows package with no multi-GB runtime, and shipping a
-model we cannot test on this machine would be worse than an honest fallback.
+It is not the AI path. The preferred path lives in `subject.py` and runs the optional
+U^2-Net ONNX model. GrabCut has no learned object prior and no temporal reasoning; on
+hair, fur, motion blur or a crowded scene it is noticeably weaker. The Refine Edge brush
+here is an edge-aware guided filter, not a matting network. The UI labels this mode Basic
+and never presents it as AI-assisted rotoscoping. See `docs/ROTO_BRUSH.md`.
 """
 
 from __future__ import annotations
@@ -211,13 +199,15 @@ def finish_matte(matte, settings, scale=1.0):
         matte = (matte - low) / max(1e-6, high - low)
         matte = np.clip(matte, 0.0, 1.0)
 
-    choke = float(settings.get("choke", 0.0)) * scale
-    amount = int(round(abs(choke)))
+    # Positive expands the matte, negative shrinks it. This is the same control the user
+    # sees as Expand / Shrink; the old name was Choke, which had the opposite sign.
+    expand = float(settings.get("choke", 0.0)) * scale
+    amount = int(round(abs(expand)))
     if amount > 0:
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
                                            (min(61, amount * 2 + 1),) * 2)
         u8 = (np.clip(matte, 0.0, 1.0) * 255).astype(np.uint8)
-        u8 = cv2.erode(u8, kernel) if choke > 0 else cv2.dilate(u8, kernel)
+        u8 = cv2.dilate(u8, kernel) if expand > 0 else cv2.erode(u8, kernel)
         matte = u8.astype(np.float32) / 255.0
 
     feather = max(0.0, float(settings.get("feather", 0.0))) * scale

@@ -35,9 +35,11 @@ Windows 10 or 11, 64-bit. The installed application does not require Python.
   video and audio, trimming, splitting and full undo/redo.
 - **Effects that look the same in the export** - colour correction, blurs, glow, stylize,
   glitch and warp effects, keying, LUTs and one-click Looks.
-- **Rotoscoping** - a Roto Brush mode made for it: green keep and Alt-red remove strokes,
-  a Refine Edge brush, a purple outline that follows the subject, a base frame, forward and
-  backward propagation, correction strokes, matte previews and a freezeable mask cache.
+- **Rotoscoping** - a Roto Brush workspace with its own toolbar: green keep and Alt-red
+  remove strokes, a Refine Edge tool, a purple outline that follows the subject, a base
+  frame, forward and backward propagation, correction strokes, six matte previews and a
+  freezeable mask cache. An optional U^2-Net subject model can be downloaded from the
+  toolbar, with SHA-256 verification and CPU inference; Basic GrabCut remains available.
 - **Animation** - keyframes on every numeric parameter, a Keyframe Editor, a Graph Editor,
   easing families, motion paths and reusable animation presets.
 - **Text and shapes** - styled, keyframeable text clips and vector shapes that stay sharp at

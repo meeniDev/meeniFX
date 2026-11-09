@@ -7,7 +7,7 @@ import time
 
 import cv2
 import numpy as np
-from PyQt6.QtCore import QObject, QPoint, QRunnable, Qt, QThreadPool, QTimer, pyqtSignal
+from PyQt6.QtCore import QEvent, QObject, QPoint, QRunnable, Qt, QThreadPool, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QActionGroup, QKeySequence
 from PyQt6.QtWidgets import (QAbstractButton, QAbstractSpinBox, QDockWidget, QLineEdit, QMainWindow,
                              QMessageBox, QProgressDialog, QPlainTextEdit, QStyle, QTextEdit,
@@ -267,7 +267,11 @@ class MainWindow(QMainWindow):
         # normal transform toolbar back, so the overlay reports both to the window.
         self.overlay.on_roto_change=self._roto_after_edit
         self.overlay.on_mode_change=self._roto_mode_changed
+        self.overlay.on_roto_ui_change=self._sync_roto_toolbar
         self._roto_worker=None
+        self._roto_model_worker=None
+        self._roto_model_progress=None
+        self._roto_filter_installed=False
         self.effects_panel.roto_requested.connect(lambda:self._set_overlay_mode("roto"))
         self.effects_panel.roto_exit_requested.connect(lambda:self._set_overlay_mode("select"))
         self.effects_panel.roto_stroke_requested.connect(self._roto_stroke_action)
@@ -275,6 +279,22 @@ class MainWindow(QMainWindow):
         self.effects_panel.roto_cache_requested.connect(self._roto_cache_action)
         self.effects_panel.roto_outline_changed.connect(self._roto_set_outline)
         self.effects_panel.roto_brush_size_changed.connect(self._roto_set_brush_size)
+        self.effects_panel.effects_changed.connect(self._roto_parameters_changed)
+        # Dedicated Roto Brush workspace above the picture. These are editing actions;
+        # the Properties panel keeps only the matte parameters.
+        roto_bar=self.preview_panel.roto_bar
+        roto_bar.tool_changed.connect(self._roto_tool_changed)
+        roto_bar.brush_size_changed.connect(self._roto_set_brush_size)
+        roto_bar.undo_requested.connect(lambda:self._roto_stroke_action("undo"))
+        roto_bar.redo_requested.connect(lambda:self._roto_stroke_action("redo"))
+        roto_bar.propagate_requested.connect(self._roto_propagate)
+        roto_bar.analyze_requested.connect(lambda:self._roto_propagate("all"))
+        roto_bar.stop_requested.connect(lambda:self._roto_propagate("stop"))
+        roto_bar.freeze_changed.connect(self._roto_freeze_changed)
+        roto_bar.preview_changed.connect(self._roto_preview_mode)
+        roto_bar.subject_requested.connect(self._roto_choose_subject)
+        roto_bar.model_requested.connect(self._roto_model_action)
+        roto_bar.done_requested.connect(lambda:self._set_overlay_mode("select"))
         self.engine.session.auto_keyframe.trace_add("write",lambda *_:self._sync_auto_key_buttons())
         self.engine.session.clip_selected.connect(
             lambda _ids:(self.graph_editor.refresh(),self.keyframe_editor.refresh()))
@@ -637,6 +657,32 @@ class MainWindow(QMainWindow):
         if isinstance(widget,QAbstractSpinBox): return True
         if isinstance(widget,(QPlainTextEdit,QTextEdit)): return not widget.isReadOnly()
         return False
+
+    def eventFilter(self,obj,event):
+        """Window-wide Roto shortcuts, except while a real text field or dialog has focus."""
+        if (self.overlay.mode=="roto" and event.type()==QEvent.Type.KeyPress):
+            from PyQt6.QtWidgets import QApplication
+            if QApplication.activeModalWidget() is not None:
+                return super().eventFilter(obj,event)
+            if self._is_text_entry(QApplication.focusWidget()):
+                return super().eventFilter(obj,event)
+            key=event.key(); mods=event.modifiers()
+            if key==Qt.Key.Key_V and not (mods & (Qt.KeyboardModifier.ControlModifier
+                                                  | Qt.KeyboardModifier.AltModifier)):
+                self.overlay.exit_roto(); return True
+            if key==Qt.Key.Key_Escape:
+                self.overlay.exit_roto(); return True
+            if key==Qt.Key.Key_B and not (mods & (Qt.KeyboardModifier.ControlModifier
+                                                  | Qt.KeyboardModifier.AltModifier)):
+                self.overlay.set_roto_brush_mode("foreground"); return True
+            if key==Qt.Key.Key_Z and mods & Qt.KeyboardModifier.ControlModifier:
+                if mods & Qt.KeyboardModifier.ShiftModifier:
+                    self.engine.session.redo()
+                else:
+                    self.engine.session.undo()
+                self._roto_after_edit()
+                return True
+        return super().eventFilter(obj,event)
 
     def _build_toolbar(self):
         from PyQt6.QtWidgets import QHBoxLayout,QMenu,QPushButton,QSizePolicy,QToolButton,QWidget
@@ -1299,6 +1345,8 @@ class MainWindow(QMainWindow):
     def _refresh_panels(self):
         self.effects_panel.refresh_properties(); self.timeline_panel.canvas.update()
         self.keyframe_editor.refresh(); self.graph_editor.refresh()
+        if getattr(getattr(self,"overlay",None),"mode","")=="roto":
+            self._sync_roto_toolbar()
         self.preview_panel.view.update()
 
     def _overlay_changed(self):
@@ -2835,8 +2883,18 @@ class MainWindow(QMainWindow):
             # Leaving the mode keeps the strokes and the clip transform, and hides the
             # brush ring; the transform handles come back with the normal paint path.
             self.overlay.roto_hover=None
+            self.overlay.roto_choose_subject=False
             self.overlay._roto_outline_cache.clear()
+            self.preview_panel.view.setCursor(Qt.CursorShape.ArrowCursor)
         self.overlay.mode=mode
+        self.preview_panel.set_roto_workspace(mode=="roto")
+        from PyQt6.QtWidgets import QApplication
+        if mode=="roto" and not self._roto_filter_installed:
+            QApplication.instance().installEventFilter(self)
+            self._roto_filter_installed=True
+        elif mode!="roto" and self._roto_filter_installed:
+            QApplication.instance().removeEventFilter(self)
+            self._roto_filter_installed=False
         for button,name in ((getattr(self,"select_tool_button",None),"select"),
                             (getattr(self,"transform_tool_button",None),"transform"),
                             (getattr(self,"puppet_tool_button",None),"puppet"),
@@ -2852,6 +2910,8 @@ class MainWindow(QMainWindow):
             self.engine.session.tool.set("select")
         self.preview_panel.view.update()
         self.effects_panel.refresh_properties()
+        if mode=="roto":
+            self._sync_roto_toolbar()
 
     def _ensure_roto_effect(self):
         """The Roto Brush tool needs its effect before the first stroke can be painted."""
@@ -2875,6 +2935,7 @@ class MainWindow(QMainWindow):
                                        "base_frame":int(max(0,frame))})
         self.engine.session.stack.run("Add Roto Brush",action)
         self.effects_panel.refresh_properties()
+        self._sync_roto_toolbar()
 
     # ------------------------------------------------------------------ roto brush
     def _roto_clip_entry(self):
@@ -2886,8 +2947,112 @@ class MainWindow(QMainWindow):
         return clip,entry
 
     def _roto_mode_changed(self,mode):
-        if self.overlay.mode!=mode:
-            self._set_overlay_mode(mode)
+        # exit_roto() has already changed overlay.mode before it reports the change, so
+        # comparing the two would skip hiding the toolbar and removing the shortcut filter.
+        self._set_overlay_mode(mode)
+
+    def _sync_roto_toolbar(self):
+        """Keep the contextual toolbar and the real effect state on the same page."""
+        bar=getattr(getattr(self,"preview_panel",None),"roto_bar",None)
+        if bar is None:
+            return
+        if self.overlay.mode!="roto":
+            bar.setVisible(False)
+            return
+        bar.setVisible(True)
+        bar.set_tool(self.overlay.roto_brush_mode)
+        bar.size_spin.blockSignals(True)
+        bar.size_spin.setValue(max(1,min(35,int(round(self.overlay.roto_brush_size*100.0)))))
+        bar.size_spin.blockSignals(False)
+        clip,entry=self._roto_clip_entry()
+        if clip is None or entry is None:
+            bar.set_state(0,0,False,"composite","",False,"AI model not installed",
+                          "Open the AI button to download the optional model.")
+            return
+        from ..roto.cache import MaskCache, mask_key
+        from ..roto.model import model_status
+        params=entry.get("params") or {}
+        # The combo selects Choose; the next preview click supplies the point and turns
+        # the combo back to Auto. Auto always clears an armed pick.
+        self.overlay.roto_choose_subject=(str(params.get("subject","auto"))=="choose")
+        analysed,frozen=0,False
+        try:
+            analysed,frozen=MaskCache().summary(clip,mask_key(entry))
+        except (OSError,AttributeError):
+            meta=entry.get("cache") or {}
+            analysed=int(meta.get("frames",0) or 0)
+            frozen=bool(meta.get("frozen"))
+        span=max(1,int(clip.source_out)-int(clip.source_in))
+        preview=str(params.get("matte_view","composite") or "composite")
+        if preview not in ("original","outline","isolated","alpha","checkerboard","composite"):
+            preview="composite"
+        self.overlay.roto_outline_visible=preview in ("composite","outline")
+        status=model_status()
+        backend="u2net" if status.available and str(params.get("backend","auto"))!="basic" else "basic"
+        running=bool(getattr(self,"_roto_worker",None) is not None
+                     and self._roto_worker.isRunning())
+        bar.set_state(analysed,span,frozen,preview,backend,running,
+                      status.label,status.detail)
+
+    def _roto_tool_changed(self,mode):
+        """Switch foreground, background or refine brushes from the toolbar."""
+        if mode not in ("foreground","background","refine"):
+            return
+        clip,entry=self._roto_clip_entry()
+        if clip is not None and entry is not None:
+            entry.setdefault("params",{})["subject"]="auto"
+        self.overlay.roto_choose_subject=False
+        self.overlay.set_roto_brush_mode(mode)
+        self.preview_panel.view.setFocus()
+        self._sync_roto_toolbar()
+
+    def _roto_parameters_changed(self):
+        """The Properties panel changed a value: update the workspace and subject pick."""
+        if self.overlay.mode!="roto":
+            return
+        clip,entry=self._roto_clip_entry()
+        if clip is not None and entry is not None:
+            self.overlay.roto_outline_visible=(
+                str((entry.get("params") or {}).get("matte_view","composite"))
+                in ("composite","outline"))
+            if (str((entry.get("params") or {}).get("subject","auto"))=="choose"
+                    and not self.overlay.roto_choose_subject):
+                self.overlay.roto_choose_subject=True
+                self.toast_message("Click the subject to isolate in the preview",
+                                   duration_ms=2600)
+        self._sync_roto_toolbar()
+
+    def _roto_preview_mode(self,mode):
+        """The toolbar's preview selector. Export is independently forced to Composite."""
+        clip,entry=self._roto_clip_entry()
+        if clip is None or entry is None:
+            return
+        if mode not in ("original","outline","isolated","alpha","checkerboard","composite"):
+            mode="composite"
+        entry.setdefault("params",{})["matte_view"]=mode
+        self.overlay.roto_outline_visible=mode in ("composite","outline")
+        self.overlay._roto_outline_cache.clear()
+        self.engine.session.changed.emit()
+        self._invalidate_preview_cache()
+        self._request_preview()
+        self.preview_panel.view.setFocus()
+        self.preview_panel.view.update()
+        self._sync_roto_toolbar()
+
+    def _roto_choose_subject(self):
+        clip,entry=self._roto_clip_entry()
+        if clip is None or entry is None:
+            self.toast_message("Select a clip with Roto Brush first",kind="error")
+            return
+        entry.setdefault("params",{})["subject"]="choose"
+        self.overlay.roto_choose_subject=True
+        self.overlay.set_roto_brush_mode("foreground")
+        self.preview_panel.view.setFocus()
+        self.engine.session.changed.emit()
+        self.toast_message("Click the subject to isolate in the preview",duration_ms=2600)
+
+    def _roto_freeze_changed(self,frozen):
+        self._roto_cache_action("freeze" if frozen else "unfreeze")
 
     def _roto_after_edit(self):
         """A stroke changes the mask key, so stale masks are dropped, never reused."""
@@ -2908,6 +3073,7 @@ class MainWindow(QMainWindow):
         self._invalidate_preview_cache()
         self._request_preview()
         self.effects_panel.refresh_properties()
+        self._sync_roto_toolbar()
 
     def _roto_stroke_action(self,action):
         clip,entry=self._roto_clip_entry()
@@ -2952,6 +3118,7 @@ class MainWindow(QMainWindow):
     def _roto_set_brush_size(self,fraction):
         self.overlay.roto_brush_size=max(0.005,min(0.35,float(fraction)))
         self.preview_panel.view.update()
+        self._sync_roto_toolbar()
 
     def _roto_cache_action(self,action):
         clip,entry=self._roto_clip_entry()
@@ -2966,6 +3133,7 @@ class MainWindow(QMainWindow):
             if not count:
                 self.toast_message("Nothing to freeze yet - analyze the clip first",
                                    kind="error",duration_ms=3200)
+                self._sync_roto_toolbar()
                 return
             cache.set_frozen(clip,True)
             entry.setdefault("cache",{}).update({"key":key,"frames":count,"frozen":True})
@@ -2988,25 +3156,34 @@ class MainWindow(QMainWindow):
         self._invalidate_preview_cache()
         self._request_preview()
         self.effects_panel.refresh_properties()
+        self._sync_roto_toolbar()
+
+    def _roto_analyzer(self,clip,entry,frame=0):
+        """A private effect instance for worker-thread analysis, configured like the clip."""
+        from ..effects.roto_brush import RotoBrushEffect
+        analyzer=RotoBrushEffect(self.engine)
+        analyzer.clip=clip
+        analyzer.clip_entry=entry
+        analyzer.local_frame=max(0,int(frame)-int(clip.source_in))
+        analyzer.param_scale=1.0
+        params=dict(getattr(analyzer,"defaults",{}) or {})
+        params.update(entry.get("params") or {})
+        analyzer.load_params(params)
+        return analyzer
 
     def _roto_segment_base(self,clip,entry,frame,size):
         """Segment the base frame itself so propagation has a seed matte."""
-        runtime=self.engine.runtime_effects.get("roto_brush")
         source=self.engine.media.load(clip.source_path)
-        if runtime is None or source is None or not source.frames:
+        if source is None or not source.frames:
             return None
         index=max(0,min(len(source.frames)-1,int(frame)))
         rgb=source.frames[index]
+        if rgb is None:
+            return None
         import cv2
         small=cv2.resize(rgb,size,interpolation=cv2.INTER_AREA)
-        runtime.clip=clip
-        runtime.clip_entry=entry
-        runtime.local_frame=max(0,int(frame)-int(clip.source_in))
-        runtime.param_scale=1.0
-        params=dict(getattr(runtime,"defaults",{}) or {})
-        params.update(entry.get("params") or {})
-        runtime.load_params(params)
-        return runtime.raw_matte(small,int(frame))
+        analyzer=self._roto_analyzer(clip,entry,frame)
+        return analyzer.raw_matte(small,int(frame))
 
     def _roto_propagate(self,direction):
         if direction=="stop":
@@ -3023,9 +3200,9 @@ class MainWindow(QMainWindow):
         if worker is not None and worker.isRunning():
             self.toast_message("Roto Brush is already analyzing this clip",duration_ms=2400)
             return
+        import copy
         from ..roto.cache import MaskCache, mask_key, mask_size
         from ..roto.propagate import frame_order
-        from ..roto.segment import quality_settings
         from ..roto.worker import PropagationWorker
         stroke_frames=sorted({int(stroke.get("frame",0) or 0)
                               for stroke in (entry.get("strokes") or [])})
@@ -3048,18 +3225,29 @@ class MainWindow(QMainWindow):
                 self.toast_message("Paint the subject on the base frame first",kind="error")
                 return
             cache.store(clip,base,seed,key,size)
-        params=dict(entry.get("params") or {})
-        settings=dict(quality_settings(str(params.get("quality","Preview"))))
-        settings.update({"refine":bool(params.get("refine",True)),
-                         "search_radius":float(params.get("search_radius",20.0) or 20.0),
-                         "tolerance":float(params.get("tolerance",28.0) or 28.0)})
+        # Analyze from a snapshot. The user can keep scrubbing and editing the UI while
+        # the worker runs, but a stroke cannot mutate the mask being propagated.
+        snapshot=copy.deepcopy(entry)
+        analyzer=self._roto_analyzer(clip,snapshot,base)
+        settings=analyzer._analysis_settings()
         frames=frame_order(clip.source_in,clip.source_out-1,base,direction)
         if not frames:
             self.toast_message("No other source frames to analyze in that direction",
                                duration_ms=2400)
             return
-        runner=PropagationWorker(self.engine,clip,key,base,seed,frames,settings,cache)
-        runner.progressed.connect(self.effects_panel.set_roto_progress)
+        from ..roto.model import model_status
+        use_model=(model_status().available
+                   and str(settings.get("backend") or "auto")!="basic")
+
+        def refine_frame(source_frame,prior,rgb):
+            return analyzer.segment_frame(rgb,int(source_frame),prior)
+
+        # Basic mode keeps the existing optical-flow + GrabCut propagation. The model
+        # path re-segments each frame with the warped matte as its prior.
+        refiner=refine_frame if use_model else None
+        runner=PropagationWorker(self.engine,clip,key,base,seed,frames,settings,cache,
+                                 mask_refiner=refiner)
+        runner.progressed.connect(self._roto_progress_changed)
         runner.completed.connect(
             lambda done,c=clip,e=entry,k=key,cc=cache:
             self._roto_finished(c,e,k,cc,done))
@@ -3069,11 +3257,21 @@ class MainWindow(QMainWindow):
         runner.finished.connect(self._roto_worker_finished)
         self._roto_worker=runner
         self.effects_panel.set_roto_progress(0,len(frames))
+        self._roto_progress_changed(0,len(frames))
         runner.start()
+
+    def _roto_progress_changed(self,done,total):
+        self.effects_panel.set_roto_progress(done,total)
+        bar=getattr(getattr(self,"preview_panel",None),"roto_bar",None)
+        if bar is not None:
+            bar.set_running(bool(total))
+            if total:
+                bar.status.setText(f"Analyzing {int(done)}/{int(total)}")
 
     def _roto_worker_finished(self):
         self._roto_worker=None
         self.effects_panel.set_roto_progress(0,0)
+        self._sync_roto_toolbar()
 
     def _roto_finished(self,clip,entry,key,cache,frames):
         count=len(cache.frames(clip,key))
@@ -3085,7 +3283,102 @@ class MainWindow(QMainWindow):
         self._invalidate_preview_cache()
         self._request_preview()
         self.effects_panel.refresh_properties()
+        self._sync_roto_toolbar()
         self.toast_message(f"Roto Brush: analyzed {len(frames)} frames",duration_ms=2600)
+
+    def _roto_model_action(self):
+        """Show the optional model status, or offer to download and verify it."""
+        from ..roto.model import DEFAULT_MODEL, model_status
+        status=model_status(verify=True)
+        if status.available:
+            QMessageBox.information(
+                self,"Roto Brush AI model",
+                f"{status.label}\n\n{status.detail}\nRuntime: {status.runtime}\n"
+                f"License: {DEFAULT_MODEL.license}\n{DEFAULT_MODEL.credit}\n\n"
+                f"Stored at:\n{status.path}")
+            return
+        size_mb=DEFAULT_MODEL.bytes/(1024*1024)
+        answer=QMessageBox.question(
+            self,"Download AI model",
+            f"Roto Brush can use {DEFAULT_MODEL.name} to find people, pets and objects "
+            f"without a colour key.\n\nDownload size: {size_mb:.0f} MB\n"
+            f"License: {DEFAULT_MODEL.license}\nInference: CPU (no GPU required)\n\n"
+            "The download is optional. Basic GrabCut remains available without it.\n"
+            "Download the model now?",
+            QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes)
+        if answer!=QMessageBox.StandardButton.Yes:
+            return
+        self._roto_start_model_download()
+
+    def _roto_start_model_download(self):
+        from ..roto.model import DEFAULT_MODEL
+        from ..roto.worker import ModelDownloadWorker
+        if getattr(self,"_roto_model_worker",None) is not None:
+            self.toast_message("The AI model is already downloading",duration_ms=2400)
+            return
+        worker=ModelDownloadWorker(self)
+        progress=QProgressDialog(
+            f"Downloading {DEFAULT_MODEL.name} ({DEFAULT_MODEL.bytes/(1024*1024):.0f} MB)...",
+            "Cancel",0,DEFAULT_MODEL.bytes,self)
+        progress.setWindowTitle("Roto Brush AI model")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.setValue(0)
+        progress.canceled.connect(worker.stop)
+        worker.progressed.connect(self._roto_model_progress_changed)
+        worker.completed.connect(self._roto_model_downloaded)
+        worker.failed.connect(self._roto_model_failed)
+        worker.cancelled.connect(self._roto_model_cancelled)
+        worker.finished.connect(self._roto_model_worker_finished)
+        self._roto_model_worker=worker
+        self._roto_model_progress=progress
+        progress.show()
+        worker.start()
+
+    def _roto_model_progress_changed(self,done,total):
+        progress=getattr(self,"_roto_model_progress",None)
+        if progress is None:
+            return
+        try:
+            progress.setMaximum(max(1,int(total or 1)))
+            progress.setValue(int(done))
+            progress.setLabelText(
+                f"Downloading AI model... {done/(1024*1024):.0f} of "
+                f"{total/(1024*1024):.0f} MB")
+        except RuntimeError:
+            self._roto_model_progress=None
+
+    def _roto_model_downloaded(self,path):
+        progress=getattr(self,"_roto_model_progress",None)
+        if progress is not None:
+            progress.close()
+        self._invalidate_preview_cache()
+        self.overlay._roto_outline_cache.clear()
+        self._request_preview()
+        self.effects_panel.refresh_properties()
+        self._sync_roto_toolbar()
+        self.toast_message("AI subject model installed and verified",duration_ms=3200)
+
+    def _roto_model_failed(self,message):
+        progress=getattr(self,"_roto_model_progress",None)
+        if progress is not None:
+            progress.close()
+        QMessageBox.warning(self,"AI model download failed",
+                            f"The model could not be installed.\n\n{message}")
+
+    def _roto_model_cancelled(self):
+        progress=getattr(self,"_roto_model_progress",None)
+        if progress is not None:
+            progress.close()
+        self.toast_message("AI model download cancelled",duration_ms=2400)
+
+    def _roto_model_worker_finished(self):
+        self._roto_model_worker=None
+        self._roto_model_progress=None
+        self._sync_roto_toolbar()
 
     def _ensure_puppet_effect(self):
         """The Puppet tool needs its effect: add it to the selection when it is missing."""
