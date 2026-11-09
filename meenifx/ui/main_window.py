@@ -387,6 +387,8 @@ class MainWindow(QMainWindow):
         self._add_action(file_menu,"Record...",None,self.open_recorder)
         self._add_action(file_menu,"Export...","Ctrl+R",self.open_export_dialog)
         self._add_action(file_menu,"Save Frame...","Ctrl+Alt+S",self.save_frame_dialog)
+        self._add_action(file_menu,"Open Sample Project",None,
+                         lambda:self.projects.open_bundled_sample())
         file_menu.addSeparator(); self._add_action(file_menu,"Preferences...",None,self.show_preferences)
         self._add_action(file_menu,"Exit","Alt+F4",self.close)
         edit=bar.addMenu("Edit")
@@ -1541,7 +1543,7 @@ class MainWindow(QMainWindow):
         videos=[p for p in candidates if p.lower().endswith((".gif",".mp4"))]
         images=[p for p in candidates if p not in videos]
         if not videos and not images:
-            self.bridge.status.emit("Ready — import media to begin")
+            self.bridge.status.emit("Ready. Import media to begin")
             return
         timeline=self.engine.timeline
         while len(timeline.tracks_of_type("video"))<2:timeline.add_track("video")
@@ -2574,7 +2576,7 @@ class MainWindow(QMainWindow):
         if not self.engine.session.copy_effects():
             self.toast_message("Select a clip to copy effects from")
             return
-        self.toast_message("Effects copied — Paste Effects or Paste Attributes onto other clips")
+        self.toast_message("Effects copied. Paste Effects or Paste Attributes onto other clips")
 
     def paste_effects(self):
         if not self.engine.session.selected:

@@ -7,8 +7,9 @@ that same curve, which is what acceleration and deceleration actually are. Both 
 edit the keyframe's easing handles, so switching the view never changes the animation.
 
 Interactions: click/shift-click to select keyframes, drag a box to select many, drag a
-keyframe to retime or revalue it, drag a handle to bend the segment, wheel to zoom,
-middle-drag or Ctrl+wheel to pan, Delete to remove, Ctrl+C/Ctrl+V to copy and paste.
+keyframe to retime or revalue it, drag a handle to bend the segment, Ctrl+wheel to zoom
+time at the pointer, Ctrl+Shift+wheel to zoom values, Shift+wheel to pan, Delete to
+remove, Ctrl+C/Ctrl+V to copy and paste.
 """
 
 from __future__ import annotations
@@ -787,22 +788,26 @@ class GraphCanvas(QWidget):
     @crashlog.guard("graph editor")
     def wheelEvent(self, event):
         modifiers = event.modifiers()
-        if modifiers & Qt.KeyboardModifier.ControlModifier:
-            delta = event.angleDelta().y() / 120.0
+        delta = event.angleDelta().y() / 120.0
+        if not delta:
+            return
+        if (modifiers & Qt.KeyboardModifier.ControlModifier
+                and modifiers & Qt.KeyboardModifier.ShiftModifier):
             anchor = self.value_at(event.position().y())
             self.zoom_y = max(0.2, min(8.0, self.zoom_y * (1.15 ** delta)))
             # Keep the value under the pointer in place while zooming vertically.
             self.pan_y += (anchor - self.value_at(event.position().y())) * 100.0
-        elif modifiers & Qt.KeyboardModifier.ShiftModifier:
-            self.pan_x += event.angleDelta().y() / 120.0 * 40.0
-        else:
-            steps = event.angleDelta().y() / 120.0
+        elif modifiers & Qt.KeyboardModifier.ControlModifier:
+            # Match the timeline and keyframe editor: Ctrl+wheel zooms time around the
+            # pointer. Ctrl+Shift+wheel is the graph-only vertical zoom.
             anchor = self.frame_at(event.position().x())
-            self.zoom_x = max(0.15, min(400.0, self.zoom_x * (1.15 ** steps)))
-            # Invert x_of (which starts at the value gutter) so the anchor frame stays
-            # under the pointer instead of drifting by the gutter's width.
+            self.zoom_x = max(0.15, min(400.0, self.zoom_x * (1.15 ** delta)))
             self.pan_x = (AXIS_W + (anchor - self.panel.start_frame()) * self.zoom_x
                           - event.position().x())
+        elif modifiers & Qt.KeyboardModifier.ShiftModifier:
+            self.pan_x += delta * 40.0
+        else:
+            return
         self.update()
 
     @crashlog.guard("graph editor")

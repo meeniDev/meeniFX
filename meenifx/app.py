@@ -63,6 +63,7 @@ class AppController:
         self.start.open_requested.connect(self.open_project)
         self.start.new_requested.connect(self.new_project)
         self.start.browse_requested.connect(self.browse_project)
+        self.start.sample_requested.connect(self.open_sample_project)
         self.projects.project_changed.connect(self._project_changed)
         self.projects.closed.connect(self.show_start)
         self.updater = self.window.update_manager
@@ -165,6 +166,16 @@ class AppController:
         if not self.projects.is_open and not self.window.isVisible():
             self.show_start()
         return ok
+
+    def open_sample_project(self):
+        """Open the bundled example from a writable copy in Documents."""
+        from .sample_project import ensure_sample_copy
+        path = ensure_sample_copy()
+        if not path:
+            self.start.toast.show_message("The sample project is missing from this build",
+                                          kind="error")
+            return False
+        return self.open_project(path)
 
     def new_project(self):
         from .ui.project_dialogs import NewProjectDialog

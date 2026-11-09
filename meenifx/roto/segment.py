@@ -183,7 +183,7 @@ def segment_frame(frame_bgr, foreground, background, refine=None, settings=None)
 
 
 def finish_matte(matte, settings, scale=1.0):
-    """Smooth, contrast, choke and feather — the controls that reshape the matte.
+    """Smooth, contrast, choke and feather, the controls that reshape the matte.
 
     Everything here runs on the *cached* raw matte, so changing a slider re-shapes every
     analysed frame without segmenting again. Pixel values are multiplied by `scale` so a

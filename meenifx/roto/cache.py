@@ -8,7 +8,7 @@ megabytes), so they live beside the preview cache as one 8-bit PNG per source fr
 
 `meta.json` carries the *key*: a digest of the base frame, every stroke and the analysis
 parameters. Changing a stroke or the search radius changes the key, so stale masks are
-never shown — the folder is reset instead of being silently mislabelled. The project keeps
+never shown, the folder is reset instead of being silently mislabelled. The project keeps
 only small metadata (key, analysed range, frozen flag) and never the pixels, so a project
 reopened without its cache simply reports which frames need analysing again.
 

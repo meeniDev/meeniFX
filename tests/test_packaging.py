@@ -31,6 +31,16 @@ def test_the_installer_is_per_user_and_uses_the_generated_version():
     assert "UninstallDelete" in text
 
 
+def test_both_windows_builds_ship_the_preview_libraries_and_sample():
+    spec = (ROOT / "meeniFX Studios.spec").read_text(encoding="utf-8")
+    assert "('presets', 'presets')" in spec
+    assert "('looks', 'looks')" in spec
+    assert "('figure_cafe.png', '.')" in spec
+    assert "('examples', 'examples')" in spec
+    assert (ROOT / "figure_cafe.png").is_file()
+    assert (ROOT / "examples" / "Getting Started" / "Getting Started.mfxpf").is_file()
+
+
 def test_the_build_script_can_explain_itself():
     result = subprocess.run([sys.executable, str(PACKAGING / "build_windows.py"), "--help"],
                             cwd=ROOT, capture_output=True, text=True, timeout=120)

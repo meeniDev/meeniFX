@@ -681,7 +681,7 @@ class KeyframeEditorPanel(QWidget):
                        max(0, clip.duration - 1))
         for row, _label, value, _lane in self._row_widgets:
             number = CH.numeric_value_at(clip, row["id"], frame)
-            value.setText(_format_value(number, row) if number is not None else "—")
+            value.setText(_format_value(number, row) if number is not None else "")
 
     def _selection_changed(self):
         self._sync_value_field()
@@ -738,7 +738,7 @@ class KeyframeEditorPanel(QWidget):
                           for _cid, ch, t in selected
                           if CH.numeric_value_at(self.clip(), ch, t) is not None}
                 if len(values) > 1:
-                    self.value_edit.setToolTip("Multiple selected values — typing sets every "
+                    self.value_edit.setToolTip("Multiple selected values. Typing sets every "
                                                "selected keyframe to this value")
                 else:
                     self.value_edit.setToolTip("Value of the selected keyframe(s)")
@@ -746,7 +746,7 @@ class KeyframeEditorPanel(QWidget):
                 frame = _clamp(int(self.session.playhead) - int(clip.timeline_start), 0,
                                max(0, clip.duration - 1))
                 value = CH.numeric_value_at(clip, channel, frame)
-                self.value_edit.setToolTip("No keyframe selected — setting this value keys the "
+                self.value_edit.setToolTip("No keyframe selected. Setting this value keys the "
                                            "active property at the playhead")
             if value is not None:
                 self.value_edit.setValue(float(value))
@@ -1095,9 +1095,14 @@ class KeyframeEditorPanel(QWidget):
         delta = event.angleDelta().y() / 120.0
         if abs(delta) < 1e-6:
             return
-        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+        modifiers = event.modifiers()
+        # Same controls as the timeline and the graph editor: Ctrl+wheel zooms around
+        # the pointer, Shift+wheel pans horizontally, a bare wheel does not zoom.
+        if modifiers & Qt.KeyboardModifier.ShiftModifier and not modifiers & Qt.KeyboardModifier.ControlModifier:
             self.view_start -= delta * 40.0 / max(1e-6, self.ppf)
             self._refresh_views()
+            return
+        if not modifiers & Qt.KeyboardModifier.ControlModifier:
             return
         anchor = self.frame_at(event.position().x())
         factor = 1.15 ** delta

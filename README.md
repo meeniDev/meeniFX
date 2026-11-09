@@ -13,7 +13,7 @@
 **meeniFX Studios is in Alpha.** It is usable and tested, but unfinished, and some features
 are still experimental.
 
-[**Download the newest Alpha release →**](https://github.com/meeniDev/meeniFX/releases)
+[**Download meeniFX Studios 0.1.0-alpha.4 →**](https://github.com/meeniDev/meeniFX/releases/tag/v0.1.0-alpha.4)
 
 Each published release contains:
 

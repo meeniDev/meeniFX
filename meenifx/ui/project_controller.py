@@ -183,6 +183,15 @@ class ProjectController(QObject):
         self._install_new(project)
         return self._write(path, quiet=True)
 
+    def open_bundled_sample(self):
+        """Open the shipped example from a copy in Documents, never from Program Files."""
+        from ..sample_project import ensure_sample_copy
+        path = ensure_sample_copy()
+        if not path:
+            self._error("The sample project is missing from this build.")
+            return False
+        return self.open_path(path)
+
     def open_sample(self):
         if not self.maybe_save():
             return False

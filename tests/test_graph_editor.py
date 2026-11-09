@@ -300,7 +300,7 @@ def test_zoom_and_pan_keep_the_pointer_anchored(editor):
     event = QWheelEvent(QPointF(anchor_x, 100.0),
                         QPointF(canvas.mapToGlobal(QPoint(int(anchor_x), 100))),
                         QPoint(0, 0), QPoint(0, 120), Qt.MouseButton.NoButton,
-                        Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase, False)
+                        Qt.KeyboardModifier.ControlModifier, Qt.ScrollPhase.NoScrollPhase, False)
     canvas.wheelEvent(event)
     assert canvas.zoom_x > 6.0
     assert canvas.frame_at(anchor_x) == pytest.approx(frame_before, abs=0.5)

@@ -2881,7 +2881,7 @@ class TimelineCanvas(QWidget):
                 adding = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
                 self.session.set_selection(self.session.selected | {clip.id} if adding else {clip.id})
             if track.locked:
-                self.session.status.emit(f"{track.name} is locked — unlock the track to edit it")
+                self.session.status.emit(f"{track.name} is locked. Unlock the track to edit it")
                 return
             self._release_snap(animate=False)
             ids = [cid for cid in self.session.selected
@@ -3613,9 +3613,11 @@ class TimelineCanvas(QWidget):
     def _zoom_at(self, x, delta, smooth=False):
         if not delta:
             return
+        # The frame under the pointer must be read at the old scale: reading it after
+        # changing ppf gives the frame at the *new* scale and makes the view drift.
+        pointer_frame = self.frame_at(x)
         factor = 1.15 ** (delta / 6.0) if smooth else 1.15 ** (delta / 120.0)
         self.ppf = max(self.MIN_PPF, min(self.MAX_PPF, self.ppf * factor))
-        pointer_frame = self.frame_at(x)
         self.scroll_x = max(0.0, min(self._max_scroll_x(), pointer_frame * self.ppf - (x - self.HEADER_W)))
         self.zoom_changed.emit(float(self.ppf))
 

@@ -854,8 +854,15 @@ class BrowserView(QWidget):
         self.empty.setVisible(not items)
         self.scroll.setVisible(bool(items))
         if not items:
-            self.empty.setText("Nothing here yet." if not self.term
-                               else "Nothing matches this search.")
+            if self.term:
+                message = {"effects": "No effects match this search.",
+                           "animations": "No animations match this search.",
+                           "styles": "No styles match this search."}[self.tab]
+            else:
+                message = {"effects": "No effects are available.",
+                           "animations": "No animations are available.",
+                           "styles": "No styles are available."}[self.tab]
+            self.empty.setText(message)
             self.info.setVisible(False)
             return
         self._columns_now = self._columns()

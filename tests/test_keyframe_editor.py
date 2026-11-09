@@ -222,7 +222,7 @@ def test_pan_zoom_fit_and_previous_next_navigation(editor, qapp):
     original_zoom = panel.ppf
     panel.wheel_zoom(type("Wheel", (), {
         "angleDelta": lambda self: type("Delta", (), {"y": lambda self: 120})(),
-        "modifiers": lambda self: Qt.KeyboardModifier.NoModifier,
+        "modifiers": lambda self: Qt.KeyboardModifier.ControlModifier,
         "position": lambda self: type("Pos", (), {"x": lambda self: 120})(),
     })())
     assert panel.ppf > original_zoom

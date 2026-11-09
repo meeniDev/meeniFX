@@ -3,7 +3,7 @@
 Roto Brush cuts a subject out of a clip by painting on the picture, the way a rotoscoping
 tool should: green strokes say *keep this*, Alt-red strokes say *remove this*, and the
 result is a per-frame alpha matte that follows the subject through the clip. The strokes
-are hints for a segmenter — they are never painted into the footage.
+are hints for a segmenter, they are never painted into the footage.
 
 ## The workflow
 
@@ -88,7 +88,7 @@ The `.mfxpf` project stores only small data on the effect entry:
 Frame-by-frame masks are 8-bit PNGs under `%APPDATA%/meeniFX/meenifx-roto/<clip>/` (or the
 directory in `MEENIFX_ROTO_CACHE`). The cache key is a digest of the base frame, every
 stroke and the analysis parameters. A reopened project without its cache simply shows the
-frames that still need analysing — it never displays stale or invented masks. Cleaning the
+frames that still need analysing, it never displays stale or invented masks. Cleaning the
 cache, invalidating a key or unfreezing never touches the source media.
 
 ## Keyboard

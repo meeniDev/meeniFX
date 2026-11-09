@@ -106,7 +106,7 @@ class ShortcutsDialog(QDialog):
                 note = "also " + ", ".join(others[:3])
             if needle and not any(needle in text.lower() for text in (label, shortcut, path, note)):
                 continue
-            rows.append((label, shortcut or "—", path, note))
+            rows.append((label, shortcut or "None", path, note))
         self.table.setUpdatesEnabled(False)
         self.table.setRowCount(len(rows))
         for index, (label, shortcut, path, note) in enumerate(rows):

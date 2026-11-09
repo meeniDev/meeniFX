@@ -7,6 +7,33 @@ usable and tested, but unfinished, and some features are still experimental.
 
 _Nothing yet._
 
+## 0.1.0-alpha.4 - 9 November 2026
+
+### Added
+
+- A bundled **Getting Started** sample project with text and shape layers, keyframe
+  animation, a crossfade, a glow effect and three video tracks. It opens from the start
+  window or **File > Open Sample Project**; the first open copies it to Documents so the
+  installation folder is never edited.
+- Recording quality, recording countdown and a separate Cache and Storage page in
+  Preferences.
+
+### Fixed
+
+- Preferences is a category dialog with a sidebar and one scrollable page per group instead
+  of a single column taller than the screen. It fits 1366 x 768, remembers the last category
+  and always uses the title "Preferences".
+- Ctrl+wheel zoom now anchors on the pointer in the Timeline, Keyframe Editor and Graph
+  Editor. The Graph Editor uses Ctrl+Shift+wheel for vertical zoom and Shift+wheel to pan.
+- Installed builds now contain the `presets` and `looks` folders, so the Animations and
+  Styles tabs are populated, and bundle `figure_cafe.png` for default effect previews.
+- Shortened the renderer status and added a Details dialog, fixed path overflow with
+  read-only fields and tooltips, and replaced the generic browser empty state with
+  list-specific messages.
+- Removed em dashes from interface strings and documentation and cleaned up placeholder
+  text in the Keyframe Editor and shortcut reference.
+
+
 ## 0.1.0-alpha.3 - 9 November 2026
 
 ### Fixed

@@ -1,4 +1,4 @@
-# meeniFX Studios — what the app is and what it does
+# meeniFX Studios: what the app is and what it does
 
 A short, readable overview of the application, its feature set, the current state of the
 Graph Editor, and everything that was repaired in this development pass. For the long
@@ -11,8 +11,8 @@ form (exact snapping rules, cache internals, recorder endpoints, measured benchm
 
 meeniFX is a **desktop photomosaic video editor** written in Python: PyQt6 for the whole
 interface, OpenCV/numpy for frame processing, imageio-ffmpeg for encoding. It is a
-multi-track editor in the Vegas/AE tradition — timeline, transform handles on the picture,
-keyframes with easing, effect stack — whose distinguishing feature is a set of
+multi-track editor in the Vegas/AE tradition, timeline, transform handles on the picture,
+keyframes with easing, effect stack, whose distinguishing feature is a set of
 photomosaic and tracker effects that turn footage into tile mosaics, ASCII art, or faces
 and hands tracked by small image swatches.
 
@@ -43,7 +43,7 @@ command line, so double-clicking a project opens it once the association exists
 
 ## 3. The features, by area
 
-**Projects** — a start window with recent-project cards, search and sort; New/Open;
+**Projects**, a start window with recent-project cards, search and sort; New/Open;
 projects are a single `.mfxpf` container (settings, media references, columnar
 tracks/clips, effects, keyframes, markers, layout, thumbnails). Atomic saves with one
 `.bak`, 3-minute autosave, recovery after a crash, media never embedded. Missing media is
@@ -52,12 +52,12 @@ flagged rather than fatal. The recent list is tidied from the start window's Cle
 move to the Recycle Bin) and pruned at startup unless the preference is turned off;
 `--no-recent` / `MEENIFX_NO_RECENT=1` keeps a run (tests, scripts, agents) off the list.
 
-**Timeline** — multi-track, frame-based, thumbnails and waveforms, split/razor, trim,
+**Timeline**, multi-track, frame-based, thumbnails and waveforms, split/razor, trim,
 move, Alt-drag time stretch, freeze frames, loop region, markers, per-clip fades with
 draggable grips and curve bending, deterministic snapping with named feedback ("Screen 1 ·
 end", "3 clip edges aligned"), overlap modes, clipboard, full undo/redo.
 
-**Manual linking** — select two or more clips (Ctrl+click adds to the selection) and use
+**Manual linking**, select two or more clips (Ctrl+click adds to the selection) and use
 **Link Selected Clips** (Ctrl+L, Edit menu, or the clip right-click menu) to give them one
 persistent group id; **Unlink Selected Clips** (Ctrl+Shift+L) removes only the selected
 members. Clips do not need to come from the same file, so separately recorded video and
@@ -69,7 +69,7 @@ metadata stays, so turning it back on restores group behaviour. It is deliberate
 a second chain button on the timeline, where it looked like the way to create a link.
 Linked clips carry a small badge on the clip.
 
-**Smart Paste** — Ctrl+V imports clipboard pictures and files: pixels are written as real
+**Smart Paste**, Ctrl+V imports clipboard pictures and files: pixels are written as real
 PNGs in the project's `Media` folder (alpha preserved), Explorer files are linked, text and
 numeric fields keep their text paste, the Media panel imports without touching the timeline
 and everywhere else the picture lands at the playhead. Preferences set duration, placement,
@@ -90,7 +90,7 @@ format settings*, and Import needs the permission confirmation. Live, private, m
 age-gated, geo-blocked and DRM-protected videos are explained and refused rather than worked
 around, with a local file offered instead.
 
-**Auto Captions** — optional local speech recognition (`faster-whisper`, CPU/int8, no
+**Auto Captions**, optional local speech recognition (`faster-whisper`, CPU/int8, no
 account or key; a model is downloaded only after consent, kept under
 `~/.meenifx/models/whisper`, deletable in Preferences). The result is ordinary **text clips
 on a `Captions` track** carrying their style, word timings and animation in
@@ -105,7 +105,7 @@ directly. The captured range follows the audible members, so a longer picture do
 silence around the words. Karaoke colouring *inside* a phrase is not implemented;
 word-by-word grouping gives per-word timing instead.
 
-**Remove Dead Silence and Normalize** — `meenifx/audio/silence.py` finds quiet regions from
+**Remove Dead Silence and Normalize**, `meenifx/audio/silence.py` finds quiet regions from
 short-window RMS levels (threshold in dBFS, minimum silence/speech, padding before/after,
 keep-pause and a minimum retained segment), the dialog previews the cuts on the waveform and
 lists every clip it will affect before Apply. Three scopes are offered: **Audio and linked
@@ -120,14 +120,14 @@ never modified. Normalize applies peak gain (not LUFS). The WASAPI capture threa
 skipped endpoint time with silence using the device position, so leading silence no longer
 slides later speech towards frame 0.
 
-**Timeline and effect polish** — Delete Gap, exact Duration field, Copy/Paste Effects,
+**Timeline and effect polish**, Delete Gap, exact Duration field, Copy/Paste Effects,
 Paste Attributes (transform/effects/animations/audio/text, incompatible effects skipped),
 Remove All Effects, independent link ids for the pieces of a split pair, media-type filter
 and sorting in the Project panel, a searchable Keyboard Shortcuts page built from the live
 menu bar, and an in-app recording status (`● mm:ss`, click to stop) with the always-on-top
 recording bar now opt-in under Preferences.
 
-**Simple Choker (Matte / Keying)** — one control moves a layer's alpha edge: positive Choke
+**Simple Choker (Matte / Keying)**, one control moves a layer's alpha edge: positive Choke
 pulls it inward so the visible matte shrinks, negative pushes it outward, measured in project
 pixels so a reduced preview and the export agree. Edge softness widens the new edge into a
 smooth band and Edge quality trades distance-field accuracy for speed. The edge is rebuilt
@@ -138,9 +138,9 @@ growth margin are processed and cached. Shapes, text, transparent PNGs and any a
 work; fully opaque footage is left untouched and the effect card explains why. Choke and Edge
 softness keyframe like any other parameter. The browser card renders it through a soft inset
 matte because the shipped café reference is fully opaque, which is a preview composition
-only — the reference asset itself is never changed.
+only, the reference asset itself is never changed.
 
-**Smart Key and Roto Brush (Matte / Keying)** — Smart Key samples the border of the picture,
+**Smart Key and Roto Brush (Matte / Keying)**, Smart Key samples the border of the picture,
 ignores transparent pixels and builds the same soft YCbCr matte as Chroma Key, with spill
 suppression, cleanup, choke, transparency, matte views, a sample-margin control and an Auto
 sample switch. It is the one-click path for a screen whose exact colour is unknown. Roto
@@ -152,7 +152,7 @@ controls. Strokes are stored on the effect entry in project-normalised coordinat
 copy/paste, split and `.mfxpf` save/reload preserve them; the brush owns no model download and
 runs entirely on the local OpenCV build.
 
-**Preview and transform** — fit/percentage zoom, cursor-centred wheel zoom, pan, guides.
+**Preview and transform**, fit/percentage zoom, cursor-centred wheel zoom, pan, guides.
 A bounding box with eight scale handles, rotation knob, visible anchor, motion path and
 warp pins. A corner drag is a free transform: the dragged corner follows the pointer on
 both axes while the opposite corner stays fixed in composition space, including on
@@ -164,7 +164,7 @@ local axis; a resize stops at a three-pixel minimum and never flips. Shift still
 constrains a move to one axis and snaps rotation to 15 degrees. The overlay is
 editing-only and never reaches exported frames.
 
-**Effects** — Mosaic, ASCII Art, Face Tracker, Hand Tracker, Blob Tracker, puppet warp,
+**Effects**, Mosaic, ASCII Art, Face Tracker, Hand Tracker, Blob Tracker, puppet warp,
 corner pin, colour, blur, glow, plus audio effects (filter, compressor, limiter, delay,
 reverb, pan). Every effect declares which media types it can process, so a video-only
 effect cannot be added to audio and an old project that has one is switched off with an
@@ -190,7 +190,7 @@ image and scales the result back, and detector results are cached for repeated p
 export frames. Hand Tracker remains a skin-colour/morphology detector, not a hand-pose
 model.
 
-**Keyframes, Keyframe Editor and Graph Editor** — every numeric parameter animates:
+**Keyframes, Keyframe Editor and Graph Editor**, every numeric parameter animates:
 stopwatch, diamond, previous/next keys, Auto-Keyframe (on = key at playhead, off = shift the
 whole curve). Clip opacity, effect envelopes and audio gain animate too. The timeline keeps
 clips compact with one key-count badge; timing and values live in the dockable **Keyframe
@@ -200,7 +200,7 @@ animation presets. Bake samples every channel the preset actually moves, includi
 vertical-only motion such as **Bounce** (its Y curve remains visible after baking), then
 removes the procedural instance so preview and export do not apply the motion twice.
 
-**Animation presets** — an Animations tab with the 81 shipped presets folded into 22
+**Animation presets**, an Animations tab with the 81 shipped presets folded into 22
 families (one card per behaviour, with a Mode In/Out/Loop/Both and a Direction selector
 above the grid), plus search, favourites, recently used and grid/list views. A preset is an
 instance on the clip (In anchored to the start, Out to the end, Loop repeating its cycle
@@ -222,13 +222,13 @@ Measured on a 60-character title at 1920x1080 (median of 5 renders): 48 ms a fra
 quality, 31 ms at 75 % and 15 ms at 50 %, with the glyph cache warm and the composite
 restricted to the text's own band.
 
-**Text** — a real text generator (fonts, fill, stroke, shadow, alignment) rendered through
+**Text**, a real text generator (fonts, fill, stroke, shadow, alignment) rendered through
 Pillow, animatable per letter/word/line, split-able and saveable.
 
-**Audio** — per-clip gain and fades on the waveform, a mixer plan, live mastering meter,
+**Audio**, per-clip gain and fades on the waveform, a mixer plan, live mastering meter,
 and export that matches the preview.
 
-**Recorder** — webcam, screen, microphone and system audio in any combination; countdown,
+**Recorder**, webcam, screen, microphone and system audio in any combination; countdown,
 always-on-top bar, global hotkeys, per-source gain and meters, pause as segments. On stop
 the sources are muxed (AAC) and inserted as a linked video+audio pair. Recorder settings
 carry Performance / Balanced / High Quality presets, which change bitrate headroom and
@@ -236,7 +236,7 @@ encoder effort without changing capture timing; the screen path uses a verified 
 encoder when available and switches to software libx264 if it produces no data, so a
 driver refusal does not lose the take. The settings dialog reports the encoder it will use.
 
-**Project folders** — the Project panel is organised with virtual folders (New Folder,
+**Project folders**, the Project panel is organised with virtual folders (New Folder,
 rename, nested folders, drag and drop, multi-item moves, a Back button, a Project Root
 drop target, item counts and search across the whole project). Folder rows use a folder
 icon, hover/selection styling and a highlighted drop target; grid and list views both
@@ -250,10 +250,10 @@ the selected files to the operating system's Recycle Bin after confirmation. Phy
 deletion is outside the editor's Undo history and is refused when no safe trash mechanism
 exists.
 
-**Export** — whole project or loop region to video/GIF/image sequences, Save Frame, NVENC
+**Export**, whole project or loop region to video/GIF/image sequences, Save Frame, NVENC
 with verification and a fallback writer, off-thread with progress and cancel.
 
-**Compositing** — 12 blend modes per clip (Normal, Add, Screen, Multiply, Overlay, Soft
+**Compositing**, 12 blend modes per clip (Normal, Add, Screen, Multiply, Overlay, Soft
 Light, Hard Light, Difference, Darken, Lighten, Color Dodge, Color Burn), one shared
 compositor for preview, export and thumbnails, alpha-correct by construction. *Add >
 Adjustment Layer* makes a picture-less clip on a video track whose effects run over
@@ -261,7 +261,7 @@ everything composited below it, for exactly its time range, with its own opacity
 keyframes and blend mode. Every effect card has an animatable **Mix** value (0-100 %, dragged or typed like
 every other number; the engine blends the untouched layer with the result, alpha included).
 
-**Effects browser** — one browser with three tabs (Effects, Animations, Styles). Animation
+**Effects browser**, one browser with three tabs (Effects, Animations, Styles). Animation
 cards carry a genuine hover preview from the same preset evaluator: after a short delay
 they play six evaluated frames over a short loop, then return to the static thumbnail;
 leaving the card stops them immediately, previews are skipped during timeline playback or
@@ -276,7 +276,7 @@ quality (global, never stored in a project). Double-click applies, double-clicki
 applied effect removes it, and a Style opens in Properties as one collapsible group whose
 member effects keep their own cards.
 
-**Effects and looks** — the Glitch & Distortion pack (RGB Split, Glitch, Wave Warp,
+**Effects and looks**, the Glitch & Distortion pack (RGB Split, Glitch, Wave Warp,
 Bulge/Pinch, Twirl, Mirror/Kaleidoscope), Stylize (VHS/CRT, Film Grain, Halftone, Posterize,
 Edge Outline, Duotone, Invert, Vignette), Light (Flash/Strobe, Exposure Flicker, Light Leak,
 Bloom Streaks), Time (Posterize Time with a Frame Rate control in fps, Stutter, Echo/Trail) and a LUT effect that reads
@@ -287,12 +287,12 @@ preview quality, and randomness is seeded from the seed and the frame. Ten shipp
 exporting use versioned `.mfxlook` JSON and a per-user folder. `.mfxpf` format 7 adds the
 blend/adjustment columns and migrates v1-6 projects.
 
-**Performance** — a dedicated render thread with an interactive (newest-wins) queue and a
+**Performance**, a dedicated render thread with an interactive (newest-wins) queue and a
 background prerender queue, a RAM+disk frame cache keyed by a timeline fingerprint,
 digest-based invalidation, idle prefetch, automatic proxy media, and a measured GPU
 dispatch (OpenCL is benchmarked at startup and only used where it actually wins).
 
-**Robustness and polish** — one dark theme including tooltips, menus and the non-native
+**Robustness and polish**, one dark theme including tooltips, menus and the non-native
 file dialogs; no status bar, hints live in tooltips; fading toasts for the few messages
 that matter; a crash guard that logs an exception from a Qt slot instead of aborting the
 application; docks that persist their layout.
@@ -333,21 +333,21 @@ panel raise the other one, and selection is shared through `session.key_selectio
 
 ### Keyframe Editor
 
-- **Readable rows** — Transform, Compositing, each effect by name, Text and Audio are
+- **Readable rows**, Transform, Compositing, each effect by name, Text and Audio are
   collapsible groups; every numeric property gets a label lane, a live value at the
   playhead and its own diamonds. Non-numeric properties are not plotted or offered.
-- **Timing** — click to select, Ctrl/Shift-click for a multi-selection, and drag any
+- **Timing**, click to select, Ctrl/Shift-click for a multi-selection, and drag any
   selected key to move the whole group. The drag is rebuilt from the press-time snapshot
   on every mouse move, so the old key disappears instead of leaving a trail of duplicates,
   and the release commits exactly one undo step. The playhead within 7 px is a snap target;
   project frames are always whole numbers. Clip ends and locked tracks are respected.
-- **Values** — the toolbar field edits every selected key; with no selection it keys the
+- **Values**, the toolbar field edits every selected key; with no selection it keys the
   active property at the playhead. Double-clicking a key focuses the same field. Edits are
   undoable and immediately update the preview and Graph Editor.
-- **Navigation and view** — previous/next on the active property, fit all or fit selection,
+- **Navigation and view**, previous/next on the active property, fit all or fit selection,
   wheel zoom anchored at the pointer, middle-drag pan, playhead scrub, collapsible groups,
   Add/Delete/Copy/Paste/Duplicate, and *Open in Graph Editor*.
-- **Docking** — a normal `QDockWidget` beside the Timeline: movable, floatable, tabbable,
+- **Docking**, a normal `QDockWidget` beside the Timeline: movable, floatable, tabbable,
   closable, resizable, reopenable from View and independent of the Graph Editor's geometry.
   Layout v9 adds it to saved workspaces; older saved layouts fall back to the default.
 
@@ -355,26 +355,26 @@ panel raise the other one, and selection is shared through `session.key_selectio
 
 The panel lives in the **Graph Editor** dock (`G`) and edits the selected clip's curves.
 
-- **Value Graph / Speed Graph** — the value over time, or its derivative, for the same
+- **Value Graph / Speed Graph**, the value over time, or its derivative, for the same
   animation; switching never changes the animation itself.
-- **Left value gutter** — 56 px of right-aligned value labels (`626 px`, `447 px`, …)
+- **Left value gutter**, 56 px of right-aligned value labels (`626 px`, `447 px`, …)
   with precision that follows the tick spacing, so labels never overlap the curves and
   never read `625.93px`. The number of grid lines steps down (4 / 2 / 1) as the dock gets
   shorter, so nothing collides on a short canvas.
-- **Ruler** — frame numbers centred over their tick with tick marks, on its own plate; the
+- **Ruler**, frame numbers centred over their tick with tick marks, on its own plate; the
   time gridlines start at the plot edge instead of running under the labels.
-- **Playhead** — the red line sits at the true frame; only the head triangle is nudged
+- **Playhead**, the red line sits at the true frame; only the head triangle is nudged
   inside the plot, so it is never sliced by the border at frame 0 or when panned left.
-- **Dragging keys** — keys follow the pointer live (every move, not on release), from a
+- **Dragging keys**, keys follow the pointer live (every move, not on release), from a
   press-time snapshot so later moves stay correct; snap to the playhead within 7 px; the
   whole gesture is one undo step.
-- **Scrubbing** — press anywhere in the ruler band to jump and scrub, or grab the red line
+- **Scrubbing**, press anywhere in the ruler band to jump and scrub, or grab the red line
   itself; the cursor changes over the ruler and is restored afterwards.
-- **Following playback** — the playhead line tracks the timeline during playback. The
+- **Following playback**, the playhead line tracks the timeline during playback. The
   repaint is limited to the two 13 px columns the playhead left and entered, because a
   full repaint of a five-channel graph costs 36 ms while a playback tick then costs
   **7.7 ms median (9.3 ms p90)**.
-- **Also** — channel list with visibility toggles, box select, Ctrl+C/V, Delete, easing
+- **Also**, channel list with visibility toggles, box select, Ctrl+C/V, Delete, easing
   presets, Bézier handles, continuous/unified handles, wheel zoom anchored under the
   pointer, middle-drag/Ctrl+wheel pan, Fit / Fit selected / Reset view.
 
@@ -383,13 +383,13 @@ The panel lives in the **Graph Editor** dock (`G`) and edits the selected clip's
 | Area | Before | Now |
 |---|---|---|
 | Graph Editor performance | a full repaint took **56–107 ms** on a real 5-channel clip, so dragging felt like it was catching up | **~42 ms** repaint (36 ms measured today), and playhead moves cost only the two columns that changed |
-| Graph Editor crash | a channel holding a non-numeric animation (a colour preset stored as a curve) reached `float()` inside `paintEvent`; PyQt6 turned that into `qFatal` — no traceback, no window | non-numeric channels are never plotted; the guard logs instead of aborting |
+| Graph Editor crash | a channel holding a non-numeric animation (a colour preset stored as a curve) reached `float()` inside `paintEvent`; PyQt6 turned that into `qFatal`, no traceback, no window | non-numeric channels are never plotted; the guard logs instead of aborting |
 | Crash reporting | an exception inside a Qt slot killed the process silently | "meeniFX hit a problem" dialog with the traceback, the crash-log path, *Copy details* and *Open log folder*; an unclean session offers recovery, a clean quit clears the marker |
 | File dialogs | native Windows dialogs, light and out of place | themed, non-native Open/Save/Export dialogs that match the app |
 | Timeline animation display | every keyframe was packed into dense purple/yellow rows inside the clip | one compact `◆ N keys` badge opens the dedicated Keyframe Editor |
 | Keyframe dragging (Keyframe Editor and Graph Editor) | keys moved only when the button came up; the Keyframe Editor initially read live records, leaving a trail of intermediate keys | live dragging from the press-time snapshot; the old key is replaced, no duplicates, snapped to the playhead, one undo step per gesture |
 | Playhead dragging (graph) | the "scrub" branch was unreachable; the playhead could only be moved by clicking empty space | ruler press jumps and scrubs, grabbing the line drags it, hover cursor feedback |
-| Key drag repaint | a local variable named `time` shadowed the module, so every move raised on its last line — the model moved but the repaint never ran | renamed; the canvas repaints on every move (regression test included) |
+| Key drag repaint | a local variable named `time` shadowed the module, so every move raised on its last line, the model moved but the repaint never ran | renamed; the canvas repaints on every move (regression test included) |
 | Playhead during playback | the graph's red line froze on the frame where playback started, because playback advances the playhead *silently* and the curve view never listened | subscribes to the low-level move signal and repaints the two affected columns |
 | Graph Editor layout | value labels were drawn inside the plot and collided with the ruler (`625.93px` over `30 60 90`); gridlines ran through the labels | separate value gutter, adaptive decimals, centred ruler labels, step-aware line count |
 | Playhead head clipping | the triangle was centred on the frame, so half of it fell outside the canvas at frame 0 and the border drew through it | the line keeps the exact frame, the head is clamped inside the plot and drawn above the border |

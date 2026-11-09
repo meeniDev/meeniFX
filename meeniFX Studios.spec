@@ -7,6 +7,11 @@ assets = [(f'assets/mosaic/{name}', 'assets/mosaic') for name in ('black.png', '
 assets += [('flight-reacts-flight.gif', '.')]
 # Brand artwork: the window icon, the taskbar sizes and the About wordmark.
 assets += [('assets', 'assets')]
+# The shipped animation and style libraries are data, not Python modules. Without these
+# two folders the installed Animations and Styles tabs are empty.
+assets += [('presets', 'presets'), ('looks', 'looks')]
+# Default effect-preview reference and the sample project shipped with the app.
+assets += [('figure_cafe.png', '.'), ('examples', 'examples')]
 # Bundled user-facing release notes power the offline What's New dialog.
 assets += [('docs/releases', 'docs/releases')]
 datas, binaries, hiddenimports = list(assets), [], []

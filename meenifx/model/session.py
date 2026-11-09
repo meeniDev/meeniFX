@@ -2364,7 +2364,7 @@ class TimelineSession:
                 unique.append(member)
         locked = next((member for member in unique if member.track.locked), None)
         if locked is not None:
-            self.status.emit(f"{locked.track.name} is locked — unlock it to remove dead silence")
+            self.status.emit(f"{locked.track.name} is locked. Unlock it to remove dead silence")
             return 0
         window_start = max(member.timeline_start for member in unique)
         window_end = min(member.end for member in unique)
