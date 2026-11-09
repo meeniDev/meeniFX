@@ -176,3 +176,20 @@ def test_text_clip_survives_a_project_save_and_reload(editor):
     assert TXT.content_at(loaded, 0) == "SAVED TITLE"
     assert loaded.text["font"] == "Georgia"
     assert loaded.text["size"] == pytest.approx(64.0)
+
+
+def test_transform_handles_wrap_the_text_not_the_project(editor):
+    window = editor
+    clip_id = window.add_text_clip()
+    pump(0.2)
+    clip = window.engine.timeline.find_clip(clip_id)
+    overlay = window.overlay
+    corners = overlay.clip_corners(clip)
+    xs = [point[0] for point in corners]
+    ys = [point[1] for point in corners]
+    width, height = max(xs) - min(xs), max(ys) - min(ys)
+    assert 60.0 < width < 300.0, "the box must be the words, not the 640px frame"
+    assert 40.0 < height < 150.0
+    assert abs((min(xs) + max(xs)) / 2.0 - 320.0) < 2.0
+    assert 170.0 < (min(ys) + max(ys)) / 2.0 < 190.0
+    assert overlay.widget_rect_for(clip).width() < overlay.widget.frame_rect().width() * 0.6

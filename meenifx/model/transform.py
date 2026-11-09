@@ -319,6 +319,19 @@ def content_corners(state, project_size, image_size):
     return [forward(corner, state, project_size, image_size) for corner in corners]
 
 
+def content_corners_rect(state, project_size, image_size, rect):
+    """Transform an explicit layer-space rectangle to four project-space corners.
+
+    Generated layers (text and shapes) are rendered full-frame, but their editable
+    content is a smaller rectangle inside that frame. ``image_size`` remains the layer
+    size so position/scale/rotation fit and anchor stay identical to the renderer;
+    ``rect`` is the intrinsic content box inside those layer pixels.
+    """
+    x, y, width, height = (float(value) for value in rect)
+    corners = [(x, y), (x + width, y), (x + width, y + height), (x, y + height)]
+    return [forward(corner, state, project_size, image_size) for corner in corners]
+
+
 def frame_size(clip, media_entry):
     """(width, height) of a clip's own picture, for the fit rectangle."""
     from ..media.cache import entry_size

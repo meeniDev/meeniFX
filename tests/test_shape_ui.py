@@ -197,6 +197,67 @@ def test_corner_handles_resize_the_shape_and_pin_the_opposite_corner(editor):
     assert abs(after[2][0] - before[2][0]) > 20, "the dragged corner did not move"
 
 
+def test_transform_handles_wrap_the_shape_not_the_project(editor):
+    window = editor
+    clip_id = window.add_shape("rectangle")
+    pump(0.12)
+    clip = window.engine.timeline.find_clip(clip_id)
+    overlay = window.overlay
+    corners = overlay.clip_corners(clip)
+    xs = [point[0] for point in corners]
+    ys = [point[1] for point in corners]
+    assert 315.0 < max(xs) - min(xs) < 330.0, "the box must be the shape, not the frame"
+    assert 175.0 < max(ys) - min(ys) < 195.0
+    assert overlay.widget_rect_for(clip).width() < overlay.widget.frame_rect().width() * 0.7
+
+    # Empty canvas around a small shape is not part of the object for hit-testing.
+    window.engine.session.set_selection(set())
+    overlay.mouse_press(event(QEvent.Type.MouseButtonPress, overlay.to_widget(60, 60)))
+    overlay.mouse_release(event(QEvent.Type.MouseButtonRelease, overlay.to_widget(60, 60)))
+    pump(0.05)
+    assert clip_id not in window.engine.session.selected
+    overlay.mouse_press(event(QEvent.Type.MouseButtonPress, overlay.to_widget(320, 180)))
+    overlay.mouse_release(event(QEvent.Type.MouseButtonRelease, overlay.to_widget(320, 180)))
+    pump(0.05)
+    assert clip_id in window.engine.session.selected
+
+
+def test_shape_box_follows_position_scale_rotation_and_anchor(editor):
+    window = editor
+    clip_id = window.add_shape("rectangle")
+    pump(0.12)
+    clip = window.engine.timeline.find_clip(clip_id)
+    overlay = window.overlay
+    centre = ((640 - 1) / 2.0, (360 - 1) / 2.0)
+
+    def box():
+        points = overlay.clip_corners(clip)
+        xs = [point[0] for point in points]
+        ys = [point[1] for point in points]
+        return (min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys),
+                (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0)
+
+    clip.transform["position_x"] = 80.0
+    clip.transform["position_y"] = -40.0
+    clip.transform["scale_x"] = 50.0
+    clip.transform["scale_y"] = 50.0
+    moved = box()
+    assert abs(moved[4] - (centre[0] + 80.0)) < 0.01
+    assert abs(moved[5] - (centre[1] - 40.0)) < 0.01
+    assert abs(moved[2] - 161.0) < 0.1 and abs(moved[3] - 91.0) < 0.1
+
+    clip.transform["rotation"] = 90.0
+    rotated = box()
+    assert abs(rotated[2] - 91.0) < 0.1
+    assert abs(rotated[3] - 161.0) < 0.1
+    assert abs(rotated[4] - moved[4]) < 0.01 and abs(rotated[5] - moved[5]) < 0.01
+
+    clip.transform["rotation"] = 0.0
+    clip.transform["anchor_x"] = 40.0
+    anchored = box()
+    assert abs(anchored[4] - (moved[4] - 20.0)) < 0.01, "anchor must remain the pivot"
+
+
 def test_backspace_does_not_eat_the_shape_tool(editor):
     """Escape leaves the tool; a plain click then selects instead of drawing."""
     window = editor
