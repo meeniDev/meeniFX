@@ -5,7 +5,15 @@ usable and tested, but unfinished, and some features are still experimental.
 
 ## Unreleased
 
-_Nothing yet._
+### Changed
+
+- **Smart Key is now genuine automatic subject isolation.** It uses the optional U^2-Net
+  model to find the main subject on an ordinary multicoloured background and makes the
+  background genuinely transparent, with no screen colour, colour picker or brush strokes.
+  Remove Background analyses whole clips with progress, cancellation and cached masks;
+  Subject Auto/Choose, Quality, Edge Smoothness, Feather, Expand/Shrink and
+  Composite/Isolated/Matte previews are in the effect card. Chroma Key remains the separate
+  screen-colour key.
 
 ## 0.1.0-alpha.8 - 9 November 2026
 

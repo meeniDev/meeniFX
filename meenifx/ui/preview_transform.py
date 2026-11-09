@@ -93,11 +93,15 @@ class PreviewOverlay:
         self.roto_outline_visible = True
         self.roto_choose_subject = False
         self.roto_hover = None
+        # Smart Key: the Properties card arms the next preview click, which stores the
+        # chosen subject point on that effect entry. No brush mode is entered.
+        self.subject_pick_effect = None
         # MainWindow hooks: a finished stroke invalidates cached masks and refreshes the
         # card, and exiting the mode has to put the transform toolbar back.
         self.on_roto_change = None
         self.on_mode_change = None
         self.on_roto_ui_change = None
+        self.on_subject_pick = None
         self._roto_outline_cache = {}
         # While the shape tool is armed the next press starts a draft rectangle; it is
         # painted as a live outline and only becomes a clip on release.
@@ -507,14 +511,14 @@ class PreviewOverlay:
         except Exception:                                   # noqa: BLE001 - live editing
             return max(0, self.local_frame(clip))
 
-    def roto_picture_point(self, widget_point):
+    def picture_point(self, widget_point, clip=None):
         """Widget -> normalised picture coordinates through the real clip transform.
 
         This is the whole alignment story: the point goes back through the same
-        position/scale/rotation matrix the renderer uses, so a stroke stays on the same
-        part of the picture at every zoom, pan and preview size.
+        position/scale/rotation matrix the renderer uses, so a stroke or subject click
+        stays on the same part of the picture at every zoom, pan and preview size.
         """
-        clip, _entry = self.roto_clip_and_entry()
+        clip = clip if clip is not None else self.primary()
         if clip is None:
             return None
         project = self.to_project(widget_point)
@@ -527,6 +531,27 @@ class PreviewOverlay:
             return None
         return (max(0.0, min(1.0, source[0] / max(1.0, float(width)))),
                 max(0.0, min(1.0, source[1] / max(1.0, float(height)))))
+
+    def roto_picture_point(self, widget_point):
+        clip, _entry = self.roto_clip_and_entry()
+        return self.picture_point(widget_point, clip)
+
+    def begin_subject_pick(self, effect_key="smart_key"):
+        """Arm the next preview click as a subject choice for one automatic effect."""
+        self.subject_pick_effect = str(effect_key or "smart_key")
+        self.roto_choose_subject = False
+        self.widget.setCursor(Qt.CursorShape.CrossCursor)
+        self.widget.update()
+        return True
+
+    def cancel_subject_pick(self):
+        if self.subject_pick_effect is None:
+            return False
+        self.subject_pick_effect = None
+        self.widget.setCursor(Qt.CursorShape.BlankCursor if self.mode == "roto"
+                              else Qt.CursorShape.ArrowCursor)
+        self.widget.update()
+        return True
 
     def roto_to_project(self, clip, point):
         width, height = self.image_size(clip)
@@ -970,6 +995,27 @@ class PreviewOverlay:
         pos = event.position()
         self._last_pos = pos
         self.widget.setFocus()
+        if self.subject_pick_effect is not None and self.mode not in ("roto", "shape"):
+            clip = self.primary()
+            entry = (self._effect_entry(clip, self.subject_pick_effect)
+                     if clip is not None else None)
+            point = self.picture_point(pos, clip)
+            if clip is None or entry is None or point is None:
+                self.cancel_subject_pick()
+                return False
+            # Choosing a subject is a real edit, so it is one undo step and the new
+            # point becomes part of the mask key.
+            self.session.begin_gesture()
+            entry["subject_point"] = [float(point[0]), float(point[1])]
+            entry.setdefault("params", {})["subject"] = "auto"
+            self.session.commit_gesture("Choose subject")
+            self.subject_pick_effect = None
+            self.widget.setCursor(Qt.CursorShape.ArrowCursor)
+            self.widget.update()
+            self._notify()
+            if callable(self.on_subject_pick):
+                self.on_subject_pick(clip, entry, point)
+            return True
         if self.mode == "shape":
             project = self.to_project(pos)
             if project is None:

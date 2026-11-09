@@ -28,7 +28,7 @@ import numpy as np
 
 from ..config import user_config_dir
 
-CACHE_VERSION = 3
+CACHE_VERSION = 4
 MAX_MASK_EDGE = 640
 # Parameters that change the *raw* segmentation. Feather, expand/shrink, edge refinement
 # and the preview mode are applied after the cache, so moving those sliders must not throw
@@ -72,6 +72,7 @@ def mask_key(entry):
         model = "unknown"
     materials = {
         "version": CACHE_VERSION,
+        "effect": str(entry.get("effect_id") or ""),
         "base": int(entry.get("base_frame", 0) or 0),
         "strokes": entry.get("strokes") or [],
         "analysis": {name: params.get(name) for name in ANALYSIS_PARAMS},
@@ -82,21 +83,27 @@ def mask_key(entry):
     return hashlib.blake2b(_canonical(materials).encode("utf-8"), digest_size=16).hexdigest()
 
 
-def _safe_name(clip):
+def _safe_name(clip, scope="roto_brush"):
     source = str(getattr(clip, "source_path", "") or "")
-    identity = f"{getattr(clip, 'id', '')}|{source}"
+    identity = f"{scope}|{getattr(clip, 'id', '')}|{source}"
     return hashlib.blake2b(identity.encode("utf-8"), digest_size=10).hexdigest()
 
 
 class MaskCache:
-    """Per-clip mask store. Safe to read from the render thread and write from a worker."""
+    """Per-clip mask store. Safe to read from the render thread and write from a worker.
 
-    def __init__(self, root=None):
+    `scope` keeps two effects on the same clip apart. Roto Brush and Smart Key share the
+    storage format, propagation and model, but they must never clear each other's masks,
+    so each writes into its own folder even though both effects point at the same clip.
+    """
+
+    def __init__(self, root=None, scope="roto_brush"):
         self.root = cache_root(root)
+        self.scope = str(scope or "roto_brush")
 
     # ------------------------------------------------------------------ locations
     def folder(self, clip):
-        return self.root / _safe_name(clip)
+        return self.root / _safe_name(clip, self.scope)
 
     def _meta_path(self, clip):
         return self.folder(clip) / _META

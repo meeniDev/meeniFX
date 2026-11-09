@@ -140,11 +140,12 @@ softness keyframe like any other parameter. The browser card renders it through 
 matte because the shipped café reference is fully opaque, which is a preview composition
 only, the reference asset itself is never changed.
 
-**Smart Key and Roto Brush (Matte / Keying)**, Smart Key samples the border of the picture,
-ignores transparent pixels and builds the same soft YCbCr matte as Chroma Key, with spill
-suppression, cleanup, choke, transparency, matte views, a sample-margin control and an Auto
-sample switch. It is the one-click path for a screen whose exact colour is unknown. Roto
-Brush is the stroke-guided path for an ordinary background: selecting the Roto Brush tool (or
+**Smart Key and Roto Brush (Matte / Keying)**, Smart Key automatically finds the main
+subject with the optional U^2-Net model and removes everything else, even against a natural
+multicoloured background; no screen colour, colour picker or brush stroke is required.
+Remove Background analyses the clip with progress and cancellation, Subject Auto/Choose
+handles several subjects, and Quality, Edge Smoothness, Feather and Expand/Shrink shape the
+matte. Roto Brush is the stroke-guided path for an ordinary background: selecting the Roto Brush tool (or
 Paint Mask in the effect card) adds the effect and arms the preview; green drags mark the
 subject, Alt-drag red strokes mark the background, and GrabCut refines the result. Feather,
 choke, cleanup, transparency, colour tolerance, edge-refine and diagnostic views are ordinary

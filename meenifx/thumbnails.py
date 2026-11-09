@@ -52,6 +52,9 @@ ICON_ONLY = {
     # Trackers only draw what they detect, and a still life has no face or hand to find;
     # a card that looked like the plain reference would claim the effect does nothing.
     "face_tracker", "hand_tracker",
+    # Smart Key needs the optional model; without it the card must not pretend the
+    # effect leaves the picture untouched. The card uses its icon and description.
+    "smart_key",
 }
 
 # Audio effects get a drawn waveform/frequency illustration, and time effects animate
@@ -77,7 +80,6 @@ PREVIEW_ENTRIES = {
     # visible preview-only key so the card shows the matte instead of an untouched photo.
     "chroma_key": {"params": {"key_r": 192, "key_g": 193, "key_b": 194,
                              "tolerance": 28.0, "similarity": 20.0}},
-    "smart_key": {"params": {"sample_margin": 4.0, "tolerance": 28.0}},
     # A Roto Brush card needs a base frame and real strokes; the thumbnail segments it.
     "roto_brush": {"params": {"tolerance": 46.0}, "base_frame": 0, "strokes": [
         {"frame": 0, "points": [[0.42, 0.28], [0.42, 0.72]], "radius": 0.075,

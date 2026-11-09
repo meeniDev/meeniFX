@@ -29,7 +29,8 @@ applied effect removes it. Each apply or remove is one undo step.
 - **Warp** - Puppet Warp (a real mesh deformation), Corner Pin, Perspective, Mesh Warp and
   Skew/Shear.
 - **Keying and mattes** - Chroma Key, Smart Key, Roto Brush and Simple Choker. Smart Key
-  samples the shot's border; Roto Brush is the stroke-driven rotoscoping mode (base frame,
+  automatically isolates the main subject with the optional U^2-Net model, with no screen
+  or colour picker; Roto Brush is the stroke-driven rotoscoping mode (base frame,
   purple outline, forward/backward propagation, Refine Edge tool, six preview modes and a
   frozen mask cache). Its preferred backend is the optional U^2-Net ONNX subject model;
   the clearly labelled Basic GrabCut + optical-flow fallback works without a download.

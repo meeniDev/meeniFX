@@ -107,7 +107,8 @@ DESCRIPTIONS = {
     "motion_blur": "Adds shutter-style blur in the direction of movement.",
     "glow": "Adds a soft halo around the brightest areas.",
     "chroma_key": "Removes a green, blue or custom screen with a soft matte and spill control.",
-    "smart_key": "Samples the edge of the shot and keys that screen automatically.",
+    "smart_key": "Finds the main subject automatically with the optional U^2-Net "
+                   "model and removes the rest, with no screen colour or brush strokes.",
     "roto_brush": "Stroke-guided rotoscoping: base frame, outline, temporal propagation, "
                    "refine edge, matte views and a frozen mask cache.",
     "bloom_streaks": "Stretches highlights into anamorphic streaks.",

@@ -15,8 +15,21 @@ from conftest import build_engine, frame_diff, render, synthetic_frame
 # feeds them a matted version of the synthetic frame instead of the fully opaque one.
 ALPHA_SOURCE_EFFECTS = {"simple_choker"}
 
+# Smart Key is an automatic learned segmenter. The synthetic audit runs with the optional
+# model disabled, so its parameters cannot change the picture there; the real model path
+# is covered by tests/test_smart_key.py.
+MODEL_ONLY_EFFECTS = {"smart_key"}
+
 
 EFFECT_KEYS = ("mosaic", "ascii", "face_tracker", "hand_tracker", "blob_tracker")
+
+
+@pytest.fixture(autouse=True)
+def _fresh_roto_cache(tmp_path, monkeypatch):
+    """Keep audit renders independent of masks and GrabCut randomness from prior cases."""
+    monkeypatch.setenv("MEENIFX_ROTO_CACHE", str(tmp_path / "roto-cache"))
+    import cv2
+    cv2.setRNGSeed(0)
 
 
 def alpha_frame(width=320, height=180):
@@ -207,6 +220,8 @@ def _prepared_base(effect_id, name, params):
 
 @pytest.mark.parametrize("effect_id,spec", NUMERIC_CASES, ids=[f"{k}.{s.name}" for k, s in NUMERIC_CASES])
 def test_numeric_parameter_extremes_change_the_output(effect_id, spec, monkeypatch):
+    if effect_id in MODEL_ONLY_EFFECTS:
+        pytest.skip("requires the optional subject model; covered by tests/test_smart_key.py")
     if effect_id == "face_tracker" and spec.name == "confidence":
         pytest.skip("detector argument; covered by test_face_confidence_reaches_the_detector")
     if (effect_id, spec.name) in SYMMETRIC_EXTREMES:
@@ -245,6 +260,8 @@ def test_toggle_parameter_changes_the_output(effect_id, spec, monkeypatch):
 
 @pytest.mark.parametrize("effect_id,spec", CHOICE_CASES, ids=[f"{k}.{s.name}" for k, s in CHOICE_CASES])
 def test_choice_parameter_changes_the_output(effect_id, spec, monkeypatch):
+    if effect_id in MODEL_ONLY_EFFECTS:
+        pytest.skip("requires the optional subject model; covered by tests/test_smart_key.py")
     if (effect_id, spec.name) in CONTEXT_SWITCHES:
         pytest.skip("needs a larger frame or more detections; covered by dedicated tests")
     if (effect_id, spec.name) in TEMPORAL_CASES:

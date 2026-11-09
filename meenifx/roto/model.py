@@ -87,7 +87,7 @@ class ModelStatus:
             return self.error
         if self.available:
             return f"{U2NET.name} {self.size / (1024 * 1024):.0f} MB, CPU inference"
-        return "Download the optional AI model in Roto Brush Details."
+        return ("Download the optional AI model from Smart Key or the Roto Brush AI button.")
 
 
 def _disabled() -> bool:

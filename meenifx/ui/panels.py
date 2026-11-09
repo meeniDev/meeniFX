@@ -162,6 +162,8 @@ class EffectsPanel(QWidget):
     roto_cache_requested = pyqtSignal(str)
     roto_outline_changed = pyqtSignal(bool)
     roto_brush_size_changed = pyqtSignal(float)
+    # Smart Key actions: analyze, reanalyze, choose, auto or stop.
+    smart_key_requested = pyqtSignal(str)
 
     def __init__(self, engine, parent=None):
         super().__init__(parent)
@@ -2466,6 +2468,99 @@ class EffectsPanel(QWidget):
         except RuntimeError:            # the card was rebuilt under the running worker
             self._roto_progress = None
 
+    # ------------------------------------------------------------- smart key card
+    def _smart_key_row(self, form, clip, entry):
+        """The one-click actions and model status for automatic subject isolation."""
+        from PyQt6.QtWidgets import QHBoxLayout, QProgressBar, QWidget
+        from ..roto.cache import MaskCache, mask_key
+        from ..roto.model import model_status
+
+        holder = QWidget()
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(tokens.SP1)
+
+        remove = QToolButton()
+        remove.setText("Remove Background")
+        remove.setToolTip("Automatically find the main subject and analyse the whole clip")
+        remove.clicked.connect(lambda _=False: self.smart_key_requested.emit("analyze"))
+        reanalyze = QToolButton()
+        reanalyze.setText("Reanalyze")
+        reanalyze.setToolTip("Discard the cached masks and analyse the clip again")
+        reanalyze.clicked.connect(lambda _=False: self.smart_key_requested.emit("reanalyze"))
+        choose = QToolButton()
+        choose.setText("Choose Subject")
+        choose.setToolTip("Click the subject to keep in the preview")
+        choose.clicked.connect(lambda _=False: self.smart_key_requested.emit("choose"))
+        stop = QToolButton()
+        stop.setText("Stop")
+        stop.setToolTip("Cancel the running subject analysis")
+        stop.clicked.connect(lambda _=False: self.smart_key_requested.emit("stop"))
+        stop.setVisible(False)
+        for widget in (remove, reanalyze, choose, stop):
+            row.addWidget(widget)
+        row.addStretch(1)
+
+        status = QLabel()
+        status.setWordWrap(True)
+        status.setProperty("quiet", True)
+        bar = QProgressBar()
+        bar.setObjectName("smartKeyProgress")
+        bar.setTextVisible(False)
+        bar.setVisible(False)
+        bar.setMaximum(1)
+
+        form.addWidget(holder)
+        form.addWidget(status)
+        form.addWidget(bar)
+        self._smart_key = {"clip_id": clip.id, "entry": entry, "status": status,
+                           "bar": bar, "remove": remove, "reanalyze": reanalyze,
+                           "choose": choose, "stop": stop}
+        self._refresh_smart_key_status(clip, entry)
+
+    def _refresh_smart_key_status(self, clip, entry):
+        ui = getattr(self, "_smart_key", None)
+        if not ui:
+            return
+        from ..roto.cache import MaskCache, mask_key
+        from ..roto.model import model_status
+        try:
+            analysed, _frozen = MaskCache(scope="smart_key").summary(
+                clip, mask_key(entry))
+            span = max(1, int(clip.source_out) - int(clip.source_in))
+            status = model_status()
+            params = entry.get("params") or {}
+            if status.available:
+                text = (f"{analysed} of {span} source frames analysed. "
+                        f"{status.label}.")
+            else:
+                text = (f"{status.label}. Remove Background offers the optional "
+                        "model download.")
+            if str(params.get("subject", "auto")) == "choose":
+                text += " Click a subject in the preview to choose it."
+            ui["status"].setText(text)
+        except RuntimeError:
+            self._smart_key = None
+
+    def set_smart_key_progress(self, done, total):
+        """Drive the Smart Key analysis bar from its background worker."""
+        ui = getattr(self, "_smart_key", None)
+        if not ui:
+            return
+        try:
+            bar, stop = ui["bar"], ui["stop"]
+            if total:
+                bar.setVisible(True)
+                bar.setMaximum(max(1, int(total)))
+                bar.setValue(int(done))
+                stop.setVisible(True)
+                ui["status"].setText(f"Analyzing subject: {int(done)} of {int(total)}")
+            else:
+                bar.setVisible(False)
+                stop.setVisible(False)
+        except RuntimeError:            # the card was rebuilt under the running worker
+            self._smart_key = None
+
     def _effect_cards(self, clip):
         """Effect cards in their real order, with every Style's members nested inside it."""
         groups = {}
@@ -2670,6 +2765,8 @@ class EffectsPanel(QWidget):
         Trackers therefore open on Detection and Visualization while Labels, Connectors
         and Face Effects stay folded until they are needed.
         """
+        if effect.key == "smart_key":
+            self._smart_key_row(form, clip, entry)
         presets = getattr(effect, "PRESETS", None)
         if presets:
             self._effect_preset_row(form, clip, effect, entry, presets)
@@ -3294,6 +3391,9 @@ class EffectsPanel(QWidget):
         self.engine.session.apply_to_clips([clip.id], label, write)
         self._notify()
         self.refresh_properties()
+        if entry.get("effect_id") == "smart_key" and name == "subject":
+            # Choose arms the next preview click; Auto clears a previous subject point.
+            self.smart_key_requested.emit("choose" if str(value) == "choose" else "auto")
         return True
 
     def _commit_param(self, clip, entry, name, value):

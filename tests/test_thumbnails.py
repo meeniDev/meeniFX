@@ -54,7 +54,9 @@ def test_the_reference_is_figure_cafe_beside_main():
 
 
 def test_the_reference_keeps_its_transparency_and_aspect(qapp):
-    layer = T.reference_layer(*SIZE)
+    # Explicit defaults: reference_layer() without settings follows the user's saved
+    # custom preview image, which this test is not about.
+    layer = T.reference_layer(*SIZE, T.PreviewSettings())
     assert layer is not None and layer.shape[:2] == (SIZE[1], SIZE[0])
     alpha = layer[:, :, 3]
     assert alpha.max() == 255, "the picture itself is opaque"

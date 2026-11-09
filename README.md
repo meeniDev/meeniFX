@@ -35,6 +35,9 @@ Windows 10 or 11, 64-bit. The installed application does not require Python.
   video and audio, trimming, splitting and full undo/redo.
 - **Effects that look the same in the export** - colour correction, blurs, glow, stylize,
   glitch and warp effects, keying, LUTs and one-click Looks.
+- **Automatic background removal** - Smart Key isolates the main subject with the optional
+  U^2-Net model and makes the background genuinely transparent, with no green screen,
+  colour picker or brush strokes. Chroma Key remains the separate screen-colour tool.
 - **Rotoscoping** - a Roto Brush workspace with its own toolbar: green keep and Alt-red
   remove strokes, a Refine Edge tool, a purple outline that follows the subject, a base
   frame, forward and backward propagation, correction strokes, six matte previews and a

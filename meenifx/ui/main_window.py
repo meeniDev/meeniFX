@@ -268,7 +268,10 @@ class MainWindow(QMainWindow):
         self.overlay.on_roto_change=self._roto_after_edit
         self.overlay.on_mode_change=self._roto_mode_changed
         self.overlay.on_roto_ui_change=self._sync_roto_toolbar
+        # Smart Key uses the same preview geometry for its Choose Subject click.
+        self.overlay.on_subject_pick=self._smart_key_subject_picked
         self._roto_worker=None
+        self._smart_key_worker=None
         self._roto_model_worker=None
         self._roto_model_progress=None
         self._roto_filter_installed=False
@@ -280,6 +283,7 @@ class MainWindow(QMainWindow):
         self.effects_panel.roto_outline_changed.connect(self._roto_set_outline)
         self.effects_panel.roto_brush_size_changed.connect(self._roto_set_brush_size)
         self.effects_panel.effects_changed.connect(self._roto_parameters_changed)
+        self.effects_panel.smart_key_requested.connect(self._smart_key_action)
         # Dedicated Roto Brush workspace above the picture. These are editing actions;
         # the Properties panel keeps only the matte parameters.
         roto_bar=self.preview_panel.roto_bar
@@ -3286,13 +3290,141 @@ class MainWindow(QMainWindow):
         self._sync_roto_toolbar()
         self.toast_message(f"Roto Brush: analyzed {len(frames)} frames",duration_ms=2600)
 
+    # ------------------------------------------------------------------ smart key
+    def _smart_key_clip_entry(self):
+        clip=self.overlay.primary()
+        if clip is None:
+            return None,None
+        entry=next((item for item in clip.effects
+                    if item.get("effect_id")=="smart_key"),None)
+        return clip,entry
+
+    def _smart_key_analyzer(self,clip,entry,frame=0):
+        """A private automatic-segmentation instance for the background worker."""
+        from ..effects.smart_key import SmartKeyEffect
+        analyzer=SmartKeyEffect(self.engine)
+        analyzer.clip=clip
+        analyzer.clip_entry=entry
+        analyzer.local_frame=max(0,int(frame)-int(clip.source_in))
+        analyzer.param_scale=1.0
+        params=dict(getattr(analyzer,"defaults",{}) or {})
+        params.update(entry.get("params") or {})
+        analyzer.load_params(params)
+        return analyzer
+
+    def _smart_key_action(self,action):
+        clip,entry=self._smart_key_clip_entry()
+        if clip is None or entry is None:
+            self.toast_message("Select a clip with Smart Key first",kind="error")
+            return
+        if action=="stop":
+            worker=getattr(self,"_smart_key_worker",None)
+            if worker is not None and worker.isRunning():
+                worker.stop()
+                self.toast_message("Stopping subject analysis...",duration_ms=2000)
+            return
+        if action=="choose":
+            self.overlay.begin_subject_pick("smart_key")
+            self.toast_message("Click the subject to isolate in the preview",duration_ms=2600)
+            return
+        if action=="auto":
+            # Auto means "find the main subject", so a previously clicked subject no
+            # longer applies. The changed key makes those old masks unreachable.
+            if entry.pop("subject_point",None) is not None:
+                entry.pop("cache",None)
+                entry.pop("analysis",None)
+                self._invalidate_preview_cache()
+                self._request_preview()
+                self.preview_panel.view.update()
+            self.effects_panel.refresh_properties()
+            return
+        if action not in ("analyze","reanalyze"):
+            return
+        worker=getattr(self,"_smart_key_worker",None)
+        if worker is not None and worker.isRunning():
+            self.toast_message("Smart Key is already analyzing this clip",duration_ms=2400)
+            return
+        from ..roto.model import model_status
+        if not model_status().available:
+            # The same optional U^2-Net weights serve both automatic effects. The model
+            # dialog downloads and verifies them; no chroma fallback is offered here.
+            self._roto_model_action()
+            return
+        from ..roto.cache import MaskCache, mask_key, mask_size
+        from ..roto.propagate import frame_order
+        from ..roto.worker import SubjectScanWorker
+        width,height=self.overlay.image_size(clip)
+        size=mask_size(width,height)
+        cache=MaskCache(scope="smart_key")
+        key=mask_key(entry)
+        if action=="reanalyze":
+            cache.clear(clip)
+            entry.pop("cache",None)
+            entry.pop("analysis",None)
+        cache.configure(clip,key,size)
+        try:
+            seed=int(clip.source_frame_at(int(self.engine.session.playhead)))
+        except Exception:
+            seed=int(clip.source_in)
+        seed=max(int(clip.source_in),min(int(clip.source_out)-1,seed))
+        frames=frame_order(clip.source_in,clip.source_out-1,seed,"all")
+        analyzer=self._smart_key_analyzer(clip,entry,seed)
+        settings=analyzer._analysis_settings()
+        runner=SubjectScanWorker(self.engine,clip,key,seed,frames,settings,cache,analyzer)
+        runner.progressed.connect(self._smart_key_progress_changed)
+        runner.completed.connect(
+            lambda done,c=clip,e=entry,k=key,cc=cache,s=seed:
+            self._smart_key_finished(c,e,k,cc,s,done))
+        runner.cancelled.connect(
+            lambda: self.toast_message("Subject analysis cancelled",duration_ms=2400))
+        runner.failed.connect(
+            lambda message:self.toast_message(f"Smart Key failed: {message}",
+                                              kind="error",duration_ms=6000))
+        runner.finished.connect(self._smart_key_worker_finished)
+        self._smart_key_worker=runner
+        self.effects_panel.set_smart_key_progress(0,len(frames)+1)
+        runner.start()
+
+    def _smart_key_progress_changed(self,done,total):
+        self.effects_panel.set_smart_key_progress(done,total)
+
+    def _smart_key_worker_finished(self):
+        self._smart_key_worker=None
+        self.effects_panel.set_smart_key_progress(0,0)
+        # Completion refreshes the count itself; a cancelled or failed run still needs
+        # this so the card stops saying "Analyzing subject".
+        self.effects_panel.refresh_properties()
+
+    def _smart_key_finished(self,clip,entry,key,cache,seed,frames):
+        count=len(cache.frames(clip,key))
+        entry["cache"]={"key":key,"frames":count,"scope":"smart_key"}
+        entry["analysis"]={"seed":int(seed),
+                           "range":[int(clip.source_in),int(clip.source_out)-1],
+                           "analysed":sorted({int(frame) for frame in frames})}
+        self.engine.session.changed.emit()
+        self._invalidate_preview_cache()
+        self._request_preview()
+        self.effects_panel.refresh_properties()
+        self.toast_message(f"Smart Key: analyzed {count} frames",duration_ms=2600)
+
+    def _smart_key_subject_picked(self,clip,entry,point):
+        """A subject click changed the mask key; drop the old previews and redraw."""
+        entry.pop("cache",None)
+        entry.pop("analysis",None)
+        self._invalidate_preview_cache()
+        self._request_preview()
+        self.effects_panel.refresh_properties()
+        self.preview_panel.view.update()
+        self.toast_message("Subject selected. Use Remove Background to analyse the clip.",
+                           duration_ms=3000)
+
     def _roto_model_action(self):
         """Show the optional model status, or offer to download and verify it."""
         from ..roto.model import DEFAULT_MODEL, model_status
         status=model_status(verify=True)
         if status.available:
             QMessageBox.information(
-                self,"Roto Brush AI model",
+                self,"AI subject model",
                 f"{status.label}\n\n{status.detail}\nRuntime: {status.runtime}\n"
                 f"License: {DEFAULT_MODEL.license}\n{DEFAULT_MODEL.credit}\n\n"
                 f"Stored at:\n{status.path}")
@@ -3300,11 +3432,12 @@ class MainWindow(QMainWindow):
         size_mb=DEFAULT_MODEL.bytes/(1024*1024)
         answer=QMessageBox.question(
             self,"Download AI model",
-            f"Roto Brush can use {DEFAULT_MODEL.name} to find people, pets and objects "
-            f"without a colour key.\n\nDownload size: {size_mb:.0f} MB\n"
+            f"Smart Key and Roto Brush can use {DEFAULT_MODEL.name} to find people, "
+            f"pets and objects without a colour key or screen.\n\n"
+            f"Download size: {size_mb:.0f} MB\n"
             f"License: {DEFAULT_MODEL.license}\nInference: CPU (no GPU required)\n\n"
-            "The download is optional. Basic GrabCut remains available without it.\n"
-            "Download the model now?",
+            "The download is optional. Chroma Key and Roto Brush Basic mode work "
+            "without it.\nDownload the model now?",
             QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes)
         if answer!=QMessageBox.StandardButton.Yes:
@@ -3321,7 +3454,7 @@ class MainWindow(QMainWindow):
         progress=QProgressDialog(
             f"Downloading {DEFAULT_MODEL.name} ({DEFAULT_MODEL.bytes/(1024*1024):.0f} MB)...",
             "Cancel",0,DEFAULT_MODEL.bytes,self)
-        progress.setWindowTitle("Roto Brush AI model")
+        progress.setWindowTitle("AI subject model")
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)
         progress.setAutoClose(False)
