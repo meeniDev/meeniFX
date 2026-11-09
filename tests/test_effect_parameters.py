@@ -93,7 +93,27 @@ CONTEXT_SWITCHES = {("gaussian_blur", "keep_edges"), ("motion_blur", "follow_mot
                     # a 320x180 audit frame is already below every preset's limit.
                     ("face_tracker", "tracking_quality"),
                     ("hand_tracker", "tracking_quality"),
-                    ("blob_tracker", "tracking_quality")}
+                    ("blob_tracker", "tracking_quality"),
+                    # These three only exist in Roto Brush's solid-colour preview, which
+                    # needs matte_view='solid' open to be seen; the dedicated test drives
+                    # that pair directly.
+                    ("roto_brush", "view_r"), ("roto_brush", "view_g"),
+                    ("roto_brush", "view_b"),
+                    # Edge colour cleanup only repaints the 2 %..98 % alpha band; on a
+                    # 320x180 audit that is a few dozen pixels, below the global mean
+                    # threshold. tests/test_roto_brush.py measures it on a bright fringe.
+                    ("roto_brush", "decontaminate")}
+
+
+def roto_frame(width=320, height=180):
+    """A soft-edged subject on a gradient plate, so the segmentation has a real edge."""
+    import cv2
+    yy, xx = np.mgrid[0:height, 0:width]
+    frame = np.dstack([(120 + xx * 0.3), (90 + yy * 0.4),
+                       (60 + xx * 0.2)]).clip(0, 255).astype(np.uint8)
+    cv2.circle(frame, (width // 2, height // 2), 52, (70, 150, 210), -1)
+    cv2.circle(frame, (width // 2 + 30, height // 2 + 22), 20, (96, 158, 205), -1)
+    return cv2.GaussianBlur(frame, (0, 0), 3.5)
 
 
 def chroma_frame(width=320, height=180):
@@ -120,6 +140,8 @@ def _engine_for(effect_id, monkeypatch):
         frame = blob_frame()
     elif effect_id == "chroma_key":
         frame = chroma_frame()
+    elif effect_id == "roto_brush":
+        frame = roto_frame()
     else:
         frame = synthetic_frame()
     if effect_id in ALPHA_SOURCE_EFFECTS:
@@ -161,6 +183,11 @@ def _prepared_base(effect_id, name, params):
     if effect_id == "mesh_warp":
         # The grid resolution only matters once a node is displaced.
         base.update(node_1_1_x=0.2, node_1_1_y=-0.15)
+    if effect_id == "roto_brush":
+        # Without a stroke Roto Brush deliberately leaves the frame untouched (it never
+        # fakes a mask). The automatic centred seed gives the audit a real matte to
+        # reshape; the stroke workflow itself is covered by tests/test_roto_brush.py.
+        base["auto_seed"] = True
     if effect_id == "glow" and name == "saturation":
         # Saturation changes chroma rather than coverage; at the default intensity the
         # small highlights cover too little of the audit frame to clear its global mean

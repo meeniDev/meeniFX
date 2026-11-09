@@ -29,8 +29,10 @@ applied effect removes it. Each apply or remove is one undo step.
 - **Warp** - Puppet Warp (a real mesh deformation), Corner Pin, Perspective, Mesh Warp and
   Skew/Shear.
 - **Keying and mattes** - Chroma Key, Smart Key, Roto Brush and Simple Choker. Smart Key
-  samples the shot's border; Roto Brush paints subject/background strokes and refines them
-  with GrabCut; Simple Choker grows or shrinks any alpha edge.
+  samples the shot's border; Roto Brush is the stroke-driven rotoscoping mode (base frame,
+  purple outline, forward/backward propagation, Refine Edge brush, matte previews and a
+  frozen mask cache) built on the classical GrabCut + optical-flow fallback; Simple Choker
+  grows or shrinks any alpha edge. See `docs/ROTO_BRUSH.md`.
 - **Time** - Posterize Time (a **Frame Rate** in fps; 23.976, 29.97 and 59.94 are kept as
   their exact 24000/1001 and 30000/1001 rates, and a keyframed rate never samples
   backwards), Stutter and Echo/Trail.

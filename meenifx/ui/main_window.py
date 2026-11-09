@@ -263,6 +263,18 @@ class MainWindow(QMainWindow):
         self.overlay=PreviewOverlay(self.preview_panel.view,self.engine,self.engine.session)
         self.preview_panel.view.overlay=self.overlay
         self.overlay.on_change=self._overlay_changed
+        # Roto Brush: strokes invalidate stale masks, and leaving the mode must put the
+        # normal transform toolbar back, so the overlay reports both to the window.
+        self.overlay.on_roto_change=self._roto_after_edit
+        self.overlay.on_mode_change=self._roto_mode_changed
+        self._roto_worker=None
+        self.effects_panel.roto_requested.connect(lambda:self._set_overlay_mode("roto"))
+        self.effects_panel.roto_exit_requested.connect(lambda:self._set_overlay_mode("select"))
+        self.effects_panel.roto_stroke_requested.connect(self._roto_stroke_action)
+        self.effects_panel.roto_propagate_requested.connect(self._roto_propagate)
+        self.effects_panel.roto_cache_requested.connect(self._roto_cache_action)
+        self.effects_panel.roto_outline_changed.connect(self._roto_set_outline)
+        self.effects_panel.roto_brush_size_changed.connect(self._roto_set_brush_size)
         self.engine.session.auto_keyframe.trace_add("write",lambda *_:self._sync_auto_key_buttons())
         self.engine.session.clip_selected.connect(
             lambda _ids:(self.graph_editor.refresh(),self.keyframe_editor.refresh()))
@@ -2757,6 +2769,11 @@ class MainWindow(QMainWindow):
         self.toast_message("Select a text clip to edit its words")
 
     def _set_overlay_mode(self,mode):
+        if mode!="roto" and self.overlay.mode=="roto":
+            # Leaving the mode keeps the strokes and the clip transform, and hides the
+            # brush ring; the transform handles come back with the normal paint path.
+            self.overlay.roto_hover=None
+            self.overlay._roto_outline_cache.clear()
         self.overlay.mode=mode
         for button,name in ((getattr(self,"select_tool_button",None),"select"),
                             (getattr(self,"transform_tool_button",None),"transform"),
@@ -2766,7 +2783,9 @@ class MainWindow(QMainWindow):
             if button is not None:
                 button.blockSignals(True); button.setChecked(name==mode); button.blockSignals(False)
         if mode=="puppet": self._ensure_puppet_effect()
-        if mode=="roto": self._ensure_roto_effect()
+        if mode=="roto":
+            self._ensure_roto_effect()
+            self.preview_panel.view.setFocus()
         if mode in ("select","transform"):
             self.engine.session.tool.set("select")
         self.preview_panel.view.update()
@@ -2782,14 +2801,229 @@ class MainWindow(QMainWindow):
             return
         runtime=self.engine.runtime_effects.get("roto_brush")
         params=dict(runtime.capture_params()) if runtime is not None else {}
+        # The first stroke decides the base frame, but starting from the current frame is
+        # the least surprising default when the effect is added by the toolbar.
+        frame=int(clip.source_frame_at(int(self.engine.session.playhead)))
         def action():
             target=self.engine.timeline.find_clip(clip.id)
             if target is None or target.track.locked: return
             if not any(entry.get("effect_id")=="roto_brush" for entry in target.effects):
                 target.effects.append({"effect_id":"roto_brush","enabled":True,
-                                       "params":params,"strokes":[]})
+                                       "params":params,"strokes":[],
+                                       "base_frame":int(max(0,frame))})
         self.engine.session.stack.run("Add Roto Brush",action)
         self.effects_panel.refresh_properties()
+
+    # ------------------------------------------------------------------ roto brush
+    def _roto_clip_entry(self):
+        clip=self.overlay.primary()
+        if clip is None:
+            return None,None
+        entry=next((item for item in clip.effects
+                    if item.get("effect_id")=="roto_brush"),None)
+        return clip,entry
+
+    def _roto_mode_changed(self,mode):
+        if self.overlay.mode!=mode:
+            self._set_overlay_mode(mode)
+
+    def _roto_after_edit(self):
+        """A stroke changes the mask key, so stale masks are dropped, never reused."""
+        clip,entry=self._roto_clip_entry()
+        if clip is None or entry is None:
+            return
+        from ..roto.cache import MaskCache, mask_key, mask_size
+        cache=MaskCache()
+        frozen=cache.frozen(clip)
+        width,height=self.overlay.image_size(clip)
+        if frozen:
+            cache.set_frozen(clip,False)
+            entry.setdefault("cache",{})["frozen"]=False
+            self.toast_message("Frozen Roto Brush masks are stale after this stroke - "
+                               "analyze again when ready",duration_ms=3600)
+        cache.configure(clip,mask_key(entry),mask_size(width,height))
+        self.overlay._roto_outline_cache.clear()
+        self._invalidate_preview_cache()
+        self._request_preview()
+        self.effects_panel.refresh_properties()
+
+    def _roto_stroke_action(self,action):
+        clip,entry=self._roto_clip_entry()
+        if clip is None or entry is None:
+            self.toast_message("Select a clip with Roto Brush first",kind="error")
+            return
+        if action=="undo":
+            self.engine.session.undo()
+        elif action=="redo":
+            self.engine.session.redo()
+        elif action=="clear":
+            def clear():
+                target=self.engine.timeline.find_clip(clip.id)
+                if target is None or target.track.locked: return
+                item=next((entry for entry in target.effects
+                           if entry.get("effect_id")=="roto_brush"),None)
+                if item is None: return
+                item["strokes"]=[]
+                item.pop("propagation",None)
+                item.pop("cache",None)
+            self.engine.session.stack.run("Clear Roto Brush strokes",clear)
+        elif action=="base":
+            frame=int(clip.source_frame_at(int(self.engine.session.playhead)))
+            def set_base():
+                target=self.engine.timeline.find_clip(clip.id)
+                if target is None or target.track.locked: return
+                item=next((entry for entry in target.effects
+                           if entry.get("effect_id")=="roto_brush"),None)
+                if item is None: return
+                item["base_frame"]=int(max(0,frame))
+                item.pop("propagation",None)
+            self.engine.session.stack.run("Set Roto Brush base frame",set_base)
+        else:
+            return
+        self._roto_after_edit()
+
+    def _roto_set_outline(self,visible):
+        self.overlay.roto_outline_visible=bool(visible)
+        self.overlay._roto_outline_cache.clear()
+        self.preview_panel.view.update()
+
+    def _roto_set_brush_size(self,fraction):
+        self.overlay.roto_brush_size=max(0.005,min(0.35,float(fraction)))
+        self.preview_panel.view.update()
+
+    def _roto_cache_action(self,action):
+        clip,entry=self._roto_clip_entry()
+        if clip is None or entry is None:
+            self.toast_message("Select a clip with Roto Brush first",kind="error")
+            return
+        from ..roto.cache import MaskCache, mask_key
+        cache=MaskCache()
+        key=mask_key(entry)
+        if action=="freeze":
+            count=len(cache.frames(clip,key))
+            if not count:
+                self.toast_message("Nothing to freeze yet - analyze the clip first",
+                                   kind="error",duration_ms=3200)
+                return
+            cache.set_frozen(clip,True)
+            entry.setdefault("cache",{}).update({"key":key,"frames":count,"frozen":True})
+            self.toast_message(f"Roto Brush: {count} analysed masks frozen",duration_ms=2400)
+        elif action=="unfreeze":
+            cache.set_frozen(clip,False)
+            entry.setdefault("cache",{})["frozen"]=False
+        elif action=="clear":
+            cache.clear(clip)
+            entry.pop("cache",None)
+            entry.pop("propagation",None)
+        elif action=="recalculate":
+            cache.clear(clip)
+            entry.pop("cache",None)
+            self._roto_propagate("all")
+            return
+        else:
+            return
+        self.engine.session.changed.emit()
+        self._invalidate_preview_cache()
+        self._request_preview()
+        self.effects_panel.refresh_properties()
+
+    def _roto_segment_base(self,clip,entry,frame,size):
+        """Segment the base frame itself so propagation has a seed matte."""
+        runtime=self.engine.runtime_effects.get("roto_brush")
+        source=self.engine.media.load(clip.source_path)
+        if runtime is None or source is None or not source.frames:
+            return None
+        index=max(0,min(len(source.frames)-1,int(frame)))
+        rgb=source.frames[index]
+        import cv2
+        small=cv2.resize(rgb,size,interpolation=cv2.INTER_AREA)
+        runtime.clip=clip
+        runtime.clip_entry=entry
+        runtime.local_frame=max(0,int(frame)-int(clip.source_in))
+        runtime.param_scale=1.0
+        params=dict(getattr(runtime,"defaults",{}) or {})
+        params.update(entry.get("params") or {})
+        runtime.load_params(params)
+        return runtime.raw_matte(small,int(frame))
+
+    def _roto_propagate(self,direction):
+        if direction=="stop":
+            worker=getattr(self,"_roto_worker",None)
+            if worker is not None:
+                worker.stop()
+                self.toast_message("Stopping Roto Brush analysis...",duration_ms=2000)
+            return
+        clip,entry=self._roto_clip_entry()
+        if clip is None or entry is None:
+            self.toast_message("Select a clip with Roto Brush first",kind="error")
+            return
+        worker=getattr(self,"_roto_worker",None)
+        if worker is not None and worker.isRunning():
+            self.toast_message("Roto Brush is already analyzing this clip",duration_ms=2400)
+            return
+        from ..roto.cache import MaskCache, mask_key, mask_size
+        from ..roto.propagate import frame_order
+        from ..roto.segment import quality_settings
+        from ..roto.worker import PropagationWorker
+        stroke_frames=sorted({int(stroke.get("frame",0) or 0)
+                              for stroke in (entry.get("strokes") or [])})
+        if not stroke_frames:
+            self.toast_message("Paint a green stroke inside the subject first",kind="error")
+            return
+        base=int(entry.get("base_frame",stroke_frames[0]) or 0)
+        if base not in stroke_frames:
+            self.toast_message("Paint the base frame before analyzing the clip",kind="error")
+            return
+        width,height=self.overlay.image_size(clip)
+        size=mask_size(width,height)
+        cache=MaskCache()
+        key=mask_key(entry)
+        cache.configure(clip,key,size)
+        seed=cache.load(clip,base,key)
+        if seed is None:
+            seed=self._roto_segment_base(clip,entry,base,size)
+            if seed is None:
+                self.toast_message("Paint the subject on the base frame first",kind="error")
+                return
+            cache.store(clip,base,seed,key,size)
+        params=dict(entry.get("params") or {})
+        settings=dict(quality_settings(str(params.get("quality","Preview"))))
+        settings.update({"refine":bool(params.get("refine",True)),
+                         "search_radius":float(params.get("search_radius",20.0) or 20.0),
+                         "tolerance":float(params.get("tolerance",28.0) or 28.0)})
+        frames=frame_order(clip.source_in,clip.source_out-1,base,direction)
+        if not frames:
+            self.toast_message("No other source frames to analyze in that direction",
+                               duration_ms=2400)
+            return
+        runner=PropagationWorker(self.engine,clip,key,base,seed,frames,settings,cache)
+        runner.progressed.connect(self.effects_panel.set_roto_progress)
+        runner.completed.connect(
+            lambda done,c=clip,e=entry,k=key,cc=cache:
+            self._roto_finished(c,e,k,cc,done))
+        runner.failed.connect(
+            lambda message:self.toast_message(f"Roto Brush failed: {message}",
+                                              kind="error",duration_ms=6000))
+        runner.finished.connect(self._roto_worker_finished)
+        self._roto_worker=runner
+        self.effects_panel.set_roto_progress(0,len(frames))
+        runner.start()
+
+    def _roto_worker_finished(self):
+        self._roto_worker=None
+        self.effects_panel.set_roto_progress(0,0)
+
+    def _roto_finished(self,clip,entry,key,cache,frames):
+        count=len(cache.frames(clip,key))
+        entry["cache"]={"key":key,"frames":count,"frozen":bool(cache.frozen(clip))}
+        entry["propagation"]={"base_frame":int(entry.get("base_frame",0) or 0),
+                              "analysed":sorted({int(frame) for frame in frames}),
+                              "range":[int(clip.source_in),int(clip.source_out)-1]}
+        self.engine.session.changed.emit()
+        self._invalidate_preview_cache()
+        self._request_preview()
+        self.effects_panel.refresh_properties()
+        self.toast_message(f"Roto Brush: analyzed {len(frames)} frames",duration_ms=2600)
 
     def _ensure_puppet_effect(self):
         """The Puppet tool needs its effect: add it to the selection when it is missing."""

@@ -156,6 +156,12 @@ class EffectsPanel(QWidget):
     properties_requested = pyqtSignal()
     # Roto Brush needs the preview tool; the panel only asks the host to arm it.
     roto_requested = pyqtSignal()
+    roto_exit_requested = pyqtSignal()
+    roto_stroke_requested = pyqtSignal(str)
+    roto_propagate_requested = pyqtSignal(str)
+    roto_cache_requested = pyqtSignal(str)
+    roto_outline_changed = pyqtSignal(bool)
+    roto_brush_size_changed = pyqtSignal(float)
 
     def __init__(self, engine, parent=None):
         super().__init__(parent)
@@ -2413,14 +2419,21 @@ class EffectsPanel(QWidget):
         if key == "roto_brush":
             paint = QToolButton()
             paint.setText("Paint Mask")
-            paint.setToolTip("Paint green subject strokes and Alt-drag red background strokes "
-                             "on the preview")
+            paint.setToolTip("Enter Roto Brush: drag green strokes inside the subject, "
+                             "Alt-drag red strokes over what should be removed")
             paint.clicked.connect(self.roto_requested.emit)
             head.addWidget(paint)
+            done = QToolButton()
+            done.setText("Done")
+            done.setToolTip("Leave Roto Brush and bring the transform tools back (Esc)")
+            done.clicked.connect(self.roto_exit_requested.emit)
+            head.addWidget(done)
         head.addStretch(1)
         head.addWidget(reset)
         head.addWidget(more)
         outer.addWidget(header)
+        if key == "roto_brush":
+            outer.addWidget(self._roto_tools(clip, entry))
         body, form = self._form()
         self._effect_fields(form, clip, effect, entry)
         outer.addWidget(body)
@@ -2447,6 +2460,113 @@ class EffectsPanel(QWidget):
         elif not entry.get("enabled", True):
             body.setEnabled(False)
         self.properties_layout.addWidget(frame)
+
+    def _roto_tools(self, clip, entry):
+        """Rotoscoping controls; each one maps to a real cache or analysis action."""
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtWidgets import (QCheckBox, QHBoxLayout, QProgressBar, QSlider,
+                                     QVBoxLayout, QWidget)
+        from ..roto.cache import MaskCache, mask_key
+
+        box = QWidget()
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(tokens.SP1)
+
+        def button(text, tip, signal, argument=None):
+            widget = QToolButton()
+            widget.setText(text)
+            widget.setToolTip(tip)
+            if argument is None:
+                widget.clicked.connect(signal.emit)
+            else:
+                widget.clicked.connect(lambda _=False, a=argument: signal.emit(a))
+            return widget
+
+        def row(*widgets):
+            strip = QHBoxLayout()
+            strip.setSpacing(tokens.SP1)
+            for widget in widgets:
+                strip.addWidget(widget)
+            strip.addStretch(1)
+            layout.addLayout(strip)
+            return strip
+
+        row(button("Undo", "Undo the last Roto Brush stroke", self.roto_stroke_requested,
+                   "undo"),
+            button("Redo", "Redo the undone stroke", self.roto_stroke_requested, "redo"),
+            button("Clear Strokes", "Delete every stroke on this clip",
+                   self.roto_stroke_requested, "clear"),
+            button("Set Base Frame", "Use the current source frame as the base frame",
+                   self.roto_stroke_requested, "base"))
+        row(button("\u25c0 Backward", "Propagate the base matte to earlier frames",
+                   self.roto_propagate_requested, "backward"),
+            button("Forward \u25b6", "Propagate the base matte to later frames",
+                   self.roto_propagate_requested, "forward"),
+            button("Analyze All", "Propagate across the whole clip",
+                   self.roto_propagate_requested, "all"),
+            button("Stop", "Cancel the running analysis", self.roto_propagate_requested, "stop"))
+        bar = QProgressBar()
+        bar.setObjectName("rotoProgress")
+        bar.setTextVisible(True)
+        bar.setVisible(False)
+        bar.setMaximum(1)
+        layout.addWidget(bar)
+        row(button("Freeze", "Keep the analysed masks on disk so previews stop re-running "
+                   "segmentation", self.roto_cache_requested, "freeze"),
+            button("Unfreeze", "Allow editing and analysis to invalidate the masks",
+                   self.roto_cache_requested, "unfreeze"),
+            button("Recalculate", "Clear the masks and analyze the clip again",
+                   self.roto_cache_requested, "recalculate"),
+            button("Clear Cache", "Delete the masks of this clip from disk",
+                   self.roto_cache_requested, "clear"))
+
+        size_row = QHBoxLayout()
+        size_row.setSpacing(tokens.SP1)
+        size_row.addWidget(QLabel("Brush size"))
+        size = QSlider(Qt.Orientation.Horizontal)
+        size.setRange(5, 200)
+        size.setValue(50)
+        size.setToolTip("Brush diameter as a fraction of the picture ( [ and ] on the preview )")
+        size.valueChanged.connect(
+            lambda value: self.roto_brush_size_changed.emit(float(value) / 1000.0))
+        size_row.addWidget(size, 1)
+        layout.addLayout(size_row)
+
+        outline = QCheckBox("Show segmentation outline")
+        outline.setChecked(True)
+        outline.toggled.connect(self.roto_outline_changed.emit)
+        layout.addWidget(outline)
+
+        try:
+            analysed, frozen = MaskCache().summary(clip, mask_key(entry))
+        except (OSError, AttributeError):
+            meta = entry.get("cache") or {}
+            analysed, frozen = int(meta.get("frames", 0) or 0), bool(meta.get("frozen"))
+        span = max(0, int(clip.source_out) - int(clip.source_in))
+        base = int(entry.get("base_frame", 0) or 0)
+        status = QLabel(
+            f"{analysed} of {span} source frames analysed \u00b7 base frame {base}"
+            f"{' \u00b7 frozen' if frozen else ''}\n"
+            "Classical segmenter fallback (GrabCut + optical flow). SAM 2 is not bundled; "
+            "hair, fur and motion blur stay approximate.")
+        status.setWordWrap(True)
+        status.setProperty("quiet", True)
+        layout.addWidget(status)
+        self._roto_progress = bar
+        return box
+
+    def set_roto_progress(self, done, total):
+        """Drive the analysis bar from the propagation worker."""
+        bar = getattr(self, "_roto_progress", None)
+        if bar is None:
+            return
+        try:
+            bar.setVisible(bool(total))
+            bar.setMaximum(max(1, int(total)))
+            bar.setValue(int(done))
+        except RuntimeError:            # the card was rebuilt under the running worker
+            self._roto_progress = None
 
     def _effect_cards(self, clip):
         """Effect cards in their real order, with every Style's members nested inside it."""

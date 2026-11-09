@@ -78,10 +78,12 @@ PREVIEW_ENTRIES = {
     "chroma_key": {"params": {"key_r": 192, "key_g": 193, "key_b": 194,
                              "tolerance": 28.0, "similarity": 20.0}},
     "smart_key": {"params": {"sample_margin": 4.0, "tolerance": 28.0}},
-    # A Roto Brush card needs a starting mask; these strokes follow the reference figure.
-    "roto_brush": {"params": {"auto_seed": True, "tolerance": 46.0}, "strokes": [
-        {"points": [[0.42, 0.28], [0.42, 0.72]], "radius": 0.075, "mode": "foreground"},
-        {"points": [[0.12, 0.12], [0.88, 0.12]], "radius": 0.055, "mode": "background"},
+    # A Roto Brush card needs a base frame and real strokes; the thumbnail segments it.
+    "roto_brush": {"params": {"tolerance": 46.0}, "base_frame": 0, "strokes": [
+        {"frame": 0, "points": [[0.42, 0.28], [0.42, 0.72]], "radius": 0.075,
+         "mode": "foreground"},
+        {"frame": 0, "points": [[0.12, 0.12], [0.88, 0.12]], "radius": 0.055,
+         "mode": "background"},
     ]},
     # A puppet needs pins before it does anything; two pulled pins show the deformation.
     "puppet_warp": {"pins": [

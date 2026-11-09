@@ -1,13 +1,24 @@
-"""Roto Brush: a stroke-guided matte that can be refined by GrabCut.
+"""Roto Brush: stroke-guided rotoscoping with analysis, propagation and freeze.
 
-The preview tool writes normalised brush strokes into the effect entry. Foreground strokes
-are green and background strokes are red; the effect seeds a colour model and, when
-possible, OpenCV GrabCut with those strokes. A centred starting seed makes a newly added
-effect visible and inspectable before the first brush stroke; it is replaced as soon as the
-user paints.
+How the tool works
+------------------
+The preview paints green (subject) and Alt-red (background) strokes into the effect entry;
+those strokes are *hints*, never pixels. The brush backend segments the base frame from
+them, the outline shows the real matte boundary, and propagation carries the mask across
+the clip with optical flow so the picture is not cut out with one frozen shape.
 
-Everything is clip-local and deterministic. The strokes are ordinary JSON data on the
-effect entry, so undo, copy/paste, project save and `.mfxpf` reload preserve them.
+Coordinates are normalised inside the picture rectangle the engine hands the effect, which
+is what makes the matte survive moving, scaling or rotating the clip. Masks are keyed by
+*source* frame, so trims, source offsets, speed and reverse playback stay correct.
+
+Masks live in the per-clip disk cache (see `meenifx/roto/cache.py`), never in the project
+JSON; the entry keeps only strokes, the base frame, analysis settings and small cache
+metadata. A reopened project without its cache reports which frames need analysis instead
+of silently showing a stale cutout.
+
+Backend: the shipped segmenter is the classical GrabCut + guided-filter path from
+`meenifx/roto/segment.py`. It is labelled as such in the UI and docs; it is not a learned
+video-segmentation model.
 """
 
 from __future__ import annotations
@@ -18,68 +29,98 @@ import cv2
 import numpy as np
 
 from ..model.values import Value
+from ..roto import (MaskCache, decontaminate, finish_matte, mask_key, mask_size,
+                    rasterise, segment_frame, strokes_for_frame)
+from ..roto.segment import quality_settings
 from .base import LayerEffect, ParamSpec, param_number
 
-MATTE_MODES = ("composite", "alpha", "black_white")
-MATTE_LABELS = ("Composite", "Alpha matte", "Black / white matte")
+MATTE_VIEWS = ("composite", "checkerboard", "alpha", "solid")
+MATTE_LABELS = ("Composite", "Transparent checkerboard", "Alpha matte", "Foreground on colour")
 QUALITIES = ("draft", "balanced", "high")
-QUALITY_LABELS = ("Draft", "Balanced", "High")
-_QUALITY = {"draft": (0.5, 2), "balanced": (1.0, 4), "high": (1.0, 6)}
+QUALITY_LABELS = ("Draft (fast)", "Balanced", "High")
+ANALYSIS_PARAMS = ("refine", "quality", "search_radius", "tolerance")
+MAX_MEMO = 8
 
 
-def _smoothstep(edge0, edge1, value):
-    width = max(1e-5, float(edge1) - float(edge0))
-    t = np.clip((value - float(edge0)) / width, 0.0, 1.0)
-    return t * t * (3.0 - 2.0 * t)
+def _colour(value, fallback=0):
+    try:
+        number = int(round(float(value)))
+    except (TypeError, ValueError):
+        return fallback
+    return max(0, min(255, number))
 
 
 class RotoBrushEffect(LayerEffect):
-    """Build a soft alpha matte from foreground/background brush strokes."""
+    """A stroke-guided subject matte with per-frame analysis and propagation."""
 
     key = "roto_brush"
     name = "Roto Brush"
     category = "Keying & Masking"
-    NOTE = ("Paint green strokes on the subject and Alt-drag red strokes on the background. "
-            "The strokes are saved with the clip; no online model or extra download is needed.")
+    NOTE = ("Green strokes mark the subject, Alt-red strokes mark what to remove, and the "
+            "Refine Edge brush helps difficult boundaries. Segmenter: classical GrabCut "
+            "with guided-filter edge refinement (no model download).")
 
     PARAMS = (
-        ParamSpec("tolerance", "Colour tolerance", "float", 1.0, 100.0, 42.0, step=1.0,
-                  unit="%", help="How far the matte may follow colours sampled by the strokes"),
-        ParamSpec("feather", "Edge feather", "float", 0.0, 40.0, 2.0, step=0.5, unit=" px",
-                  pixels=True, help="Soften the finished matte edge"),
-        ParamSpec("choke", "Erode / expand", "float", -30.0, 30.0, 0.0, step=0.5,
-                  unit=" px", pixels=True,
+        ParamSpec("smooth", "Smooth", "float", 0.0, 10.0, 1.0, step=0.5, unit=" px",
+                  pixels=True, group="Matte",
+                  help="Median smoothing of the matte before the edge is shaped"),
+        ParamSpec("feather", "Feather", "float", 0.0, 40.0, 1.5, step=0.5, unit=" px",
+                  pixels=True, group="Matte", help="Soften the finished matte edge"),
+        ParamSpec("choke", "Choke / expand", "float", -30.0, 30.0, 0.0, step=0.5,
+                  unit=" px", pixels=True, group="Matte",
                   help="Positive pulls the matte inward; negative grows it outward"),
-        ParamSpec("cleanup", "Matte cleanup", "float", 0.0, 100.0, 12.0, step=1.0,
-                  unit="%", help="Remove speckles and close small holes in the matte"),
-        ParamSpec("transparency", "Transparency", "float", 0.0, 100.0, 100.0, step=1.0,
-                  unit="%", help="How much of the unmasked background is removed"),
-        ParamSpec("auto_seed", "Starting seed", "bool", default=True,
-                  help="Use a centred starting mask before the first brush stroke"),
-        ParamSpec("refine", "Edge refine", "bool", default=True,
-                  help="Use GrabCut to refine the brush strokes spatially"),
-        ParamSpec("matte_view", "Matte view", "choice", default="composite",
-                  choices=MATTE_MODES, choice_labels=MATTE_LABELS,
-                  help="Inspect the matte instead of the composite"),
+        ParamSpec("edge_contrast", "Edge contrast", "float", 0.0, 100.0, 35.0, step=1.0,
+                  unit=" %", group="Matte",
+                  help="Make the alpha ramp steeper without moving the boundary much"),
+        ParamSpec("decontaminate", "Edge colour cleanup", "float", 0.0, 100.0, 0.0,
+                  step=1.0, unit=" %", group="Matte",
+                  help="Pull the background colour out of the soft edge (composite view)"),
+        ParamSpec("search_radius", "Search radius", "float", 4.0, 120.0, 24.0, step=1.0,
+                  unit=" px", pixels=True, group="Analysis",
+                  help="How far GrabCut may look around the strokes and the carried mask"),
+        ParamSpec("tolerance", "Colour tolerance", "float", 1.0, 100.0, 28.0, step=1.0,
+                  unit=" %", group="Analysis",
+                  help="How far the colour model may follow the colours under the strokes"),
+        ParamSpec("refine", "Refine with GrabCut", "bool", default=True, group="Analysis",
+                  help="Fit the strokes (and each propagated mask) to the real pixels"),
         ParamSpec("quality", "Quality", "choice", default="balanced",
-                  choices=QUALITIES, choice_labels=QUALITY_LABELS,
-                  help="Draft solves at half resolution; High runs more refinement passes"),
+                  choices=QUALITIES, choice_labels=QUALITY_LABELS, group="Analysis",
+                  help="Draft analyses at half size; High runs more refinement passes"),
+        ParamSpec("transparency", "Transparency", "float", 0.0, 100.0, 100.0, step=1.0,
+                  unit=" %", help="How much of the unmasked background is removed"),
+        ParamSpec("matte_view", "Preview", "choice", default="composite",
+                  choices=MATTE_VIEWS, choice_labels=MATTE_LABELS,
+                  help="Inspect the cutout, its alpha, or the subject on a solid colour"),
+        ParamSpec("view_r", "Background red", "int", 0, 255, 24, group="Preview",
+                  help="Solid colour behind the subject in the solid preview"),
+        ParamSpec("view_g", "Background green", "int", 0, 255, 26, group="Preview",
+                  help="Solid colour behind the subject in the solid preview"),
+        ParamSpec("view_b", "Background blue", "int", 0, 255, 30, group="Preview",
+                  help="Solid colour behind the subject in the solid preview"),
+        ParamSpec("auto_seed", "Auto seed", "bool", default=False, advanced=True,
+                  help="Segment a centred region when no stroke has been painted yet"),
     )
 
     def __init__(self, app):
         super().__init__(app)
-        self.tolerance = Value(42.0)
-        self.feather = Value(2.0)
+        self.smooth = Value(1.0)
+        self.feather = Value(1.5)
         self.choke = Value(0.0)
-        self.cleanup = Value(12.0)
-        self.transparency = Value(100.0)
-        self.auto_seed = Value(True)
+        self.edge_contrast = Value(35.0)
+        self.decontaminate = Value(0.0)
+        self.search_radius = Value(24.0)
+        self.tolerance = Value(28.0)
         self.refine = Value(True)
-        self.matte_view = Value("composite")
         self.quality = Value("balanced")
-        self._cache_key = None
-        self._cache_output = None
+        self.transparency = Value(100.0)
+        self.matte_view = Value("composite")
+        self.view_r = Value(24)
+        self.view_g = Value(26)
+        self.view_b = Value(30)
+        self.auto_seed = Value(False)
         self.last_note = ""
+        self._memo = {}
+        self._memo_order = []
 
     # ------------------------------------------------------------------ geometry
     def _rect(self, width, height):
@@ -92,197 +133,196 @@ class RotoBrushEffect(LayerEffect):
             return 0.0, 0.0, float(width), float(height)
         return x, y, max(1.0, w), max(1.0, h)
 
-    def _project_to_layer(self, point, width, height):
-        x0, y0, rect_w, rect_h = self._rect(width, height)
+    def _region(self, width, height):
+        """The picture's pixels inside the layer, or None when it is off screen."""
+        x, y, rect_w, rect_h = self._rect(width, height)
+        x0, y0 = max(0, int(round(x))), max(0, int(round(y)))
+        x1, y1 = min(width, int(round(x + rect_w))), min(height, int(round(y + rect_h)))
+        if x1 <= x0 or y1 <= y0:
+            return None
+        return x0, y0, x1, y1
+
+    def source_frame(self):
+        """The clip's *source* frame for the frame being rendered.
+
+        `local_frame` is on the clip's own clock; `source_frame_at` is what maps trims,
+        source offsets, speed and reverse playback onto the media. Masks are stored by
+        this index, never by the timeline frame.
+        """
+        clip = self.clip
+        local = int(self.local_frame)
+        if clip is None or not hasattr(clip, "source_frame_at"):
+            return max(0, local)
         try:
-            nx, ny = float(point[0]), float(point[1])
-        except (TypeError, ValueError):
-            return None
-        return int(round(x0 + nx * rect_w)), int(round(y0 + ny * rect_h))
+            return max(0, int(clip.source_frame_at(int(getattr(clip, "timeline_start", 0)) + local)))
+        except Exception:                                # noqa: BLE001 - keep rendering
+            return max(0, local)
 
-    def _stroke_masks(self, width, height):
-        """(foreground, background) masks in layer pixels, or (None, None)."""
+    # ------------------------------------------------------------------ analysis
+    def _analysis_settings(self):
+        quality = quality_settings(str(self.quality.get()))
+        return {
+            "refine": bool(self.refine.get()),
+            "search_radius": float(self.search_radius.get()),
+            "iterations": int(quality["iterations"]),
+            "band": float(quality["band"]),
+            "scale": float(quality["scale"]),
+            "tolerance": max(1.0, float(self.tolerance.get())),
+        }
+
+    def _memo_get(self, key):
+        value = self._memo.get(key)
+        if value is not None:
+            self._memo_order.remove(key)
+            self._memo_order.append(key)
+        return value
+
+    def _memo_put(self, key, matte):
+        self._memo[key] = matte
+        self._memo_order.append(key)
+        while len(self._memo_order) > MAX_MEMO:
+            self._memo.pop(self._memo_order.pop(0), None)
+        return matte
+
+    def raw_matte(self, rgb_region, source_frame, key=None):
+        """The unshaped matte for one source frame, from the cache or from the strokes.
+
+        Returns a float32 0..1 array at the region's mask size, or None when there is
+        nothing to analyse yet. Never invents a mask for an unanalysed frame: a static
+        shape copied over the whole clip would look like a cutout and be a lie.
+        """
         entry = self.clip_entry or {}
-        strokes = entry.get("strokes") or ()
-        fg = np.zeros((height, width), np.uint8)
-        bg = np.zeros((height, width), np.uint8)
-        if not strokes:
-            if not bool(self.auto_seed.get()):
-                self.last_note = "No brush strokes yet. Paint the subject with the Roto Brush tool."
-                return None, None
-            # A useful starting point: the subject is normally around the frame centre.
-            cv2.ellipse(fg, (width // 2, height // 2),
-                        (max(2, int(width * 0.27)), max(2, int(height * 0.32))),
-                        0, 0, 360, 255, -1)
-            return fg, bg
-        for stroke in strokes:
-            if not isinstance(stroke, dict):
-                continue
-            points = stroke.get("points") or ()
-            if not points:
-                continue
-            mode = str(stroke.get("mode") or "foreground")
-            target = bg if mode == "background" else fg
-            radius = max(1, int(round(float(stroke.get("radius", 0.055)) * min(width, height))))
-            mapped = [self._project_to_layer(point, width, height) for point in points]
-            mapped = [point for point in mapped if point is not None]
-            if not mapped:
-                continue
-            if len(mapped) == 1:
-                cv2.circle(target, mapped[0], radius, 255, -1)
-                continue
-            for a, b in zip(mapped, mapped[1:]):
-                cv2.line(target, a, b, 255, max(1, radius * 2), cv2.LINE_AA)
-            for point in mapped:
-                cv2.circle(target, point, radius, 255, -1)
-        # A background stroke is an explicit correction. If the two strokes overlap, the
-        # background wins instead of the foreground maximum painting the hole back.
-        fg[bg > 0] = 0
-        return fg, bg
+        key = key or mask_key(entry)
+        cache = MaskCache()
+        clip = self.clip
+        cached = cache.load(clip, source_frame, key) if clip is not None else None
+        if cached is not None:
+            cached = np.asarray(cached, np.float32)
+            if rgb_region is not None and cached.shape[:2] != rgb_region.shape[:2]:
+                cached = cv2.resize(cached, (rgb_region.shape[1], rgb_region.shape[0]),
+                                    interpolation=cv2.INTER_LINEAR)
+            return np.clip(cached, 0.0, 1.0)
 
-    # ---------------------------------------------------------------------- matte
-    @staticmethod
-    def _color_matte(lab, fg, bg, tolerance):
-        """Soft matte from colour distance to the painted foreground/background samples."""
-        fg_pixels = lab[fg > 0]
-        bg_pixels = lab[bg > 0]
-        if fg_pixels.size == 0:
-            return np.zeros(lab.shape[:2], np.float32)
-        fg_mean = fg_pixels.mean(axis=0)
-        if bg_pixels.size == 0:
-            # The border is a safe background sample when the user has painted only the
-            # subject.  Ignore it when the subject actually touches the edge (the user can
-            # paint a red stroke to correct that).
-            border = np.zeros(lab.shape[:2], bool)
-            border[:2, :] = border[-2:, :] = True
-            border[:, :2] = border[:, -2:] = True
-            bg_pixels = lab[border]
-        bg_mean = bg_pixels.mean(axis=0) if bg_pixels.size else np.array([128.0, 128.0, 128.0])
-        d_fg = np.linalg.norm(lab - fg_mean, axis=2)
-        d_bg = np.linalg.norm(lab - bg_mean, axis=2)
-        margin = max(1.0, float(tolerance) * 0.55)
-        return _smoothstep(-margin, margin, d_bg - d_fg)
-
-    def _matte(self, layer, frame, quality):
-        height, width = layer.shape[:2]
-        scale, iterations = _QUALITY.get(str(quality), _QUALITY["balanced"])
-        work_w, work_h = max(1, int(round(width * scale))), max(1, int(round(height * scale)))
-        rgb = layer[:, :, :3]
-        if scale < 1.0:
-            rgb = cv2.resize(rgb, (work_w, work_h), interpolation=cv2.INTER_AREA)
-        # Build the stroke masks at layer resolution, then resample them with the picture.
-        # Brush coordinates are stored in project space, so the letterbox rect is applied
-        # before the working-resolution resize.
-        fg, bg = self._stroke_masks(width, height)
-        if fg is None:
+        if rgb_region is None or rgb_region.size == 0:
             return None
-        if scale < 1.0:
-            fg = cv2.resize(fg, (work_w, work_h), interpolation=cv2.INTER_NEAREST)
-            bg = cv2.resize(bg, (work_w, work_h), interpolation=cv2.INTER_NEAREST)
-        tolerance = max(1.0, param_number(self.tolerance, frame))
-        lab = cv2.cvtColor(rgb, cv2.COLOR_BGR2LAB).astype(np.float32)
-        color = self._color_matte(lab, fg, bg, tolerance)
-        if bool(self.refine.get()):
-            gc = np.full((work_h, work_w), cv2.GC_PR_BGD, np.uint8)
-            gc[bg > 0] = cv2.GC_BGD
-            gc[fg > 0] = cv2.GC_FGD
-            # GrabCut needs at least one sure pixel of each class. If the user painted only
-            # the subject, the frame border supplies a conservative background seed.
-            if not np.any(gc == cv2.GC_BGD):
-                gc[:2, :] = gc[-2:, :] = cv2.GC_BGD
-                gc[:, :2] = gc[:, -2:] = cv2.GC_BGD
-                gc[fg > 0] = cv2.GC_FGD
-            if np.any(gc == cv2.GC_FGD) and np.any(gc == cv2.GC_BGD):
-                bg_model = np.zeros((1, 65), np.float64)
-                fg_model = np.zeros((1, 65), np.float64)
-                try:
-                    cv2.grabCut(rgb, gc, None, bg_model, fg_model, iterations,
-                                cv2.GC_INIT_WITH_MASK)
-                    grab = np.where((gc == cv2.GC_FGD) | (gc == cv2.GC_PR_FGD), 1.0, 0.0)
-                    # Blend the spatial refinement with the colour model. This keeps the
-                    # brush's colour intent visible and makes tolerance useful even when
-                    # GrabCut is confident.
-                    matte = np.clip(grab * (0.55 + 0.45 * color), 0.0, 1.0)
-                    matte = np.maximum(matte, (fg > 0).astype(np.float32))
-                except cv2.error:
-                    matte = color
-            else:
-                matte = color
-        else:
-            matte = color
-
-        cleanup = max(0.0, min(100.0, param_number(self.cleanup, frame)))
-        if cleanup > 0.01:
-            binary = (matte >= 0.5).astype(np.uint8) * 255
-            size = max(1, int(round(cleanup / 100.0 * 5.0)))
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
-                                               (size * 2 + 1, size * 2 + 1))
-            binary = cv2.medianBlur(binary, size * 2 + 1)
-            binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
-            binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
-            matte = np.maximum(matte, binary.astype(np.float32) / 255.0)
-
-        choke = param_number(self.choke, frame) * float(self.param_scale) * scale
-        amount = int(round(abs(choke)))
-        if amount > 0:
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
-                                               (min(61, amount * 2 + 1),) * 2)
-            u8 = (matte * 255.0).astype(np.uint8)
-            u8 = cv2.erode(u8, kernel) if choke > 0 else cv2.dilate(u8, kernel)
-            matte = u8.astype(np.float32) / 255.0
-
-        feather = max(0.0, param_number(self.feather, frame) * float(self.param_scale) * scale)
-        if feather > 0.01:
-            matte = cv2.GaussianBlur(matte, (0, 0), sigmaX=feather / 3.0,
-                                     sigmaY=feather / 3.0,
-                                     borderType=cv2.BORDER_REPLICATE)
-        if scale < 1.0:
+        strokes = strokes_for_frame(entry.get("strokes") or (), source_frame,
+                                    entry.get("base_frame", 0))
+        if not strokes and bool(self.auto_seed.get()):
+            # An honest fallback for an effect dropped in with no strokes at all: a
+            # centred seed, replaced the moment the user paints. Off by default.
+            strokes = [{"frame": source_frame, "mode": "foreground", "radius": 0.28,
+                        "points": [[0.5, 0.45], [0.5, 0.55]]}]
+        if not strokes:
+            self.last_note = ("No mask on this frame yet. Paint the base frame, then use "
+                              "Propagate Forward or Analyze Entire Clip.")
+            return None
+        settings = self._analysis_settings()
+        scale = float(settings["scale"])
+        height, width = rgb_region.shape[:2]
+        work_w = max(8, int(round(width * scale)))
+        work_h = max(8, int(round(height * scale)))
+        work = rgb_region if (work_w, work_h) == (width, height) else cv2.resize(
+            rgb_region, (work_w, work_h), interpolation=cv2.INTER_AREA)
+        foreground, background, refine_mask = rasterise(strokes, work_w, work_h,
+                                                        (0.0, 0.0, float(work_w), float(work_h)))
+        matte = segment_frame(work, foreground, background, refine_mask, settings)
+        if matte is None:
+            self.last_note = "The strokes did not produce a matte; paint inside the subject."
+            return None
+        self.last_note = ""
+        if (work_w, work_h) != (width, height):
             matte = cv2.resize(matte, (width, height), interpolation=cv2.INTER_LINEAR)
-        return np.clip(matte, 0.0, 1.0)
+        return np.clip(matte, 0.0, 1.0).astype(np.float32)
+
+    def matte_for_region(self, rgb_region, source_frame):
+        """The raw matte plus the memoised lookup used by preview and export."""
+        entry = self.clip_entry or {}
+        key = mask_key(entry)
+        memo_key = (int(source_frame), key, rgb_region.shape[1] if rgb_region is not None else 0,
+                    rgb_region.shape[0] if rgb_region is not None else 0)
+        cached = self._memo_get(memo_key)
+        if cached is not None:
+            return cached
+        matte = self.raw_matte(rgb_region, source_frame, key)
+        if matte is None:
+            return None
+        return self._memo_put(memo_key, matte)
+
+    # ------------------------------------------------------------------ rendering
+    def _checkerboard(self, height, width):
+        tile = max(4, int(round(16 * float(self.param_scale))))
+        yy, xx = np.mgrid[0:height, 0:width]
+        board = (((yy // tile) + (xx // tile)) % 2).astype(np.float32)
+        light = np.array([58.0, 58.0, 58.0], np.float32)
+        dark = np.array([40.0, 40.0, 40.0], np.float32)
+        return (light[None, None, :] * board[:, :, None]
+                + dark[None, None, :] * (1.0 - board[:, :, None]))
+
+    def _compose(self, layer, matte, frame):
+        height, width = layer.shape[:2]
+        alpha = layer[:, :, 3].astype(np.float32) / 255.0
+        transparency = max(0.0, min(1.0, param_number(self.transparency, frame) / 100.0))
+        view = str(self.matte_view.get() or "composite")
+        out = np.empty_like(layer)
+        if view == "alpha":
+            grey = (np.clip(matte, 0.0, 1.0) * 255.0).astype(np.uint8)
+            out[:, :, :3] = np.repeat(grey[:, :, None], 3, axis=2)
+            out[:, :, 3] = 255
+            return out
+        if view == "solid":
+            colour = np.array([_colour(self.view_b.get()), _colour(self.view_g.get()),
+                               _colour(self.view_r.get())], np.float32)
+            weight = np.clip(matte, 0.0, 1.0)[:, :, None]
+            out[:, :, :3] = np.clip(layer[:, :, :3] * weight + colour * (1.0 - weight),
+                                    0.0, 255.0).astype(np.uint8)
+            out[:, :, 3] = 255
+            return out
+        if view == "checkerboard":
+            board = self._checkerboard(height, width)
+            weight = np.clip(matte, 0.0, 1.0)[:, :, None]
+            out[:, :, :3] = np.clip(layer[:, :, :3] * weight + board * (1.0 - weight),
+                                    0.0, 255.0).astype(np.uint8)
+            out[:, :, 3] = 255
+            return out
+        colour = layer[:, :, :3]
+        cleanup = float(param_number(self.decontaminate, frame))
+        if cleanup > 0.01:
+            colour = decontaminate(colour, matte, cleanup)
+        out[:, :, :3] = colour
+        if transparency > 0.0:
+            out[:, :, 3] = np.clip(alpha * (1.0 - transparency * (1.0 - matte)), 0.0, 1.0) \
+                .__mul__(255.0).astype(np.uint8)
+        else:
+            out[:, :, 3] = layer[:, :, 3]
+        return out
 
     def apply_layer(self, layer):
         if layer is None or layer.ndim != 3 or layer.shape[2] < 4 or layer.size == 0:
             return layer
-        frame = int(self.local_frame)
-        quality = str(self.quality.get() or "balanced")
-        entry = self.clip_entry or {}
-        strokes = entry.get("strokes") or ()
-        values = (str(quality), round(param_number(self.tolerance, frame), 3),
-                  round(param_number(self.feather, frame), 3),
-                  round(param_number(self.choke, frame), 3),
-                  round(param_number(self.cleanup, frame), 3),
-                  round(param_number(self.transparency, frame), 3),
-                  bool(self.auto_seed.get()), bool(self.refine.get()),
-                  str(self.matte_view.get()), tuple(strokes), layer.shape,
-                  round(float(self.param_scale), 4), self.layer_rect)
-        digest = hashlib.blake2b(layer.tobytes(), digest_size=12).digest()
-        cache_key = (values, digest)
-        if cache_key == self._cache_key and self._cache_output is not None:
-            return self._cache_output
-
-        transparency = max(0.0, min(1.0, param_number(self.transparency, frame) / 100.0))
-        if transparency <= 0.0:
-            self._cache_key, self._cache_output = cache_key, layer
+        transparency = max(0.0, min(1.0, param_number(self.transparency, self.local_frame) / 100.0))
+        view = str(self.matte_view.get() or "composite")
+        if transparency <= 0.0 and view == "composite":
             return layer
-        matte = self._matte(layer, frame, quality)
-        if matte is None:
-            self._cache_key, self._cache_output = cache_key, layer
+        height, width = layer.shape[:2]
+        region = self._region(width, height)
+        if region is None:
             return layer
-
-        alpha = layer[:, :, 3].astype(np.float32) / 255.0
-        view = str(self.matte_view.get())
-        if view == "alpha":
-            rgb = np.repeat((matte * 255.0).astype(np.uint8)[:, :, None], 3, axis=2)
-            out_alpha = np.ones_like(alpha)
-        elif view == "black_white":
-            binary = np.where(matte >= 0.5, 255, 0).astype(np.uint8)
-            rgb = np.repeat(binary[:, :, None], 3, axis=2)
-            out_alpha = np.ones_like(alpha)
-        else:
-            rgb = layer[:, :, :3]
-            out_alpha = alpha * (1.0 - transparency * (1.0 - matte))
-        out = np.empty_like(layer)
-        out[:, :, :3] = rgb
-        out[:, :, 3] = np.clip(out_alpha * 255.0, 0.0, 255.0).astype(np.uint8)
-        self._cache_key, self._cache_output = cache_key, out
-        return out
+        x0, y0, x1, y1 = region
+        rgb_region = layer[y0:y1, x0:x1, :3]
+        source_frame = self.source_frame()
+        raw = self.matte_for_region(rgb_region, source_frame)
+        if raw is None:
+            return layer
+        settings = {
+            "smooth": float(param_number(self.smooth, self.local_frame)),
+            "feather": float(param_number(self.feather, self.local_frame)),
+            "choke": float(param_number(self.choke, self.local_frame)),
+            "edge_contrast": float(param_number(self.edge_contrast, self.local_frame)),
+        }
+        # Pixel-based shaping must shrink with the render scale, or a half-quality preview
+        # would feather/choke twice as much as the full-quality export.
+        shaped = finish_matte(raw, settings, scale=max(0.05, float(self.param_scale)))
+        matte = np.zeros((height, width), np.float32)
+        matte[y0:y1, x0:x1] = cv2.resize(shaped, (x1 - x0, y1 - y0),
+                                         interpolation=cv2.INTER_LINEAR)
+        return self._compose(layer, matte, self.local_frame)

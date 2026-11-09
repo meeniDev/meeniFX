@@ -108,7 +108,8 @@ DESCRIPTIONS = {
     "glow": "Adds a soft halo around the brightest areas.",
     "chroma_key": "Removes a green, blue or custom screen with a soft matte and spill control.",
     "smart_key": "Samples the edge of the shot and keys that screen automatically.",
-    "roto_brush": "Paints a subject/background matte with brush strokes, refined by GrabCut.",
+    "roto_brush": "Stroke-guided rotoscoping: base frame, outline, temporal propagation, "
+                   "refine edge, matte views and a frozen mask cache.",
     "bloom_streaks": "Stretches highlights into anamorphic streaks.",
     "puppet_warp": "Deforms the picture by pulling placed pins.",
     "corner_pin": "Moves the four corners independently for a screen or sign.",

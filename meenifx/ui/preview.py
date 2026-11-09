@@ -366,6 +366,30 @@ class PreviewWidget(QWidget):
     def keyPressEvent(self, event):
         """Arrow keys nudge the selected clip; Delete removes a pin or path point."""
         overlay = self.overlay
+        if overlay is not None and getattr(overlay, "mode", "") == "roto":
+            key = event.key()
+            if key == Qt.Key.Key_Escape:
+                overlay.exit_roto()
+                event.accept()
+                return
+            if key in (Qt.Key.Key_BracketLeft, Qt.Key.Key_BracketRight):
+                overlay.adjust_roto_brush(1.0 / 1.25 if key == Qt.Key.Key_BracketLeft else 1.25)
+                event.accept()
+                return
+            if key == Qt.Key.Key_O:
+                overlay.roto_outline_visible = not overlay.roto_outline_visible
+                overlay._roto_outline_cache.clear()
+                self.update()
+                event.accept()
+                return
+            if key == Qt.Key.Key_B:
+                overlay.set_roto_brush_mode("refine")
+                event.accept()
+                return
+            if key == Qt.Key.Key_G:
+                overlay.set_roto_brush_mode("foreground")
+                event.accept()
+                return
         if overlay is not None:
             key = event.key()
             # Escape always means "abandon this": a shape being drawn leaves the draft

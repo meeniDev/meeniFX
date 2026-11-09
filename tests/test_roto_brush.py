@@ -1,116 +1,331 @@
-"""Roto Brush: paint strokes, default seed, diagnostic views and project persistence."""
+"""Roto Brush: stroke hints, matte shaping, propagation, cache and project storage."""
 
-import copy
-import os
+import json
 
+import cv2
 import numpy as np
+import pytest
 
 from conftest import build_engine
 from meenifx.project.container import read_container, write_container
 from meenifx.project.io import Project, apply as apply_project, collect
 from meenifx.project.settings import ProjectSettings
+from meenifx.roto.cache import MaskCache, mask_key, mask_size
+from meenifx.roto.propagate import frame_order, propagate_seed
+from meenifx.roto.segment import (finish_matte, outline_contours, quality_settings,
+                                  segment_frame)
+from meenifx.roto.strokes import rasterise
+
+WIDTH, HEIGHT = 320, 180
+BACKGROUND = (44, 40, 38)
+SUBJECT = (220, 150, 60)          # BGR
 
 
-def plate(background=(64, 177, 0), foreground=(120, 150, 210), size=(320, 180)):
-    width, height = size
-    layer = np.zeros((height, width, 4), np.uint8)
-    layer[:, :, :3] = background
+@pytest.fixture(autouse=True)
+def _isolated_cache(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEENIFX_ROTO_CACHE", str(tmp_path / "roto"))
+
+
+def plate(cx=160, cy=90, radius=46, width=WIDTH, height=HEIGHT):
+    frame = np.zeros((height, width, 3), np.uint8)
+    frame[:] = BACKGROUND
+    cv2.circle(frame, (cx, cy), radius, SUBJECT, -1)
+    return frame
+
+
+def layer_from(frame):
+    layer = np.zeros(frame.shape[:2] + (4,), np.uint8)
+    layer[:, :, :3] = frame
     layer[:, :, 3] = 255
-    layer[36:145, 72:248, :3] = foreground
     return layer
 
 
-def strokes():
-    return [
-        {"points": [[0.5, 0.20], [0.5, 0.80]], "radius": 0.10, "mode": "foreground"},
-        {"points": [[0.05, 0.10], [0.95, 0.10]], "radius": 0.08, "mode": "background"},
-    ]
+def roto_entry(strokes=None, base_frame=0, **params):
+    return {"effect_id": "roto_brush", "enabled": True, "params": dict(params),
+            "base_frame": int(base_frame),
+            "strokes": strokes if strokes is not None else [
+                {"frame": int(base_frame), "points": [[0.5, 0.5]], "radius": 0.08,
+                 "mode": "foreground"}]}
 
 
-def runtime(engine, entry, scale=1.0, **params):
+def runtime(engine, clip, item, local_frame=0, scale=1.0):
     effect = engine.runtime_effects["roto_brush"]
-    values = dict(effect.defaults)
-    values.update(params)
+    effect.clip = clip
+    effect.clip_entry = item
+    effect.local_frame = int(local_frame)
     effect.param_scale = scale
-    effect.local_frame = 0
-    effect.clip_entry = entry
-    effect.load_params(values)
+    params = {spec.name: spec.default for spec in effect.PARAMS}
+    params.update(item.get("params") or {})
+    effect.load_params(params)
     return effect
 
 
-def apply(engine, layer, entry=None, **params):
-    entry = entry or {"effect_id": "roto_brush", "enabled": True, "params": {},
-                      "strokes": strokes()}
-    return runtime(engine, entry, **params).apply_layer(layer.copy())
+def apply(engine, clip, layer, item, local_frame=0, scale=1.0):
+    return runtime(engine, clip, item, local_frame, scale).apply_layer(layer.copy())
 
 
-def test_painted_foreground_and_background_masks_produce_a_cutout():
-    engine, _clip = build_engine()
-    out = apply(engine, plate())
-    assert out[10, 10, 3] == 0, "the painted background clears"
-    assert out[90, 150, 3] > 250, "the painted subject stays opaque"
-    assert int(out[90, 150, 0]) > 100, "the subject colour is retained"
+def test_stroke_segments_the_subject_without_painting_or_erasing_pixels():
+    engine, clip = build_engine(duration=30)
+    picture = plate()
+    out = apply(engine, clip, layer_from(picture), roto_entry())
+    assert out[90, 160, 3] > 250, "the subject under the green stroke stays opaque"
+    assert out[8, 8, 3] < 8, "the background is removed by alpha, not by deleting it"
+    # The pixels of the plate itself are untouched: transparency, not paint.
+    np.testing.assert_array_equal(out[8, 8, :3], np.array(BACKGROUND, np.uint8))
+    np.testing.assert_array_equal(out[90, 160, :3], np.array(SUBJECT, np.uint8))
+    assert not np.any(np.all(out[:, :, :3] == np.array((0, 255, 0), np.uint8), axis=2)), \
+        "green is a hint colour, never a painted pixel"
 
 
-def test_background_stroke_removes_its_painted_area():
-    engine, _clip = build_engine()
-    entry = {"effect_id": "roto_brush", "enabled": True, "params": {},
-             "strokes": [
-                 {"points": [[0.5, 0.2], [0.5, 0.8]], "radius": 0.10, "mode": "foreground"},
-                 {"points": [[0.50, 0.50]], "radius": 0.08, "mode": "background"},
-             ]}
-    out = apply(engine, plate(), entry)
-    assert out[90, 160, 3] < 20, "the background stroke punches a hole"
-    assert out[90, 110, 3] > 250, "the rest of the subject remains"
+def test_background_stroke_refines_the_selection_instead_of_deleting_pixels():
+    engine, clip = build_engine(duration=30)
+    item = roto_entry(strokes=[
+        {"frame": 0, "points": [[0.5, 0.5]], "radius": 0.12, "mode": "foreground"},
+        {"frame": 0, "points": [[0.5, 0.5]], "radius": 0.07, "mode": "background"},
+    ])
+    out = apply(engine, clip, layer_from(plate()), item)
+    assert out[90, 160, 3] < 8, "the red stroke removes its area from the matte"
+    np.testing.assert_array_equal(out[90, 160, :3], np.array(SUBJECT, np.uint8))
+    # The green stroke is 0.12 of the short edge (~22 px) and the red one ~13 px, so the
+    # ring between them is still an explicit foreground hint.
+    assert out[90, 143, 3] > 250, "the rest of the subject survives the correction"
 
 
-def test_default_seed_is_visible_and_can_be_disabled():
-    engine, _clip = build_engine()
-    entry = {"effect_id": "roto_brush", "enabled": True, "params": {}, "strokes": []}
-    seeded = apply(engine, plate(), entry, auto_seed=True)
-    empty = apply(engine, plate(), entry, auto_seed=False)
-    assert seeded[90, 160, 3] > 250
-    assert seeded[10, 10, 3] == 0
-    assert np.array_equal(empty, plate())
+def test_preview_modes_and_solid_colour_are_real_views():
+    engine, clip = build_engine(duration=30)
+    layer = layer_from(plate())
+    images = {view: apply(engine, clip, layer, roto_entry(matte_view=view))
+              for view in ("composite", "checkerboard", "alpha", "solid")}
+    assert len({image.tobytes() for image in images.values()}) == 4, \
+        "every preview mode must draw something different"
+    red = apply(engine, clip, layer, roto_entry(matte_view="solid", view_r=240,
+                                               view_g=10, view_b=10))
+    green = apply(engine, clip, layer, roto_entry(matte_view="solid", view_r=10,
+                                                 view_g=240, view_b=10))
+    assert not np.array_equal(red, green)
+    corner = (4, 4)
+    assert int(red[corner][2]) > 200 and int(green[corner][1]) > 200, \
+        "the solid preview uses the configured colour"
 
 
-def test_matte_views_and_zero_transparency():
-    engine, _clip = build_engine()
-    layer = plate()
-    entry = {"effect_id": "roto_brush", "enabled": True, "params": {},
-             "strokes": strokes()}
-    alpha = apply(engine, layer, entry, matte_view="alpha")
-    mono = apply(engine, layer, entry, matte_view="black_white")
-    clear = apply(engine, layer, entry, transparency=0.0)
-    assert alpha[90, 150, 3] == 255
-    assert int(alpha[90, 150, 0]) > 200
-    assert set(np.unique(mono[:, :, 0])).issubset({0, 255})
-    assert np.array_equal(clear, layer)
+def test_refine_edge_stroke_changes_the_soft_boundary():
+    height, width = 120, 160
+    frame = np.zeros((height, width, 3), np.uint8)
+    frame[:] = BACKGROUND
+    cv2.circle(frame, (80, 60), 38, SUBJECT, -1)
+    frame = cv2.GaussianBlur(frame, (0, 0), 2.5)
+    foreground, background, _refine = rasterise(
+        [{"frame": 0, "points": [[0.5, 0.5]], "radius": 0.12, "mode": "foreground"}],
+        width, height, (0, 0, width, height))
+    settings = dict(quality_settings("balanced"), refine=True, tolerance=30.0,
+                    search_radius=18.0)
+    plain = segment_frame(frame, foreground, background, None, settings)
+    # The refine stroke crosses the subject's left and right soft edges.
+    _fg, _bg, refine = rasterise(
+        [{"frame": 0, "points": [[0.18, 0.5], [0.82, 0.5]], "radius": 0.05,
+          "mode": "refine"}], width, height, (0, 0, width, height))
+    refined = segment_frame(frame, foreground, background, refine, settings)
+    assert plain is not None and refined is not None
+    difference = np.abs(plain - refined)
+    assert float(difference.mean()) > 0.001, \
+        "the Refine Edge brush must really change the matte"
+    assert float(difference.max()) > 0.05, "the change is a real edge change"
+    columns = np.nonzero(difference.max(axis=0) > 0.05)[0]
+    assert columns.min() < width * 0.35 and columns.max() > width * 0.65, \
+        "the refinement lands on the boundary the brush crossed"
 
 
-def test_preview_scale_keeps_the_brush_geometry():
-    engine, _clip = build_engine()
-    layer = plate()
-    entry = {"effect_id": "roto_brush", "enabled": True, "params": {},
-             "strokes": strokes()}
-    full = apply(engine, layer, entry, scale=1.0)
-    half = apply(engine, layer, entry, scale=0.5)
-    import cv2
-    resized = cv2.resize(half, (full.shape[1], full.shape[0]), interpolation=cv2.INTER_AREA)
-    assert abs(float(resized[:, :, 3].mean()) - float(full[:, :, 3].mean())) < 8.0
+def test_every_matte_control_changes_the_matte():
+    yy, xx = np.mgrid[0:120, 0:160]
+    disc = np.clip((46.0 - np.hypot(xx - 80.0, yy - 60.0)) / 5.0 + 0.5, 0.0, 1.0)
+    noise = disc.copy()
+    noise[::7, ::5] = 1.0 - noise[::7, ::5]
+    base = {"smooth": 0.0, "feather": 0.0, "choke": 0.0, "edge_contrast": 0.0}
+    reference = finish_matte(disc, base)
+
+    smooth = finish_matte(noise, dict(base, smooth=4.0))
+    assert float(np.abs(smooth - finish_matte(noise, base)).mean()) > 0.001
+    feather = finish_matte(disc, dict(base, feather=8.0))
+    soft = lambda matte: int(((matte > 0.05) & (matte < 0.95)).sum())
+    assert soft(feather) > soft(reference), "feather widens the ramp"
+    choke = finish_matte(disc, dict(base, choke=6.0))
+    assert choke.mean() < reference.mean(), "positive choke eats into the matte"
+    grow = finish_matte(disc, dict(base, choke=-6.0))
+    assert grow.mean() > reference.mean(), "negative choke expands the matte"
+    contrast = finish_matte(disc, dict(base, edge_contrast=90.0))
+    assert soft(contrast) < soft(reference), "edge contrast steepens the ramp"
+    for value in (smooth, feather, choke, grow, contrast):
+        assert value.dtype == np.float32 and value.min() >= 0.0 and value.max() <= 1.0
 
 
-def test_brush_strokes_survive_project_round_trip(tmp_path):
-    engine, clip = build_engine(frame=plate()[:, :, :3], duration=30)
-    entry = {"effect_id": "roto_brush", "enabled": True, "params": {}, "strokes": strokes()}
-    clip.effects = [entry]
+def test_outline_follows_the_subject_boundary_not_the_clip_rectangle():
+    picture = plate()
+    foreground, background, _refine = rasterise(
+        [{"frame": 0, "points": [[0.5, 0.5]], "radius": 0.08, "mode": "foreground"}],
+        WIDTH, HEIGHT, (0, 0, WIDTH, HEIGHT))
+    matte = segment_frame(picture, foreground, background, None,
+                          dict(quality_settings("balanced"), tolerance=30.0))
+    shapes = outline_contours(matte)
+    assert shapes, "a segmented frame must produce an outline"
+    points = np.concatenate(shapes, axis=0)
+    assert len(points) >= 6, "a circle is approximated, not a 4-corner rectangle"
+    span_x = float(points[:, 0].max() - points[:, 0].min())
+    span_y = float(points[:, 1].max() - points[:, 1].min())
+    assert span_x < 0.6 and span_y < 0.8, "the outline hugs the disc, not the frame"
+    assert outline_contours(None) == []
+
+
+def test_propagation_follows_the_moving_subject_both_ways():
+    count = 34
+    radius = 30
+    frames = [plate(cx=40 + index * 6, radius=radius) for index in range(count)]
+    seed = 17
+    foreground, background, _refine = rasterise(
+        [{"frame": seed,
+          "points": [[frames[seed].shape[1] and (40 + seed * 6) / WIDTH, 0.5]],
+          "radius": 0.075, "mode": "foreground"}],
+        WIDTH, HEIGHT, (0, 0, WIDTH, HEIGHT))
+    settings = dict(quality_settings("draft"), refine=True, tolerance=30.0,
+                    search_radius=22.0)
+    seed_matte = segment_frame(frames[seed], foreground, background, None, settings)
+    assert seed_matte is not None
+
+    def truth(index):
+        mask = np.zeros((HEIGHT, WIDTH), np.uint8)
+        cv2.circle(mask, (40 + index * 6, 90), radius, 255, -1)
+        return mask > 0
+
+    def iou(matte, index):
+        predicted = matte > 0.5
+        expected = truth(index)
+        return float((predicted & expected).sum() / max(1, (predicted | expected).sum()))
+
+    def run(direction):
+        stored = {}
+        done = propagate_seed(
+            seed_matte, seed, frame_order(0, count - 1, seed, direction),
+            lambda index: frames[index], settings,
+            on_mask=lambda index, matte: stored.__setitem__(index, matte))
+        return stored, done
+
+    forward, done_forward = run("forward")
+    assert 20 in done_forward and len(done_forward) >= 8
+    for offset in (2, 6, 10):
+        assert iou(forward[seed + offset], seed + offset) > 0.8, \
+            "the mask must travel with the subject, not stay on the seed frame"
+    assert float(np.abs(forward[seed + 8] - seed_matte).mean()) > 0.02, \
+        "propagation must not reuse the static base matte"
+
+    backward, done_backward = run("backward")
+    assert 12 in done_backward and len(done_backward) >= 8
+    for offset in (2, 6, 10):
+        assert iou(backward[seed - offset], seed - offset) > 0.8
+
+
+def test_cache_round_trip_freeze_and_key_invalidation(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEENIFX_ROTO_CACHE", str(tmp_path / "roto"))
+    engine, clip = build_engine(duration=30)
+    cache = MaskCache()
+    item = roto_entry()
+    key = mask_key(item)
+    size = mask_size(WIDTH, HEIGHT)
+    cache.configure(clip, key, size)
+    matte = np.zeros((size[1], size[0]), np.float32)
+    cv2.circle(matte, (size[0] // 2, size[1] // 2), 20, 1.0, -1)
+    cache.store(clip, 0, matte, key, size)
+    stored = cache.load(clip, 0, key)
+    assert stored is not None and stored.shape == matte.shape
+    assert float(np.abs(stored - matte).mean()) < 0.01
+    assert cache.summary(clip, key) == (1, False)
+    assert cache.set_frozen(clip, True) and cache.summary(clip, key) == (1, True)
+    assert cache.frozen(clip)
+    assert cache.load(clip, 0, "another-key") is None, "stale keys never show masks"
+
+    changed = dict(item, strokes=[{"frame": 0, "points": [[0.4, 0.4]], "radius": 0.1,
+                                  "mode": "foreground"}])
+    assert mask_key(changed) != key
+    cache.configure(clip, mask_key(changed), size)
+    assert cache.summary(clip, mask_key(changed)) == (0, False), \
+        "a changed stroke key resets the folder instead of reusing old masks"
+    cache.clear(clip)
+    assert cache.load(clip, 0, key) is None
+
+
+def test_frames_without_a_mask_render_unchanged():
+    engine, clip = build_engine(duration=30)
+    item = roto_entry(base_frame=0)
+    picture = plate()
+    # The clip plays source frame 10 here and has no strokes and no cache for it: the
+    # effect must leave the frame alone rather than paste the base matte over it.
+    out = apply(engine, clip, layer_from(picture), item, local_frame=10)
+    np.testing.assert_array_equal(out, layer_from(picture))
+    effect = runtime(engine, clip, item, local_frame=10)
+    assert effect.raw_matte(picture, 10) is None
+    assert "Propagate Forward" in effect.last_note
+
+
+def test_edge_colour_cleanup_reaches_the_soft_edge_only():
+    engine, clip = build_engine(duration=30)
+    # A bright background and a dark subject produce a strong contaminated fringe. The
+    # matte is placed on that fringe through the real cache, so the test measures the
+    # composite path the user sees rather than a hand-made matte.
+    picture = np.zeros((HEIGHT, WIDTH, 3), np.uint8)
+    picture[:, :] = (250, 250, 250)
+    cv2.circle(picture, (160, 90), 50, (40, 40, 40), -1)
+    picture = cv2.GaussianBlur(picture, (0, 0), 3.0)
+    item = roto_entry()
+    size = mask_size(WIDTH, HEIGHT)
+    yy, xx = np.mgrid[0:HEIGHT, 0:WIDTH]
+    matte = np.clip((54.0 - np.hypot(xx - 160.0, yy - 90.0)) / 8.0 + 0.5, 0.0, 1.0)
+    MaskCache().store(clip, 0, matte.astype(np.float32), mask_key(item), size)
+    plain = apply(engine, clip, layer_from(picture), item)
+    cleaned = apply(engine, clip, layer_from(picture), roto_entry(decontaminate=100.0))
+    difference = np.abs(plain.astype(np.int16) - cleaned.astype(np.int16))
+    assert difference[:, :, :3].max() > 10, "edge colour cleanup must reach the pixels"
+    assert difference[:, :, 3].max() == 0, "it recolours the edge, it does not move alpha"
+    assert int((difference[:, :, :3].max(axis=2) > 4).sum()) < WIDTH * HEIGHT / 3, \
+        "only the edge band changes, not the whole frame"
+
+
+def test_preview_scale_keeps_the_shaped_matte_geometry():
+    engine, clip = build_engine(duration=30)
+    layer = layer_from(plate())
+    item = roto_entry(feather=8.0, choke=4.0, edge_contrast=40.0)
+    full = apply(engine, clip, layer, item, scale=1.0)
+    small = cv2.resize(layer, (WIDTH // 2, HEIGHT // 2), interpolation=cv2.INTER_AREA)
+    half = apply(engine, clip, small, item, scale=0.5)
+    upscaled = cv2.resize(half, (WIDTH, HEIGHT), interpolation=cv2.INTER_LINEAR)
+    difference = np.abs(full[:, :, 3].astype(np.int16) - upscaled[:, :, 3].astype(np.int16))
+    assert float(difference.mean()) < 6.0, \
+        "a half-quality preview must shape the matte like the full-quality export"
+
+
+def test_project_round_trip_keeps_roto_metadata_and_no_masks(tmp_path):
+    engine, clip = build_engine(duration=30)
+    item = roto_entry(base_frame=7, tolerance=41.0)
+    item["strokes"].append({"frame": 12, "points": [[0.3, 0.4]], "radius": 0.06,
+                            "mode": "background"})
+    item["propagation"] = {"base_frame": 7, "analysed": [8, 9], "range": [0, 29]}
+    item["cache"] = {"key": "abc123", "frames": 3, "frozen": False}
+    clip.effects = [item]
     project = Project(ProjectSettings.from_preset("720p 30", "Roto"), None)
     path = str(tmp_path / "roto.mfxpf")
-    write_container(path, collect(engine, project))
+    payload = collect(engine, project)
+    write_container(path, payload)
+    text = json.dumps(payload.sections, default=str)
+    assert "base_frame" in text and "propagation" in text and "strokes" in text
+    assert "iVBOR" not in text and "data:image" not in text, \
+        "masks are files, never base64 inside the project JSON"
+    assert len(text) < 200000
+
     loaded = read_container(path)
-    fresh, _other = build_engine(frame=plate()[:, :, :3], duration=30)
+    fresh, _other = build_engine(duration=30)
     fresh.timeline.tracks.clear()
     apply_project(fresh, loaded, path)
     restored = fresh.timeline.find_clip(clip.id)
     assert restored is not None
-    assert restored.effects[0]["strokes"] == strokes()
+    entry = restored.effects[0]
+    assert entry["base_frame"] == 7
+    assert entry["strokes"] == item["strokes"]
+    assert entry["propagation"] == item["propagation"]
+    assert entry["cache"] == item["cache"]

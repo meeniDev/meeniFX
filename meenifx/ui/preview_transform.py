@@ -86,9 +86,17 @@ class PreviewOverlay:
         self.show_motion_path = True
         self.show_mesh = False
         self.mode = "select"          # select | transform | puppet | roto | corner | mesh | shape
-        # Roto Brush stroke radius, as a fraction of the shorter project edge. A stroke
-        # is stored on the effect entry, so it is clip-local and survives save/reload.
-        self.roto_brush_size = 0.055
+        # Roto Brush: the radius is a fraction of the picture's shorter edge, so the same
+        # brush covers the same part of the subject at every preview zoom and quality.
+        self.roto_brush_size = 0.05
+        self.roto_brush_mode = "foreground"      # foreground | background | refine
+        self.roto_outline_visible = True
+        self.roto_hover = None
+        # MainWindow hooks: a finished stroke invalidates cached masks and refreshes the
+        # card, and exiting the mode has to put the transform toolbar back.
+        self.on_roto_change = None
+        self.on_mode_change = None
+        self._roto_outline_cache = {}
         # While the shape tool is armed the next press starts a draft rectangle; it is
         # painted as a live outline and only becomes a clip on release.
         self.shape_kind = "rectangle"
@@ -483,10 +491,225 @@ class PreviewOverlay:
             painter.restore()
             return
         painter.setPen(QPen(colour, 1.2))
+    # ------------------------------------------------------------------ roto brush
+    def roto_clip_and_entry(self):
+        clip = self.primary()
+        if clip is None:
+            return None, None
+        return clip, self._effect_entry(clip, "roto_brush")
+
+    def roto_source_frame(self, clip):
+        """The clip's source frame at the playhead (trims, speed and reverse included)."""
+        try:
+            return max(0, int(clip.source_frame_at(int(self.session.playhead))))
+        except Exception:                                   # noqa: BLE001 - live editing
+            return max(0, self.local_frame(clip))
+
+    def roto_picture_point(self, widget_point):
+        """Widget -> normalised picture coordinates through the real clip transform.
+
+        This is the whole alignment story: the point goes back through the same
+        position/scale/rotation matrix the renderer uses, so a stroke stays on the same
+        part of the picture at every zoom, pan and preview size.
+        """
+        clip, _entry = self.roto_clip_and_entry()
+        if clip is None:
+            return None
+        project = self.to_project(widget_point)
+        if project is None:
+            return None
+        width, height = self.image_size(clip)
+        source = T.invert(tuple(project), self.state(clip), self.project_size(),
+                          (width, height))
+        if source is None:
+            return None
+        return (max(0.0, min(1.0, source[0] / max(1.0, float(width)))),
+                max(0.0, min(1.0, source[1] / max(1.0, float(height)))))
+
+    def roto_to_project(self, clip, point):
+        width, height = self.image_size(clip)
+        return T.forward((float(point[0]) * width, float(point[1]) * height),
+                         self.state(clip), self.project_size(), (width, height))
+
+    def roto_brush_pixels(self, clip):
+        """The brush radius in widget pixels, so the circle matches what is painted."""
+        width, height = self.image_size(clip)
+        rect = self.widget.frame_rect()
+        project_scale = rect.width() / max(1e-9, float(self.project_size()[0]))
+        return max(1.5, float(self.roto_brush_size) * min(width, height) * project_scale)
+
+    def roto_matte(self, clip, entry, frame):
+        """The raw matte for one source frame: from the cache, else from its strokes."""
+        from ..roto.cache import MaskCache, mask_key, mask_size
+        stored = MaskCache().load(clip, frame, mask_key(entry))
+        if stored is not None:
+            return stored
+        runtime = self.engine.runtime_effects.get("roto_brush")
+        if runtime is None:
+            return None
+        rgb = self.engine.media.frame_for_clip(clip, int(self.session.playhead),
+                                               self.engine.timeline.fps)
+        if rgb is None:
+            return None
+        runtime.clip = clip
+        runtime.clip_entry = entry
+        runtime.local_frame = self.local_frame(clip)
+        runtime.param_scale = 1.0
+        params = dict(getattr(runtime, "defaults", {}) or {})
+        params.update(entry.get("params") or {})
+        runtime.load_params(params)
+        import cv2
+        height, width = rgb.shape[:2]
+        size = mask_size(width, height, max_edge=360)
+        small = cv2.resize(rgb, size, interpolation=cv2.INTER_AREA)
+        return runtime.raw_matte(small, int(frame))
+
+    def roto_outline(self, clip, entry, frame):
+        """Normalised outline polylines for the current frame (memoised per frame)."""
+        from ..roto.cache import mask_key
+        from ..roto.segment import outline_contours
+        key = (getattr(clip, "id", None), int(frame), mask_key(entry))
+        if key in self._roto_outline_cache:
+            return self._roto_outline_cache[key]
+        matte = self.roto_matte(clip, entry, frame)
+        contours = outline_contours(matte) if matte is not None else []
+        self._roto_outline_cache = {key: contours}
+        return contours
+
+    def roto_mode_label(self):
+        labels = {"foreground": "Green: keep", "background": "Red: remove",
+                  "refine": "Refine edge"}
+        return labels.get(self.roto_brush_mode, "Green: keep")
+
+    def _paint_roto(self, painter):
+        """The brush, its live stroke, the segmentation outline and the mode strip."""
+        clip, entry = self.roto_clip_and_entry()
+        if clip is None:
+            return
+        if self.roto_outline_visible and entry is not None:
+            frame = self.roto_source_frame(clip)
+            for contour in self.roto_outline(clip, entry, frame):
+                points = [QPointF(self.to_widget(*self.roto_to_project(clip, point)))
+                          for point in contour]
+                if len(points) < 3:
+                    continue
+                polygon = QPolygonF(points)
+                painter.save()
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                # A dark underlay keeps the outline readable on bright and dark footage;
+                # the purple itself is the "this is the segmentation" signal.
+                painter.setPen(QPen(QColor(16, 8, 24, 190), 4.4))
+                painter.drawPolygon(polygon)
+                painter.setPen(QPen(QColor(186, 104, 255), 2.0))
+                painter.drawPolygon(polygon)
+                painter.restore()
+        drag = self._drag
+        if drag is not None and drag.get("kind") == "roto":
+            stroke = drag["stroke"]
+            points = [QPointF(self.to_widget(*self.roto_to_project(clip, point)))
+                      for point in stroke.get("points") or ()]
+            colour = {"background": QColor(255, 82, 82),
+                      "refine": QColor(120, 200, 255)}.get(
+                str(stroke.get("mode")), QColor(64, 220, 120))
+            if len(points) >= 2:
+                painter.save()
+                painter.setPen(QPen(colour, max(2.0, self.roto_brush_pixels(clip) * 1.7),
+                                    Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
+                                    Qt.PenJoinStyle.RoundJoin))
+                painter.drawPolyline(QPolygonF(points))
+                painter.restore()
+        hover = self.roto_hover
+        if hover is not None:
+            radius = self.roto_brush_pixels(clip)
+            colour = {"background": QColor(255, 82, 82),
+                      "refine": QColor(120, 200, 255)}.get(
+                self.roto_brush_mode, QColor(64, 220, 120))
+            painter.save()
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor(0, 0, 0, 140), 3.0))
+            painter.drawEllipse(hover, radius, radius)
+            painter.setPen(QPen(colour, 1.6))
+            painter.drawEllipse(hover, radius, radius)
+            painter.drawLine(QPointF(hover.x() - 4, hover.y()),
+                             QPointF(hover.x() + 4, hover.y()))
+            painter.drawLine(QPointF(hover.x(), hover.y() - 4),
+                             QPointF(hover.x(), hover.y() + 4))
+            painter.restore()
+        self._paint_roto_hud(painter, clip, entry)
+
+    def _paint_roto_hud(self, painter, clip, entry):
+        from ..roto.cache import MaskCache, mask_key
+        analysed, frozen = 0, False
+        if entry is not None:
+            try:
+                analysed, frozen = MaskCache().summary(clip, mask_key(entry))
+            except OSError:
+                analysed, frozen = 0, False
+        base = int((entry or {}).get("base_frame", 0) or 0)
+        lines = [
+            f"Roto Brush  |  {self.roto_mode_label()}  |  "
+            f"brush {int(round(self.roto_brush_size * 200))}%",
+            f"source frame {self.roto_source_frame(clip)}  |  base {base}  |  "
+            f"{analysed} analysed{'  (frozen)' if frozen else ''}",
+            "Green drag keep  Â·  Alt red remove  Â·  B refine edge  Â·  [ ] size  Â·  "
+            "O outline  Â·  Esc done",
+        ]
+        painter.save()
+        font = painter.font()
+        font.setPointSizeF(max(8.0, font.pointSizeF()))
+        painter.setFont(font)
+        metrics = painter.fontMetrics()
+        width = max(metrics.horizontalAdvance(line) for line in lines) + 22
+        height = metrics.height() * len(lines) + 14
+        box = QRectF(10.0, 10.0, float(width), float(height))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(QColor(16, 20, 28, 214)))
+        painter.drawRoundedRect(box, 6.0, 6.0)
+        painter.setPen(QPen(QColor(230, 236, 245)))
+        for index, line in enumerate(lines):
+            painter.drawText(
+                QRectF(box.left() + 11, box.top() + 7 + index * metrics.height(),
+                       box.width() - 22, metrics.height()),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, line)
+        painter.restore()
+
+    def exit_roto(self):
+        """Leave the rotoscoping mode and hand the normal transform tools back."""
+        if self.mode != "roto":
+            return False
+        self.mode = "select"
+        self.roto_hover = None
+        self._drag = None
+        self.widget.setCursor(Qt.CursorShape.ArrowCursor)
+        self.widget.update()
+        if callable(self.on_mode_change):
+            self.on_mode_change("select")
+        return True
+
+    def set_roto_brush_mode(self, mode):
+        if mode not in ("foreground", "background", "refine"):
+            return False
+        self.roto_brush_mode = str(mode)
+        self.widget.update()
+        return True
+
+    def adjust_roto_brush(self, factor):
+        self.roto_brush_size = max(0.005,
+                                   min(0.35, float(self.roto_brush_size) * float(factor)))
+        self.widget.update()
+        return self.roto_brush_size
+
         for name in HANDLE_NAMES:
             point = self.to_widget(*self.handle_points(clip)[name])
             rect = QRectF(point.x() - HANDLE / 2, point.y() - HANDLE / 2, HANDLE, HANDLE)
             painter.fillRect(rect, QColor(tokens.COLORS["panel"]))
+        if self.mode == "roto":
+            # Rotoscoping is its own editing mode. No bounding box, resize handles,
+            # rotation knob, anchor or motion path over the picture - only the brush,
+            # its outline and the mode strip. The clip's transform is untouched.
+            self._paint_roto(painter)
+            self._paint_guides(painter)
+            return
             painter.drawRect(rect)
         # Rotation knob and its tether. When the picture has left the viewport the knob
         # is pinned to the edge: the tether then points at the real handle position, so
@@ -728,21 +951,16 @@ class PreviewOverlay:
             self.widget.update()
             return True
         if self.mode == "roto":
-            clip = self.primary()
-            entry = self._effect_entry(clip, "roto_brush") if clip is not None else None
-            project = self.to_project(pos)
-            if entry is None or project is None:
-                return False
-            width, height = self.project_size()
-            if not width or not height:
+            clip, entry = self.roto_clip_and_entry()
+            point = self.roto_picture_point(pos)
+            if clip is None or entry is None or point is None:
                 return False
             # Snapshot before the first point: the whole painted stroke is one undo step.
             self.session.begin_gesture()
-            stroke = {"points": [[max(0.0, min(1.0, project[0] / width)),
-                                  max(0.0, min(1.0, project[1] / height))]],
+            stroke = {"frame": int(frame),
+                      "points": [[point[0], point[1]]],
                       "radius": float(self.roto_brush_size),
-                      "mode": ("background" if event.modifiers() & Qt.KeyboardModifier.AltModifier
-                               else "foreground")}
+                      "mode": str(mode)}
             entry.setdefault("strokes", []).append(stroke)
             self._drag = {"kind": "roto", "clip": clip, "stroke": stroke}
             self.widget.update()
@@ -766,6 +984,12 @@ class PreviewOverlay:
                 self._selected_corner = index
                 self.session.begin_gesture()
                 self._drag = {"kind": "corner", "clip": clip, "index": index}
+            mode = ("background" if event.modifiers() & Qt.KeyboardModifier.AltModifier
+                    else self.roto_brush_mode)
+            frame = self.roto_source_frame(clip)
+            # The first stroke defines the base frame; later frames become corrections.
+            if not entry.get("strokes"):
+                entry["base_frame"] = int(frame)
                 self.widget.update()
                 return True
         if clip is not None and self.mode in ("transform", "select", "puppet", "corner"):
@@ -775,6 +999,7 @@ class PreviewOverlay:
         if self.mode in ("puppet", "transform"):
             hit_entry, pin = self._pin_at(clip) if clip is not None else (None, None)
             if pin is not None:
+            self._roto_outline_cache.clear()
                 pin_id = int(pin.get("id", 0))
                 if event.modifiers() & (Qt.KeyboardModifier.ControlModifier
                                         | Qt.KeyboardModifier.ShiftModifier):
@@ -945,14 +1170,17 @@ class PreviewOverlay:
             return True
         drag = self._drag
         if drag is not None and drag.get("kind") == "roto":
-            project = self.to_project(pos)
-            if project is not None:
-                width, height = self.project_size()
-                if width and height:
-                    stroke = drag["stroke"]
-                    stroke.setdefault("points", []).append(
-                        [max(0.0, min(1.0, project[0] / width)),
-                         max(0.0, min(1.0, project[1] / height))])
+            clip = drag.get("clip")
+            point = self.roto_picture_point(pos)
+            if clip is not None and point is not None:
+                stroke = drag["stroke"]
+                points = stroke.setdefault("points", [])
+                radius = max(1e-4, float(stroke.get("radius", self.roto_brush_size)))
+                if (not points
+                        or abs(point[0] - points[-1][0]) + abs(point[1] - points[-1][1])
+                        >= radius * 0.05):
+                    points.append([point[0], point[1]])
+                    self._roto_outline_cache.clear()
                     self.widget.update()
                     self._notify()
             return True
@@ -986,6 +1214,10 @@ class PreviewOverlay:
         else:
             snap_rotation = shift
         drag["alt"] = alt
+        if self.mode == "roto":
+            self.roto_hover = QPointF(pos)
+            self.widget.setCursor(Qt.CursorShape.CrossCursor)
+            self.widget.update()
         if kind == "move":
             project = self.to_project(pos)
             origin = drag["origin"]
@@ -1359,7 +1591,7 @@ class PreviewOverlay:
                   "anchor": "Move anchor point", "pin": "Move puppet pin",
                   "corner": "Move corner pin", "mesh": "Move mesh node",
                   "path_point": "Move motion path point",
-                  "path_handle": "Adjust motion path", "roto": "Paint Roto mask"}
+                  "path_handle": "Adjust motion path", "roto": "Roto Brush stroke"}
         self.session.commit_gesture(labels.get(drag.get("kind"), "Edit transform"))
         self._notify()
         self.widget.update()
@@ -1400,6 +1632,8 @@ class PreviewOverlay:
                                          if int(pin.get("id", 0)) not in removing]
             label = "Delete puppet pin" if len(removing) == 1 else f"Delete {len(removing)} puppet pins"
             self.session.stack.run(label, action)
+        if drag.get("kind") == "roto" and callable(self.on_roto_change):
+            self.on_roto_change()
             self._notify()
             return True
         if self._selected_path_key is not None:
