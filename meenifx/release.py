@@ -97,7 +97,8 @@ def sha256_file(path):
 def write_checksums(paths, out_path):
     lines = [f"{sha256_file(path)}  {os.path.basename(str(path))}" for path in sorted(paths)]
     out = Path(out_path)
-    out.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    out.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8",
+                   newline="\n")
     return out
 
 

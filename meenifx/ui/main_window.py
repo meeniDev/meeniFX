@@ -2240,7 +2240,8 @@ class MainWindow(QMainWindow):
         bar.addWidget(cache_label)
         self.composition_cache_label = cache_label
         self._update_composition_cache_label()
-        self.setWindowTitle(f"{APP_TITLE} - {active.name}" if active else APP_TITLE)
+        # The window title belongs to ProjectController, which knows the project name and
+        # dirty state. Writing APP_TITLE here would erase it right after a project opens.
 
     def _update_composition_cache_label(self):
         label = getattr(self, "composition_cache_label", None)

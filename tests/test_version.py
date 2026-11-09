@@ -100,7 +100,9 @@ def test_portable_zip_and_checksums_are_real_files(tmp_path):
     exe = tmp_path / "dist" / f"meeniFX-Studios-{VERSION}-Windows-Setup.exe"
     exe.write_bytes(b"installer")
     sums = release.write_checksums([exe, archive], tmp_path / "dist" / "SHA256SUMS.txt")
-    parsed = download.parse_checksums(sums.read_text(encoding="utf-8"))
+    text = sums.read_text(encoding="utf-8")
+    assert "\r" not in text, "checksum lists must use LF on every platform"
+    parsed = download.parse_checksums(text)
     assert parsed[exe.name] == release.sha256_file(exe)
     assert parsed[archive.name] == release.sha256_file(archive)
 
