@@ -345,9 +345,16 @@ class MainWindow(QMainWindow):
         # Non-modal, so a background check can never interrupt playback, recording or export.
         self.update_notice=UpdateNotice(self)
         self.update_notice.view_requested.connect(self.show_updates)
+        self.update_notice.download_requested.connect(self._download_update)
+        self.update_notice.install_requested.connect(self._install_update)
+        self.update_notice.cancel_requested.connect(self._cancel_update_download)
         self.update_notice.remind_requested.connect(self._remind_update)
         self.update_notice.skip_requested.connect(self._skip_update)
         self.update_manager.update_available.connect(self._on_update_available)
+        self.update_manager.download_started.connect(self._on_update_download_started)
+        self.update_manager.download_progress.connect(self._on_update_progress)
+        self.update_manager.download_ready.connect(self._on_update_ready)
+        self.update_manager.download_failed.connect(self._on_update_download_failed)
         self.engine.session.tool.trace_add("write",lambda *_:self._update_hints())
         self.engine.session.snap_enabled.trace_add("write",lambda *_:self._update_hints())
         self.engine.session.loop_changed.connect(self._sync_loop_state)
@@ -1908,6 +1915,7 @@ class MainWindow(QMainWindow):
         if self._updates_dialog is None:
             self._updates_dialog=UpdatesDialog(self.update_manager,self)
             self._updates_dialog.finished.connect(self._forget_updates_dialog)
+        self.update_notice.hide()
         self._updates_dialog.refresh()
         self._updates_dialog.show()
         self._updates_dialog.raise_()
@@ -1917,12 +1925,63 @@ class MainWindow(QMainWindow):
 
     def _forget_updates_dialog(self,_result):
         self._updates_dialog=None
+        if self.update_manager.ready_path and os.path.isfile(self.update_manager.ready_path):
+            self._on_update_ready(self.update_manager.ready_path,
+                                  self.update_manager.ready_update)
+        elif self.update_manager.downloading:
+            self._on_update_download_started()
 
     def _on_update_available(self,update):
         """A background check found a newer build: a small notice, never a modal dialog."""
         if self._updates_dialog is not None and self._updates_dialog.isVisible():
             return
         self.update_notice.show_update(update)
+
+    def _updates_page_visible(self):
+        return self._updates_dialog is not None and self._updates_dialog.isVisible()
+
+    def _download_update(self):
+        update=self.update_manager.pending_update
+        if update is not None:
+            self.update_manager.download(update)
+
+    def _cancel_update_download(self):
+        self.update_manager.cancel_download()
+
+    def _install_update(self):
+        """Install the already downloaded, checksum-verified update."""
+        update=self.update_manager.ready_update or self.update_manager.pending_update
+        path=self.update_manager.ready_path
+        if not path or not os.path.isfile(path):
+            self.show_updates()
+            return
+        from .updates_dialog import install_update
+        install_update(self,path,update)
+
+    def _on_update_download_started(self):
+        if self._updates_page_visible():
+            return
+        update=self.update_manager.pending_update
+        if update is not None:
+            self.update_notice.show_downloading(update)
+
+    def _on_update_progress(self,done,total):
+        if self._updates_page_visible():
+            return
+        if self.update_notice.state=="downloading":
+            self.update_notice.set_download_progress(done,total)
+
+    def _on_update_ready(self,path,update):
+        if self._updates_page_visible():
+            return
+        self.update_notice.show_ready(update)
+
+    def _on_update_download_failed(self,kind,message):
+        if self._updates_page_visible() or kind=="cancelled":
+            return
+        update=self.update_manager.pending_update
+        if update is not None:
+            self.update_notice.show_error(update,message)
 
     def _remind_update(self):
         self.update_manager.remind_later()

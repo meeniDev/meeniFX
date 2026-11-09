@@ -725,6 +725,13 @@ class PreferencesDialog(QDialog):
                                     "A check never interrupts editing.")
         form.addRow("", self.update_auto)
 
+        self.update_auto_download = QCheckBox("Download updates automatically")
+        self.update_auto_download.setChecked(bool(settings.auto_download))
+        self.update_auto_download.setToolTip("Downloads the verified installer in the "
+                                             "background. It is installed only when you "
+                                             "click Restart and Install.")
+        form.addRow("", self.update_auto_download)
+
         self.update_channel = QComboBox()
         self.update_channel.addItem("Alpha / Preview", "alpha")
         self.update_channel.addItem("Stable", "stable")
@@ -754,6 +761,7 @@ class PreferencesDialog(QDialog):
 
     def _apply_update_settings(self):
         self.update_settings.auto_check = self.update_auto.isChecked()
+        self.update_settings.auto_download = self.update_auto_download.isChecked()
         self.update_settings.channel = str(self.update_channel.currentData() or "alpha")
         self.update_settings.save()
 

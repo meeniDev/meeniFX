@@ -13,7 +13,7 @@
 **meeniFX Studios is in Alpha.** It is usable and tested, but unfinished, and some features
 are still experimental.
 
-[**Download meeniFX Studios 0.1.0-alpha.5 →**](https://github.com/meeniDev/meeniFX/releases/tag/v0.1.0-alpha.5)
+[**Download meeniFX Studios 0.1.0-alpha.6 →**](https://github.com/meeniDev/meeniFX/releases/tag/v0.1.0-alpha.6)
 
 Each published release contains:
 
@@ -21,9 +21,10 @@ Each published release contains:
 - `meeniFX-Studios-<version>-Windows-Portable.zip` - no installation required.
 - `SHA256SUMS.txt` - checksums for both downloads.
 
-Installed builds can update themselves from inside the app. Portable builds are updated by
-replacing the extracted folder with a newer ZIP; your projects and preferences live outside
-it.
+Installed builds update themselves from inside the app: a detected release downloads in
+the background, is checksum-verified, and waits for **Restart and Install**. Portable builds
+are updated by replacing the extracted folder with a newer ZIP; your projects and
+preferences live outside it.
 
 **Windows only for now. Linux support is planned but not officially supported yet.**
 Windows 10 or 11, 64-bit. The installed application does not require Python.

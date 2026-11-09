@@ -101,7 +101,8 @@ class UpdatesDialog(QDialog):
         super().__init__(parent)
         self.manager = manager
         self._update = manager.pending_update
-        self._downloading = False
+        self._downloading = bool(getattr(manager, "downloading", False))
+        self._ready_path = getattr(manager, "ready_path", None)
         self.setWindowTitle("Updates")
         self.setMinimumWidth(600)
         self.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
@@ -221,6 +222,14 @@ class UpdatesDialog(QDialog):
             self._show_update(update)
         elif self.manager.last_result is not None:
             self._report(self.manager.last_result)
+        if self._ready_path and os.path.isfile(self._ready_path):
+            self.status.setText("Download verified. Restart and install when you are ready.")
+            self.status.setStyleSheet(f"color:{COLORS['text']};")
+        elif self._downloading:
+            self.progress.setVisible(True)
+            self.progress.setRange(0, 0)
+            self.status.setText("Downloading the installer in the background\u2026")
+            self.status.setStyleSheet(f"color:{COLORS['muted']};")
         self._sync_buttons()
 
     def _show_update(self, update):
@@ -249,23 +258,34 @@ class UpdatesDialog(QDialog):
             return
         self._show_update(result.update)
 
+    def _ready(self):
+        return bool(self._ready_path and os.path.isfile(self._ready_path))
+
     def _sync_buttons(self):
         busy = self._downloading
+        ready = self._ready()
         self.check_button.setEnabled(not busy)
-        self.download_button.setEnabled(self._update is not None and not busy
-                                        and self._update.checksums is not None)
-        if self._update is not None and self._update.checksums is None:
+        self.download_button.setText("Restart and Install" if ready else "Download and Install")
+        self.download_button.setEnabled(
+            not busy and (ready or (self._update is not None
+                                    and self._update.checksums is not None)))
+        if ready:
+            self.download_button.setToolTip(
+                "Close meeniFX Studios, install the verified update and reopen it.")
+        elif self._update is not None and self._update.checksums is None:
             self.download_button.setToolTip(
                 "This release does not publish SHA256SUMS.txt, so it cannot be verified.")
         else:
             self.download_button.setToolTip("")
         self.cancel_button.setVisible(busy)
         self.remind_button.setEnabled(self._update is not None and not busy)
-        self.skip_button.setEnabled(self._update is not None and not busy)
+        self.skip_button.setEnabled(self._update is not None and not busy and not ready)
         self.github_button.setEnabled(True)
 
     # ------------------------------------------------------------------ actions
     def check_now(self):
+        if self._downloading:
+            return
         if self.manager.check(manual=True):
             self.status.setText("Checking GitHub Releases\u2026")
             self.status.setStyleSheet(f"color:{COLORS['muted']};")
@@ -273,6 +293,9 @@ class UpdatesDialog(QDialog):
     def start_download(self):
         update = self._update or self.manager.pending_update
         if update is None:
+            return
+        if self._ready():
+            install_update(self.parent(), self._ready_path, update)
             return
         if not self.manager.download(update):
             self.status.setText("The download could not be started.")
@@ -330,13 +353,11 @@ class UpdatesDialog(QDialog):
 
     def _on_download_ready(self, path, update):
         self._downloading = False
+        self._ready_path = path
         self.progress.setVisible(False)
         self._sync_buttons()
-        self.status.setText("Download verified. Preparing to install\u2026")
-        window = self.parent()
-        if window is None:
-            return
-        install_update(window, path, update)
+        self.status.setText("Download verified. Click Restart and Install when you are ready.")
+        self.status.setStyleSheet(f"color:{COLORS['text']};")
 
     def _on_download_failed(self, kind, message):
         self._downloading = False
@@ -349,6 +370,6 @@ class UpdatesDialog(QDialog):
         self.status.setStyleSheet(f"color:{COLORS['warning']};")
 
     def closeEvent(self, event):
-        if self._downloading:
-            self.manager.cancel_download()
+        # Closing this page must not cancel a background update download. The explicit
+        # Cancel Download button and quitting the application are the ways to stop it.
         super().closeEvent(event)

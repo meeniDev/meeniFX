@@ -7,6 +7,24 @@ usable and tested, but unfinished, and some features are still experimental.
 
 _Nothing yet._
 
+## 0.1.0-alpha.6 - 9 November 2026
+
+### Added
+
+- An integrated updater for installed builds. A detected release downloads in the
+  background, is verified against the release checksum, and changes the update notice to
+  **Restart and Install**. One click saves the project, installs silently and reopens the
+  new version, so updates no longer stop at detection or require a manual download.
+- **Download updates automatically** in Preferences > Updates. Background downloads keep
+  running when the Updates page closes and are reused after a restart.
+
+### Fixed
+
+- The updater no longer cancels a background download just because the Updates page was
+  closed. Only **Cancel Download** or quitting the application stops it.
+- A skipped or postponed version is not downloaded automatically, while a manual check
+  can still fetch it.
+
 ## 0.1.0-alpha.5 - 9 November 2026
 
 ### Fixed

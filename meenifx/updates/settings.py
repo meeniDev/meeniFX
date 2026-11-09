@@ -52,6 +52,7 @@ def _flag(value):
 @dataclass
 class UpdateSettings:
     auto_check: bool = True
+    auto_download: bool = True
     channel: str = "alpha"
     skipped: list = field(default_factory=list)
     remind_after: str = ""
@@ -76,6 +77,7 @@ class UpdateSettings:
         channel = str(store.value(PREFIX + "channel", "alpha") or "alpha").lower()
         return cls(
             auto_check=_flag(store.value(PREFIX + "autoCheck", True)),
+            auto_download=_flag(store.value(PREFIX + "autoDownload", True)),
             channel=channel if channel in CHANNELS else "alpha",
             skipped=[str(item) for item in skipped if str(item).strip()],
             remind_after=str(store.value(PREFIX + "remindAfter", "") or ""),
@@ -89,6 +91,7 @@ class UpdateSettings:
         if store is None:
             store = _default_store()
         store.setValue(PREFIX + "autoCheck", bool(self.auto_check))
+        store.setValue(PREFIX + "autoDownload", bool(self.auto_download))
         store.setValue(PREFIX + "channel", self.channel if self.channel in CHANNELS else "alpha")
         store.setValue(PREFIX + "skipped", json.dumps(sorted(set(self.skipped))))
         store.setValue(PREFIX + "remindAfter", self.remind_after)

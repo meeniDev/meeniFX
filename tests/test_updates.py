@@ -229,19 +229,21 @@ def test_a_stale_cache_is_refetched(tmp_path):
 def test_defaults_are_automatic_checks_on_the_alpha_channel():
     settings = UpdateSettings.load(Store())
     assert settings.auto_check is True
+    assert settings.auto_download is True
     assert settings.channel == "alpha"
     assert settings.skipped == []
 
 
-def test_skipped_versions_and_channels_persist(tmp_path):
+def test_skipped_versions_channels_and_auto_download_persist(tmp_path):
     store = Store()
     settings = UpdateSettings.load(store)
     settings.channel = "stable"
     settings.auto_check = False
+    settings.auto_download = False
     settings.skip("0.1.0-alpha.2")
     settings.save(store)
     loaded = UpdateSettings.load(store)
-    assert (loaded.channel, loaded.auto_check) == ("stable", False)
+    assert (loaded.channel, loaded.auto_check, loaded.auto_download) == ("stable", False, False)
     assert loaded.is_skipped("0.1.0-alpha.2")
 
 

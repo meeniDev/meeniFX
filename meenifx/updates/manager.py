@@ -9,12 +9,13 @@ channel) are written to the application INI, never to a project file.
 from __future__ import annotations
 
 import tempfile
+import threading
 from pathlib import Path
 
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal
 
 from ..version import VERSION
-from . import download
+from . import download, installer
 from .service import ReleaseService
 from .settings import UpdateSettings
 
@@ -80,6 +81,12 @@ class _DownloadJob(QRunnable):
                 raise download.DownloadError(
                     "checksum", "The release checksum file does not list this installer.")
             target = download_folder() / update.installer.name
+            if target.is_file():
+                # A previous check may have completed this exact download already.
+                ok, _actual = download.verify_file(target, digest)
+                if ok:
+                    self.signals.done.emit(str(target), update)
+                    return
             path = download.download(
                 update.installer.url, target, digest,
                 expected_size=update.installer_size,
@@ -114,6 +121,9 @@ class UpdateManager(QObject):
         self.pending_update = None
         self.last_result = None
         self.checked = False
+        self.ready_path = None
+        self.ready_update = None
+        self.downloading = False
         self._check_job = None
         self._download_job = None
         self._cancel = None
@@ -137,12 +147,27 @@ class UpdateManager(QObject):
         self.checked = True
         if result.ok:
             self.pending_update = result.update
+            if result.update is None:
+                self.ready_path = None
+                self.ready_update = None
             self.settings.mark_checked()
             self.settings.save(self.store)
             if result.update is not None and self.settings.should_notify(result.update,
                                                                          manual=manual):
                 self.update_available.emit(result.update)
         self.check_finished.emit(result)
+        if result.ok and result.update is not None:
+            # Start the transfer after the page has shown the available release, so its
+            # status settles on "downloading" rather than being overwritten.
+            self._maybe_auto_download(result.update, manual=manual)
+
+    def _maybe_auto_download(self, update, manual=False):
+        """Start the download as soon as an update is noticed, for installed builds."""
+        if not self.settings.auto_download or not installer.can_auto_install():
+            return
+        if not self.settings.should_notify(update, manual=manual):
+            return
+        self.download(update)
 
     def remind_later(self):
         self.settings.remind_later()
@@ -159,18 +184,22 @@ class UpdateManager(QObject):
         update = update or self.pending_update
         if update is None or self._download_job is not None:
             return False
+        if (self.ready_update is not None and self.ready_update.version_text == update.version_text
+                and self.ready_path and Path(self.ready_path).is_file()):
+            self.download_ready.emit(self.ready_path, update)
+            return True
         if update.checksums is None:
             self.download_failed.emit(
                 "checksum", "This release does not publish a checksum file, so the "
                             "installer cannot be verified.")
             return False
-        import threading
         self._cancel = threading.Event()
         job = _DownloadJob(update, self._cancel, opener=opener)
         self._download_job = job
         job.signals.progress.connect(self.download_progress.emit)
         job.signals.done.connect(self._on_downloaded)
         job.signals.failed.connect(self._on_download_failed)
+        self.downloading = True
         self.download_started.emit()
         QThreadPool.globalInstance().start(job)
         return True
@@ -182,9 +211,13 @@ class UpdateManager(QObject):
     def _on_downloaded(self, path, update):
         self._download_job = None
         self._cancel = None
+        self.downloading = False
+        self.ready_path = str(path)
+        self.ready_update = update
         self.download_ready.emit(path, update)
 
     def _on_download_failed(self, kind, message):
         self._download_job = None
         self._cancel = None
+        self.downloading = False
         self.download_failed.emit(kind, message)

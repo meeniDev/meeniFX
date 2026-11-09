@@ -16,9 +16,11 @@ If it does not list an Alpha build yet, use the portable ZIP or run from source.
    `%LOCALAPPDATA%\Programs\meeniFX Studios`, so no administrator password is needed.
 4. Launch **meeniFX Studios** from the Start Menu, or from the optional desktop shortcut.
 
-The installed build can update itself from inside the application. Updates are downloaded
-to a temporary folder, checked against the release's `SHA256SUMS.txt`, and installed only
-after you confirm.
+The installed build updates itself from inside the application. When a newer release is
+found, the installer downloads in the background, is checked against the release's
+`SHA256SUMS.txt`, and changes the update notice to **Restart and Install**. One click saves
+your work, installs the verified update and reopens the new version. Automatic downloads
+are on by default and can be switched off in Preferences > Updates.
 
 ### Portable ZIP
 
@@ -55,12 +57,16 @@ embedded, so keep the original files where they are (or use Relink if they move)
 ## Updates and the Alpha channel
 
 Updates are checked automatically in the background, at most once every few hours. The
-default channel is **Alpha**, which includes prereleases. Preferences > Updates lets you
-turn automatic checks off, change the channel, clear skipped versions, or open the Updates
-page.
+default channel is **Alpha**, which includes prereleases. Installed builds also download a
+found update automatically, then wait for **Restart and Install**. Preferences > Updates
+lets you turn automatic checks or automatic downloads off, change the channel, clear
+skipped versions, or open the Updates page.
 
+- **Restart and Install** saves your work, closes the editor and runs the verified
+  installer. The new version opens when the install finishes.
 - **Remind Me Later** hides the notice for 24 hours.
-- **Skip This Version** hides that exact version; a newer version will still be offered.
+- **Skip This Version** hides and does not download that exact version; a newer version
+  will still be offered.
 - A manual **Check for Updates** always overrides both.
 - What's New appears once after an update and stays available under **Help > What's New**.
 

@@ -26,6 +26,11 @@ def test_the_installer_is_per_user_and_uses_the_generated_version():
     assert "SetupIconFile=..\\assets\\icon.ico" in text
     assert "DefaultDirName={localappdata}\\Programs\\meeniFX Studios" in text
     assert "UninstallDisplayIcon" in text
+    # A silent in-app update must reopen the new build after the install.
+    run_section = text.split("[Run]", 1)[1].split("[UninstallDelete]", 1)[0]
+    assert 'Filename: "{app}\\{#MyAppExeName}"' in run_section
+    assert "Flags: nowait" in run_section
+    assert "skipifsilent" not in run_section.lower()
     # Upgrades must not remove user projects, presets or settings.
     assert "{userdocs}" not in text.lower()
     assert "UninstallDelete" in text

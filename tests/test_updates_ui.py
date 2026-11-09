@@ -43,6 +43,9 @@ class StubManager(QObject):
         self.settings.last_check = "2026-11-08T10:00:00+00:00"
         self.pending_update = update
         self.last_result = None
+        self.ready_path = None
+        self.ready_update = None
+        self.downloading = False
         self.calls = []
 
     def check(self, manual=False):
@@ -110,6 +113,28 @@ def test_checking_and_downloading_go_through_the_manager(qapp):
         dialog.close()
 
 
+def test_a_verified_download_turns_the_button_into_restart_and_install(qapp, monkeypatch,
+                                                                        tmp_path):
+    update = build_update()
+    manager = StubManager(update)
+    path = tmp_path / "setup.exe"
+    path.write_bytes(b"installer")
+    manager.ready_path = str(path)
+    manager.ready_update = update
+    calls = []
+    monkeypatch.setattr("meenifx.ui.updates_dialog.install_update",
+                        lambda parent, installer_path, info: calls.append(
+                            (installer_path, info.version_text)))
+    dialog = UpdatesDialog(manager, None)
+    try:
+        assert dialog.download_button.text() == "Restart and Install"
+        assert "verified" in dialog.status.text().lower()
+        dialog.start_download()
+        assert calls == [(str(path), update.version_text)]
+    finally:
+        dialog.close()
+
+
 def test_a_failed_check_explains_itself_without_closing_the_editor(qapp):
     manager = StubManager()
     dialog = UpdatesDialog(manager, None)
@@ -121,25 +146,28 @@ def test_a_failed_check_explains_itself_without_closing_the_editor(qapp):
         dialog.close()
 
 
-def test_the_notice_is_non_modal_and_offers_the_three_choices(qapp):
+def test_the_notice_moves_from_available_to_downloading_to_ready(qapp):
     notice = UpdateNotice(None)
     seen = []
     notice.view_requested.connect(lambda: seen.append("view"))
+    notice.install_requested.connect(lambda: seen.append("install"))
+    notice.cancel_requested.connect(lambda: seen.append("cancel"))
     notice.remind_requested.connect(lambda: seen.append("remind"))
     notice.skip_requested.connect(lambda: seen.append("skip"))
     notice.show_update(build_update())
     try:
         assert "0.1.0-alpha.2" in notice.title.text()
         assert "Alpha" in notice.title.text()
-        texts = {button.text() for button in notice.findChildren(
-            __import__("PyQt6.QtWidgets", fromlist=["QPushButton"]).QPushButton)}
-        assert {"View Update", "Remind Me Later", "Skip This Version"} <= {t for t in texts}
-        for button in notice.findChildren(
-                __import__("PyQt6.QtWidgets", fromlist=["QPushButton"]).QPushButton):
-            if button.text() == "Remind Me Later":
-                button.click()
-        assert seen == ["remind"]
-        assert not notice.isVisible()
+        assert notice.primary.text() == "View Update"
+        assert notice.secondary.text() == "Remind Me Later"
+        notice.show_downloading(build_update(), 12 * 1024 * 1024 // 2, 12 * 1024 * 1024)
+        assert "6.0 of 12.0 MB" in notice.detail.text()
+        assert notice.secondary.text() == "Cancel Download"
+        notice.show_ready(build_update())
+        assert "ready to install" in notice.title.text()
+        assert notice.primary.text() == "Restart and Install"
+        notice.primary.click()
+        assert seen == ["install"]
     finally:
         notice.close()
 
@@ -201,6 +229,58 @@ def test_the_manager_saves_the_state_and_respects_skip_unless_manual(qapp):
     assert manager.last_result is result
 
 
+def test_an_installed_build_downloads_an_available_update_automatically(qapp, monkeypatch, tmp_path):
+    from meenifx.updates import installer as installer_module
+    from meenifx.updates.manager import UpdateManager
+
+    update = build_update()
+    result = CheckResult(update, None, False)
+    manager = UpdateManager(store=DictStore(), service=FakeService(result),
+                            settings=UpdateSettings(auto_download=True))
+    monkeypatch.setattr(installer_module, "can_auto_install", lambda: True)
+    downloads = []
+    manager.download = lambda update=None, opener=None: downloads.append(
+        update.version_text) or True
+    manager._on_checked(result, manual=False)
+    assert downloads == [update.version_text]
+
+
+def test_auto_download_can_be_disabled_or_respects_a_skipped_version(qapp, monkeypatch):
+    from meenifx.updates import installer as installer_module
+    from meenifx.updates.manager import UpdateManager
+
+    update = build_update()
+    result = CheckResult(update, None, False)
+    monkeypatch.setattr(installer_module, "can_auto_install", lambda: True)
+    for settings, manual in ((UpdateSettings(auto_download=False), False),
+                             (UpdateSettings(auto_download=True), False)):
+        if settings.auto_download:
+            settings.skip(update.version_text)
+        manager = UpdateManager(store=DictStore(), service=FakeService(result), settings=settings)
+        downloads = []
+        manager.download = lambda update=None, opener=None: downloads.append(update) or True
+        manager._on_checked(result, manual=manual)
+        assert downloads == []
+
+
+def test_a_completed_download_is_remembered_as_ready(qapp, tmp_path):
+    from meenifx.updates.manager import UpdateManager
+
+    update = build_update()
+    path = tmp_path / "setup.exe"
+    path.write_bytes(b"installer")
+    manager = UpdateManager(store=DictStore(), service=FakeService(CheckResult(update)),
+                            settings=UpdateSettings())
+    ready = []
+    manager.download_ready.connect(lambda path, info: ready.append((path, info.version_text)))
+    manager._on_downloaded(str(path), update)
+    assert manager.ready_update is update
+    assert manager.ready_path == str(path)
+    assert ready == [(str(path), update.version_text)]
+    assert manager.download(update) is True
+    assert ready[-1] == (str(path), update.version_text)
+
+
 def test_the_manager_refuses_a_release_without_checksums(qapp):
     from meenifx.updates.manager import UpdateManager
 
@@ -233,6 +313,9 @@ def test_the_main_window_exposes_the_updates_page_and_help_entries(qapp):
         assert "About meeniFX Studios" in labels
         window._on_update_available(build_update())
         assert "0.1.0-alpha.2" in window.update_notice.title.text()
+        window._on_update_ready("setup.exe", build_update())
+        assert window.update_notice.state == "ready"
+        assert window.update_notice.primary.text() == "Restart and Install"
         window.update_notice.hide()
     finally:
         window.close()
@@ -245,6 +328,7 @@ def test_preferences_carries_the_updates_section(qapp):
     dialog = PreferencesDialog(None)
     try:
         assert dialog.update_auto.text() == "Check for updates automatically"
+        assert dialog.update_auto_download.text() == "Download updates automatically"
         assert dialog.update_channel.currentData() in ("alpha", "stable")
         assert dialog.update_channel.count() == 2
         assert dialog.update_skipped.text()
