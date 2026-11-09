@@ -7,6 +7,17 @@ usable and tested, but unfinished, and some features are still experimental.
 
 _Nothing yet._
 
+## 0.1.0-alpha.8 - 9 November 2026
+
+### Fixed
+
+- **Opening the app repeatedly no longer puts a pile of windows on screen.** meeniFX
+  Studios now runs as one per-user instance. A second shortcut click, file association or
+  installer relaunch brings the existing window forward instead of creating another one.
+  A project passed to the second launch opens in that window after the normal save prompt.
+- **The installer relaunch cannot stack copies.** Inno Setup still reopens the app after a
+  silent update, but duplicate instances now exit immediately.
+
 ## 0.1.0-alpha.7 - 9 November 2026
 
 ### Fixed

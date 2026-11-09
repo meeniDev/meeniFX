@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import QApplication
 
 from . import crashlog
 from .project import storage
+from .single_instance import SingleInstance
 from .ui.branding import app_icon
 from .ui.dialogs import CrashReportDialog
 from .ui.filedialogs import open_file
@@ -161,6 +162,17 @@ class AppController:
                 # The tour points at real panels, so wait until the editor is on screen.
                 QTimer.singleShot(650,self.window.maybe_show_onboarding)
 
+    def activate(self, path=""):
+        """Bring the running window forward, opening a project sent by a second launch."""
+        if path and os.path.isfile(path) and storage.is_project_file(path):
+            self.open_project(path)
+        target = self.window if self.window.isVisible() else self.start
+        if target.isMinimized():
+            target.showNormal()
+        target.show()
+        target.raise_()
+        target.activateWindow()
+
     def open_project(self, path):
         ok = self.projects.open_path(path)
         if not self.projects.is_open and not self.window.isVisible():
@@ -197,6 +209,13 @@ def parse_no_recent(argv):
     return remaining, len(remaining) != len(args)
 
 
+def requested_project(argv):
+    """The first real project path on the command line, for the first or existing window."""
+    args, _quiet = parse_no_recent(argv)
+    return next((path for path in args
+                 if storage.is_project_file(path) and os.path.isfile(path)), "")
+
+
 def install_exception_log():
     """Route every unhandled exception to the crash log, then to the previous hook.
 
@@ -214,10 +233,15 @@ def main():
     app.setOrganizationName("meeniFX")
     app.setApplicationName("Studios")
     app.setWindowIcon(app_icon())
+    instance = SingleInstance()
+    if not instance.acquire(requested_project(sys.argv[1:])):
+        return 0
     from .theme import configure_theme, resolve_theme
     from .ui.layout import app_settings
     configure_theme(app,resolve_theme(app,app_settings().value("ui/theme","light")))
     controller=AppController(app,sys.argv[1:])  # noqa: F841 - keeps the windows alive
+    instance.activation_requested.connect(controller.activate)
+    app.aboutToQuit.connect(instance.close)
     return app.exec()
 
 
