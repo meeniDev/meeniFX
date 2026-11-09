@@ -5,7 +5,6 @@ import os
 import threading
 
 import cv2
-import imageio.v2 as imageio
 import numpy as np
 
 from .config import DEFAULT_TILE_PATHS
@@ -38,6 +37,7 @@ from .model.values import Value
 from .model import presets as preset_model
 from .model import shape as shape_model
 from .model import text as text_model
+from .processing import gif_export
 from .processing import layers as layer_ops
 from .processing import shapes as shape_render
 from .processing import text as text_render
@@ -112,6 +112,10 @@ class EditorEngine:
         self.render_height = Value(720)
         self.render_output_path = Value("")
         self.render_format = Value("mp4")
+        self.render_gif_loop = Value("forever")
+        self.render_gif_loops = Value(2)
+        self.render_gif_colors = Value(256)
+        self.render_gif_dither = Value("floyd")
         self.frame_use_source_size = Value(True)
         self.frame_width = Value(1280)
         self.frame_height = Value(720)
@@ -1024,7 +1028,26 @@ class EditorEngine:
                                                    settings.get("range_end"))
         if not indices:
             raise ValueError("The selected export range has no frames.")
-        fps = self.project_fps if settings.get("use_source_fps", True) else max(1, int(settings.get("fps", 30)))
+        requested_fps = (self.project_fps if settings.get("use_source_fps", True)
+                         else max(1, int(settings.get("fps", 30))))
+        fps = requested_fps
+        render_indices = indices
+        gif_timing = None
+        gif_frames = []
+        if fmt == "gif":
+            # GIF timing is derived from the timeline range, never from rendering time.
+            # A lower export rate resamples the timeline instead of stretching every
+            # source frame to a longer delay.
+            try:
+                gif_fps = float(self.project_fps if settings.get("use_source_fps", True)
+                                else settings.get("fps", 30))
+            except (TypeError, ValueError):
+                gif_fps = 30.0
+            gif_fps = max(0.1, gif_fps)
+            timeline_fps = max(1e-6, float(self.project_fps or self.timeline.fps or 30.0))
+            gif_timing = gif_export.plan_timing(len(indices) / timeline_fps, gif_fps)
+            render_indices = gif_export.sample_source_indices(indices, gif_timing.frame_count)
+            fps = gif_timing.effective_fps
         width, height = self.render_dimensions(settings.get("use_source_size", True),
                                                settings.get("width", self.source_width),
                                                settings.get("height", self.source_height))
@@ -1038,10 +1061,9 @@ class EditorEngine:
                 writer = self._open_video_writer(video_path, fmt, float(fps), (width, height))
                 writer_type = "video"
             elif fmt == "gif":
-                writer = imageio.get_writer(path, mode="I", duration=1.0 / max(1.0, float(fps)), loop=0)
                 writer_type = "gif"
             final = None
-            for index, frame_no in enumerate(indices):
+            for index, frame_no in enumerate(render_indices):
                 if cancelled and cancelled():
                     raise InterruptedError("Export cancelled")
                 raw, processed = self.render_frame(frame_no)
@@ -1051,12 +1073,19 @@ class EditorEngine:
                 if writer_type == "video":
                     writer.write(processed)
                 elif writer_type == "gif":
-                    writer.append_data(cv2.cvtColor(processed, cv2.COLOR_BGR2RGB))
+                    gif_frames.append(processed.copy())
                 if progress:
-                    progress(index + 1, len(indices), final)
+                    progress(index + 1, len(render_indices), final)
             if writer_type == "image":
                 if final is None or not cv2.imwrite(path, final):
                     raise OSError("Could not write image output.")
+            elif writer_type == "gif":
+                gif_export.write_gif(
+                    path, gif_frames, gif_timing.delays_cs,
+                    loop=gif_export.loop_parameter(settings.get("gif_loop", "forever"),
+                                                    settings.get("gif_loops", 2)),
+                    colors=settings.get("gif_colors", 256),
+                    dither=settings.get("gif_dither", "floyd"))
             if with_audio:
                 from .audio.export_mix import mux, render_wav
                 wav_path = path + ".audio.tmp.wav"
@@ -1074,11 +1103,9 @@ class EditorEngine:
         finally:
             if writer_type == "video" and writer is not None:
                 writer.release()
-            elif writer_type == "gif" and writer is not None:
-                writer.close()
             if with_audio and os.path.exists(video_path):
                 try:
                     os.remove(video_path)
                 except OSError:
                     pass
-        return path, len(indices), float(fps), (width, height)
+        return path, len(render_indices), float(fps), (width, height)

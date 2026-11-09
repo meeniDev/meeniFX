@@ -4,7 +4,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QIcon, QPixmap
 from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
                              QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-                             QPlainTextEdit, QPushButton, QVBoxLayout)
+                             QPlainTextEdit, QPushButton, QVBoxLayout, QWidget)
 
 from .. import tokens
 from ..config import APP_TITLE, APP_VERSION
@@ -92,6 +92,58 @@ class ExportDialog(QDialog):
         form.addRow(self.width)
         form.addRow(self.height)
         form.addRow("Format",self.format)
+        self.gif_box=QWidget()
+        gif_form=QFormLayout(self.gif_box)
+        gif_form.setContentsMargins(0,0,0,0)
+        self.gif_rate=QComboBox()
+        self.gif_rate.addItems(["Project FPS","10","15","20","24","30","Custom"])
+        self.gif_rate.setToolTip("GIF frame rate. Rates above 50 fps are capped so common viewers do not stretch short delays.")
+        stored_fps=float(engine.render_fps.get())
+        if engine.render_use_source_fps.get():
+            self.gif_rate.setCurrentText("Project FPS")
+        elif any(abs(stored_fps-value)<1e-6 for value in (10,15,20,24,30)):
+            self.gif_rate.setCurrentText(str(int(stored_fps)))
+        else:
+            self.gif_rate.setCurrentText("Custom")
+        self.gif_loop=QComboBox()
+        for label,value in (("Forever","forever"),("Once","once"),("Custom","custom")):
+            self.gif_loop.addItem(label,value)
+        loop_index=self.gif_loop.findData(engine.render_gif_loop.get())
+        self.gif_loop.setCurrentIndex(max(0,loop_index))
+        self.gif_loops=ScrubField("Repeats", engine.render_gif_loops.get(), 1, 10000,
+                                  default=2, step=1, unit="x",
+                                  tooltip="Additional loops stored in the GIF (Custom loop mode)")
+        self.gif_colors=QComboBox()
+        for label,value in (("256 colors (best)",256),("128 colors",128),
+                            ("64 colors",64),("32 colors (smallest)",32)):
+            self.gif_colors.addItem(label,value)
+        color_index=self.gif_colors.findData(int(engine.render_gif_colors.get()))
+        self.gif_colors.setCurrentIndex(max(0,color_index))
+        self.gif_dither=QComboBox()
+        self.gif_dither.addItem("Floyd-Steinberg","floyd")
+        self.gif_dither.addItem("None","none")
+        dither_index=self.gif_dither.findData(engine.render_gif_dither.get())
+        self.gif_dither.setCurrentIndex(max(0,dither_index))
+        self.gif_alpha=QCheckBox("Transparent background")
+        self.gif_alpha.setEnabled(False)
+        self.gif_alpha.setToolTip("GIF export is flattened onto the project background; transparency is not available for this composite.")
+        self.gif_warning=QLabel("GIF is limited to 256 colours and 1/100-second frame delays. "
+                                "Rates above 50 fps are capped so common viewers do not turn short delays into slow motion.")
+        self.gif_warning.setWordWrap(True)
+        muted_text(self.gif_warning)
+        gif_form.addRow("GIF frame rate",self.gif_rate)
+        gif_form.addRow("Loop",self.gif_loop)
+        gif_form.addRow(self.gif_loops)
+        gif_form.addRow("Colours",self.gif_colors)
+        gif_form.addRow("Dithering",self.gif_dither)
+        gif_form.addRow(self.gif_alpha)
+        gif_form.addRow(self.gif_warning)
+        form.addRow(self.gif_box)
+        self.format.currentTextChanged.connect(self._sync_format)
+        self.gif_rate.currentTextChanged.connect(self._apply_gif_rate)
+        self.gif_loop.currentIndexChanged.connect(self._sync_loop)
+        self.fps.committed.connect(self._fps_edited)
+        self._sync_format(self.format.currentText())
         if export_range:
             start, end = export_range
             range_label = QLabel(span_text(start, end, engine.timeline.fps))
@@ -105,6 +157,38 @@ class ExportDialog(QDialog):
         buttons.accepted.connect(self.accept); buttons.rejected.connect(self.reject)
         layout=QVBoxLayout(self); layout.addLayout(form); layout.addWidget(buttons)
 
+    def _sync_format(self, fmt):
+        is_gif = str(fmt).lower() == "gif"
+        self.gif_box.setVisible(is_gif)
+        if is_gif:
+            self._apply_gif_rate(self.gif_rate.currentText())
+            self._sync_loop()
+        else:
+            self.fps.setEnabled(True)
+            self.use_source_fps.setEnabled(True)
+
+    def _apply_gif_rate(self, text):
+        if self.format.currentText().lower() != "gif":
+            return
+        self.use_source_fps.setEnabled(False)
+        if text == "Project FPS":
+            self.use_source_fps.setChecked(True)
+            self.fps.setEnabled(False)
+        elif text in {"10","15","20","24","30"}:
+            self.use_source_fps.setChecked(False)
+            self.fps.set_value(float(text))
+            self.fps.setEnabled(False)
+        else:
+            self.use_source_fps.setChecked(False)
+            self.fps.setEnabled(True)
+
+    def _fps_edited(self, _value):
+        if self.format.currentText().lower() == "gif" and self.gif_rate.currentText() != "Custom":
+            self.gif_rate.setCurrentText("Custom")
+
+    def _sync_loop(self):
+        self.gif_loops.setEnabled(self.gif_loop.currentData() == "custom")
+
     def _browse(self):
         ext=self.format.currentText()
         path=save_file(self,"Choose render output",self.path.text(),
@@ -113,17 +197,35 @@ class ExportDialog(QDialog):
 
     def settings(self):
         engine=self.engine
-        engine.render_use_source_fps.set(self.use_source_fps.isChecked())
-        engine.render_fps.set(self.fps.value())
+        fmt=self.format.currentText()
+        use_source_fps=self.use_source_fps.isChecked()
+        fps_value=self.fps.value()
+        if fmt.lower()=="gif":
+            rate=self.gif_rate.currentText()
+            if rate=="Project FPS":
+                use_source_fps=True
+            elif rate in {"10","15","20","24","30"}:
+                use_source_fps=False; fps_value=float(rate)
+            else:
+                use_source_fps=False
+        engine.render_use_source_fps.set(use_source_fps)
+        engine.render_fps.set(fps_value)
         engine.render_use_source_size.set(self.use_source_size.isChecked())
         engine.render_width.set(self.width.value())
         engine.render_height.set(self.height.value())
         engine.render_output_path.set(self.path.text())
-        engine.render_format.set(self.format.currentText())
+        engine.render_format.set(fmt)
+        loop_mode=self.gif_loop.currentData() or "forever"
+        engine.render_gif_loop.set(loop_mode)
+        engine.render_gif_loops.set(self.gif_loops.value())
+        engine.render_gif_colors.set(self.gif_colors.currentData())
+        engine.render_gif_dither.set(self.gif_dither.currentData())
         start, end = self.export_range if self.export_range else (0, None)
-        return {"use_source_fps":self.use_source_fps.isChecked(),"fps":self.fps.value(),
+        return {"use_source_fps":use_source_fps,"fps":fps_value,
                 "use_source_size":self.use_source_size.isChecked(),"width":self.width.value(),
-                "height":self.height.value(),"output_path":self.path.text(),"format":self.format.currentText(),
+                "height":self.height.value(),"output_path":self.path.text(),"format":fmt,
+                "gif_loop":loop_mode,"gif_loops":self.gif_loops.value(),
+                "gif_colors":self.gif_colors.currentData(),"gif_dither":self.gif_dither.currentData(),
                 "range_start":start,"range_end":end}
 
 
