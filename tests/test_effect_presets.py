@@ -15,6 +15,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtGui import QColor  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QComboBox  # noqa: E402
 
 from meenifx.engine import EditorEngine  # noqa: E402
@@ -251,6 +252,25 @@ def test_glow_preset_writes_editable_values_in_one_undo_step(editor):
     pump(0.05)
     assert glow["params"]["radius"] == 73.0
     assert not isinstance(glow["params"]["radius"], AnimatedValue)
+
+
+def test_chroma_key_colour_row_writes_three_channels_in_one_undo_step(editor):
+    window, clip = editor
+    window.effects_panel.add_effect("chroma_key")
+    pump(0.05)
+    entry = next(item for item in clip.effects if item["effect_id"] == "chroma_key")
+    row = next(row for row in window.effects_panel._rows
+               if row.get("kind") == "key_color")
+    before = undo_count(window)
+
+    window.effects_panel.set_color(clip, entry, QColor(0, 71, 187), row["names"],
+                                   "Key color")
+    pump(0.05)
+
+    assert entry["params"]["key_r"] == 0
+    assert entry["params"]["key_g"] == 71
+    assert entry["params"]["key_b"] == 187
+    assert undo_count(window) == before + 1
 
 
 def test_bool_and_text_parameters_are_undoable_too(editor):

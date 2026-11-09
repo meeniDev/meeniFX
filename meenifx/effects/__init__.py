@@ -2,10 +2,11 @@
 
 from .blur import BLUR_EFFECTS
 from .builtins import AsciiEffect, BlobTrackerEffect, FaceTrackerEffect, HandTrackerEffect, MosaicEffect
+from .chroma import ChromaKeyEffect
 from .color import ColorCorrectEffect
 from .glow import GlowEffect
 from .matte import SimpleChokerEffect
 
 __all__ = ["AsciiEffect", "BlobTrackerEffect", "FaceTrackerEffect", "HandTrackerEffect",
-           "MosaicEffect", "BLUR_EFFECTS", "ColorCorrectEffect", "GlowEffect",
-           "SimpleChokerEffect"]
+           "MosaicEffect", "BLUR_EFFECTS", "ChromaKeyEffect", "ColorCorrectEffect",
+           "GlowEffect", "SimpleChokerEffect"]

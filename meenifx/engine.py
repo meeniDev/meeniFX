@@ -15,6 +15,7 @@ from .effects.blur import (BoxBlurEffect, DirectionalBlurEffect, GaussianBlurEff
 from .effects.color import ColorCorrectEffect
 from .effects.glitch import (BulgePinchEffect, ChromaticAberrationEffect, GlitchEffect,
                              KaleidoscopeEffect, TwirlEffect, WaveWarpEffect)
+from .effects.chroma import ChromaKeyEffect
 from .effects.glow import GlowEffect
 from .effects.light import (BloomStreaksEffect, ExposureFlickerEffect, FlashEffect,
                             LightLeakEffect)
@@ -50,7 +51,7 @@ class EditorEngine:
 
     EFFECT_TYPES = (MosaicEffect, AsciiEffect, FaceTrackerEffect, HandTrackerEffect, BlobTrackerEffect,
                     ColorCorrectEffect, GaussianBlurEffect, BoxBlurEffect, DirectionalBlurEffect,
-                    RadialBlurEffect, ZoomBlurEffect, MotionBlurEffect, GlowEffect,
+                    RadialBlurEffect, ZoomBlurEffect, MotionBlurEffect, GlowEffect, ChromaKeyEffect,
                     PuppetWarpEffect, CornerPinEffect, PerspectiveEffect, MeshWarpEffect, SkewEffect,
                     DistortionEffect,
                     ChromaticAberrationEffect, GlitchEffect, WaveWarpEffect, BulgePinchEffect,

@@ -51,6 +51,7 @@ LABEL_W = 88
 OPEN_PROPERTY_GROUPS = ("Detection", "Visualization")
 ROTATE_STEP = 15.0      # degrees per step when rotation snapping is on
 COLOR_NAMES = ("color_r", "color_g", "color_b")
+KEY_COLOR_NAMES = ("key_r", "key_g", "key_b")
 # Every effect card carries this control; it is not part of an effect's own PARAMS table
 # because it never reaches the effect - the engine blends the result with the original.
 MIX_SPEC = ParamSpec("mix", "Mix", "float", 0.0, 100.0, 100.0, step=1.0, unit="%",
@@ -1965,6 +1966,9 @@ class EffectsPanel(QWidget):
         presets = getattr(effect, "PRESETS", None)
         if presets:
             self._effect_preset_row(form, clip, effect, entry, presets)
+        key_colors = tuple(getattr(effect, "KEY_COLOR_NAMES", ()))
+        if key_colors:
+            self._key_color_row(form, clip, effect, entry, key_colors)
         self._mix_row(form, clip, effect, entry)
         sections = {}
         color_done = False
@@ -1987,13 +1991,16 @@ class EffectsPanel(QWidget):
                     color_done = True
                     self._color_row(target, clip, effect, entry)
                 continue
+            if spec.name in key_colors:
+                continue
             self._param_row(target, clip, effect, entry, spec)
         # Advanced is one folded section at the very end of the card, after every group.
         advanced = [spec for spec in effect.param_specs() if spec.advanced]
         if advanced:
             _box, advanced_form = self._advanced_fold(form)
             for spec in advanced:
-                self._param_row(advanced_form, clip, effect, entry, spec)
+                if spec.name not in key_colors:
+                    self._param_row(advanced_form, clip, effect, entry, spec)
         # Some effects only apply to certain sources (the choker needs an alpha edge). A
         # short note under the controls says so instead of leaving a no-op card unexplained.
         note = str(getattr(effect, "NOTE", "") or "")
@@ -2288,32 +2295,68 @@ class EffectsPanel(QWidget):
         form.addWidget(box)
         return box, inner
 
-    def _entry_color(self, clip, entry):
+    def _entry_color(self, clip, entry, names=COLOR_NAMES):
         frame = self._clip_frame(clip)
         params = entry.get("params", {})
-        return QColor(*[int(parameter_value_at(params.get(n), frame) or 0) for n in COLOR_NAMES])
+        return QColor(*[int(parameter_value_at(params.get(n), frame) or 0) for n in names])
 
     def _color_row(self, form, clip, effect, entry):
         button = _swatch_button(self._entry_color(clip, entry), "Click to choose the color")
-        button.clicked.connect(lambda _=False, c=clip, e=entry, b=button: self._pick_color(c, e, b))
+        button.clicked.connect(lambda _=False, c=clip, e=entry, b=button:
+                               self._pick_color(c, e, b, COLOR_NAMES, "Color"))
         form.addWidget(self._labelled("Color", button))
         self._rows.append({"kind": "color", "clip_id": clip.id, "entry": entry, "button": button})
 
-    def _pick_color(self, clip, entry, button):
-        color = QColorDialog.getColor(self._entry_color(clip, entry), self, "Color")
-        if color.isValid():
-            self.set_color(clip, entry, color)
+    def _key_color_row(self, form, clip, effect, entry, names):
+        """The key colour swatch, with the dialog eyedropper and green/blue shortcuts."""
+        holder = QWidget()
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(tokens.SP1)
+        swatch = _swatch_button(self._entry_color(clip, entry, names),
+                                "Click to choose the key colour")
+        swatch.clicked.connect(lambda _=False, c=clip, e=entry, b=swatch:
+                               self._pick_color(c, e, b, names, "Key color"))
+        pick = QToolButton()
+        pick.setText("Pick")
+        pick.setToolTip("Choose the key colour, or use the eyedropper in the colour dialog")
+        pick.clicked.connect(lambda _=False, c=clip, e=entry, b=swatch:
+                             self._pick_color(c, e, b, names, "Key color"))
+        green = QToolButton()
+        green.setText("Green")
+        green.setToolTip("Use a standard chroma green")
+        green.clicked.connect(lambda _=False, c=clip, e=entry:
+                              self.set_color(c, e, QColor(0, 177, 64), names, "Key color"))
+        blue = QToolButton()
+        blue.setText("Blue")
+        blue.setToolTip("Use a standard chroma blue")
+        blue.clicked.connect(lambda _=False, c=clip, e=entry:
+                             self.set_color(c, e, QColor(0, 71, 187), names, "Key color"))
+        for widget in (swatch, pick, green, blue):
+            row.addWidget(widget)
+        row.addStretch(1)
+        form.addWidget(self._labelled("Key color", holder,
+                                      "Screen colour; the dialog has a screen eyedropper"))
+        self._rows.append({"kind": "key_color", "clip_id": clip.id, "entry": entry,
+                           "names": names, "button": swatch})
 
-    def set_color(self, clip, entry, color):
+    def _pick_color(self, clip, entry, button, names=COLOR_NAMES, label="Color"):
+        color = QColorDialog.getColor(
+            self._entry_color(clip, entry, names), self, label,
+            options=QColorDialog.ColorDialogOption.DontUseNativeDialog)
+        if color.isValid():
+            self.set_color(clip, entry, color, names, label)
+
+    def set_color(self, clip, entry, color, names=COLOR_NAMES, label="color"):
         """One undo step that writes all three channels (keyframing animated ones)."""
         color = QColor(color)
         self._begin_edit()
-        for name, value in zip(COLOR_NAMES, (color.red(), color.green(), color.blue())):
+        for name, value in zip(names, (color.red(), color.green(), color.blue())):
             self._set_param(clip, entry, name, value)
         before = self._edit_before
         self._edit_before = None
         if before is not None:
-            self.engine.session.stack.commit("Change color", before)
+            self.engine.session.stack.commit(f"Change {label}", before)
         self._notify()
         self.refresh_properties()
 
@@ -2425,6 +2468,10 @@ class EffectsPanel(QWidget):
             elif kind == "color":
                 if any(row["entry"] is e for e in clip.effects):
                     set_swatch(row["button"], self._entry_color(clip, row["entry"]))
+            elif kind == "key_color":
+                if any(row["entry"] is e for e in clip.effects):
+                    set_swatch(row["button"], self._entry_color(clip, row["entry"],
+                                                               row["names"]))
             elif kind == "shape_color":
                 set_swatch(row["button"], SHAPE.color_at(clip, row["name"], local))
                 row["key"].blockSignals(True)

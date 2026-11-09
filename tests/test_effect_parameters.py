@@ -96,6 +96,15 @@ CONTEXT_SWITCHES = {("gaussian_blur", "keep_edges"), ("motion_blur", "follow_mot
                     ("blob_tracker", "tracking_quality")}
 
 
+def chroma_frame(width=320, height=180):
+    """A green plate with a foreground block and a green-spill fringe."""
+    frame = np.zeros((height, width, 3), np.uint8)
+    frame[:, :] = (64, 177, 0)
+    frame[36:145, 72:248] = (120, 150, 210)
+    frame[80:102, 248:264] = (35, 178, 118)
+    return frame
+
+
 def blob_frame(width=640, height=480):
     """Black background plus blobs sized so every area range has headroom."""
     import cv2
@@ -107,7 +116,12 @@ def blob_frame(width=640, height=480):
 
 
 def _engine_for(effect_id, monkeypatch):
-    frame = blob_frame() if effect_id == "blob_tracker" else synthetic_frame()
+    if effect_id == "blob_tracker":
+        frame = blob_frame()
+    elif effect_id == "chroma_key":
+        frame = chroma_frame()
+    else:
+        frame = synthetic_frame()
     if effect_id in ALPHA_SOURCE_EFFECTS:
         frame = alpha_frame()
     engine, clip = build_engine(frame=frame)
