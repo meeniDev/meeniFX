@@ -22,6 +22,8 @@ from .effects.light import (BloomStreaksEffect, ExposureFlickerEffect, FlashEffe
 from .effects.looks import LookEffect
 from .effects.lut import LutEffect
 from .effects.matte import SimpleChokerEffect
+from .effects.roto_brush import RotoBrushEffect
+from .effects.smart_key import SmartKeyEffect
 from .effects.stylize import (DuotoneEffect, EdgeOutlineEffect, FilmGrainEffect, HalftoneEffect,
                               InvertEffect, PosterizeEffect, VhsCrtEffect, VignetteEffect)
 from .effects.temporal import EchoEffect, PosterizeTimeEffect, StutterEffect, posterize_hold
@@ -60,7 +62,7 @@ class EditorEngine:
                     EdgeOutlineEffect, DuotoneEffect, InvertEffect, VignetteEffect,
                     FlashEffect, ExposureFlickerEffect, LightLeakEffect, BloomStreaksEffect,
                     PosterizeTimeEffect, StutterEffect, EchoEffect, LutEffect, LookEffect,
-                    SimpleChokerEffect) + AUDIO_EFFECTS
+                    SimpleChokerEffect, SmartKeyEffect, RotoBrushEffect) + AUDIO_EFFECTS
 
     def __init__(self, fps=30):
         self.timeline = Timeline(fps=fps)

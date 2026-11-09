@@ -6,7 +6,9 @@ from .chroma import ChromaKeyEffect
 from .color import ColorCorrectEffect
 from .glow import GlowEffect
 from .matte import SimpleChokerEffect
+from .roto_brush import RotoBrushEffect
+from .smart_key import SmartKeyEffect
 
 __all__ = ["AsciiEffect", "BlobTrackerEffect", "FaceTrackerEffect", "HandTrackerEffect",
            "MosaicEffect", "BLUR_EFFECTS", "ChromaKeyEffect", "ColorCorrectEffect",
-           "GlowEffect", "SimpleChokerEffect"]
+           "GlowEffect", "SimpleChokerEffect", "SmartKeyEffect", "RotoBrushEffect"]

@@ -85,7 +85,10 @@ class PreviewOverlay:
         self.enabled = True
         self.show_motion_path = True
         self.show_mesh = False
-        self.mode = "select"          # select | transform | puppet | corner | mesh | shape
+        self.mode = "select"          # select | transform | puppet | roto | corner | mesh | shape
+        # Roto Brush stroke radius, as a fraction of the shorter project edge. A stroke
+        # is stored on the effect entry, so it is clip-local and survives save/reload.
+        self.roto_brush_size = 0.055
         # While the shape tool is armed the next press starts a draft rectangle; it is
         # painted as a live outline and only becomes a clip on release.
         self.shape_kind = "rectangle"
@@ -724,6 +727,27 @@ class PreviewOverlay:
                                  "modifiers": event.modifiers()}
             self.widget.update()
             return True
+        if self.mode == "roto":
+            clip = self.primary()
+            entry = self._effect_entry(clip, "roto_brush") if clip is not None else None
+            project = self.to_project(pos)
+            if entry is None or project is None:
+                return False
+            width, height = self.project_size()
+            if not width or not height:
+                return False
+            # Snapshot before the first point: the whole painted stroke is one undo step.
+            self.session.begin_gesture()
+            stroke = {"points": [[max(0.0, min(1.0, project[0] / width)),
+                                  max(0.0, min(1.0, project[1] / height))]],
+                      "radius": float(self.roto_brush_size),
+                      "mode": ("background" if event.modifiers() & Qt.KeyboardModifier.AltModifier
+                               else "foreground")}
+            entry.setdefault("strokes", []).append(stroke)
+            self._drag = {"kind": "roto", "clip": clip, "stroke": stroke}
+            self.widget.update()
+            self._notify()
+            return True
         clip = self.primary()
         # Warp handles win over the transform handles: corner-pin corners and mesh
         # nodes sit exactly on the box corners and centre, where the box handles would
@@ -920,8 +944,20 @@ class PreviewOverlay:
             self.widget.update()
             return True
         drag = self._drag
+        if drag is not None and drag.get("kind") == "roto":
+            project = self.to_project(pos)
+            if project is not None:
+                width, height = self.project_size()
+                if width and height:
+                    stroke = drag["stroke"]
+                    stroke.setdefault("points", []).append(
+                        [max(0.0, min(1.0, project[0] / width)),
+                         max(0.0, min(1.0, project[1] / height))])
+                    self.widget.update()
+                    self._notify()
+            return True
         if drag is None:
-            if self.mode == "shape":
+            if self.mode in ("shape", "roto"):
                 self._hover = None
                 self.widget.setCursor(Qt.CursorShape.CrossCursor)
                 return False
@@ -1323,7 +1359,7 @@ class PreviewOverlay:
                   "anchor": "Move anchor point", "pin": "Move puppet pin",
                   "corner": "Move corner pin", "mesh": "Move mesh node",
                   "path_point": "Move motion path point",
-                  "path_handle": "Adjust motion path"}
+                  "path_handle": "Adjust motion path", "roto": "Paint Roto mask"}
         self.session.commit_gesture(labels.get(drag.get("kind"), "Edit transform"))
         self._notify()
         self.widget.update()

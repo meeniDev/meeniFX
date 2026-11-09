@@ -21,6 +21,12 @@ usable and tested, but unfinished, and some features are still experimental.
   scaled by the composition clip's volume and fades, and played exactly once.
 - **Render Composition** and **Rebuild Composition Cache**, a cache-status readout in the
   breadcrumb bar, and a separate disk cache folder per editing context.
+- **Smart Key**: samples the border of a shot, builds a soft YCbCr matte, suppresses spill
+  and exposes the same matte views as Chroma Key. It is for footage where the screen colour
+  is unknown or not perfectly uniform; Auto sample can be switched off for a manual fallback.
+- **Roto Brush**: a stroke-guided subject cutout. Green strokes mark the subject, Alt-drag
+  red strokes mark the background, and the effect refines the mask with GrabCut. Strokes are
+  stored on the effect entry, so they undo, copy, split, save and reload with the clip.
 
 ### Improved
 

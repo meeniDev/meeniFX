@@ -154,6 +154,8 @@ class EffectsPanel(QWidget):
     preview_requested = pyqtSignal(int, int)
     # An effect was added: the host should bring the Properties panel forward.
     properties_requested = pyqtSignal()
+    # Roto Brush needs the preview tool; the panel only asks the host to arm it.
+    roto_requested = pyqtSignal()
 
     def __init__(self, engine, parent=None):
         super().__init__(parent)
@@ -2408,6 +2410,13 @@ class EffectsPanel(QWidget):
             head.addWidget(widget)
         head.addWidget(name)
         head.addWidget(self._preset_badge(clip, effect, entry), 0)
+        if key == "roto_brush":
+            paint = QToolButton()
+            paint.setText("Paint Mask")
+            paint.setToolTip("Paint green subject strokes and Alt-drag red background strokes "
+                             "on the preview")
+            paint.clicked.connect(self.roto_requested.emit)
+            head.addWidget(paint)
         head.addStretch(1)
         head.addWidget(reset)
         head.addWidget(more)

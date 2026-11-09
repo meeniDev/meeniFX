@@ -73,6 +73,16 @@ PREVIEW_ENTRIES = {
     "light_leak": {"params": {"amount": 100.0, "spread": 100.0, "hue": 40.0}},
     # A visible choke, so the card reads as an edge tool rather than an untouched picture.
     "simple_choker": {"params": {"choke": 12.0, "softness": 1.5}},
+    # The reference is a warm café illustration, not a green screen. Give Chroma Key a
+    # visible preview-only key so the card shows the matte instead of an untouched photo.
+    "chroma_key": {"params": {"key_r": 192, "key_g": 193, "key_b": 194,
+                             "tolerance": 28.0, "similarity": 20.0}},
+    "smart_key": {"params": {"sample_margin": 4.0, "tolerance": 28.0}},
+    # A Roto Brush card needs a starting mask; these strokes follow the reference figure.
+    "roto_brush": {"params": {"auto_seed": True, "tolerance": 46.0}, "strokes": [
+        {"points": [[0.42, 0.28], [0.42, 0.72]], "radius": 0.075, "mode": "foreground"},
+        {"points": [[0.12, 0.12], [0.88, 0.12]], "radius": 0.055, "mode": "background"},
+    ]},
     # A puppet needs pins before it does anything; two pulled pins show the deformation.
     "puppet_warp": {"pins": [
         {"id": 1, "src": [0.42, 0.40], "x": 0.36, "y": 0.34, "locked": False},
@@ -260,6 +270,8 @@ def preview_entry(effect):
         entry["params"].update(extra.get("params") or {})
         if extra.get("pins"):
             entry["pins"] = [dict(pin) for pin in extra["pins"]]
+        if extra.get("strokes"):
+            entry["strokes"] = [dict(stroke) for stroke in extra["strokes"]]
     return entry
 
 

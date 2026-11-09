@@ -55,6 +55,8 @@ KEYWORDS = {
     "lut": ("color", "colour", "grade", "look", "cinema"),
     "glow": ("light", "bloom", "shine", "soft light"),
     "chroma_key": ("green screen", "blue screen", "key", "matte", "spill", "composite"),
+    "smart_key": ("auto key", "one click", "green screen", "blue screen", "matte", "background"),
+    "roto_brush": ("mask", "cutout", "subject", "paint", "brush", "grabcut", "matte"),
     "bloom_streaks": ("light", "flare", "streak", "anamorphic"),
     "light_leak": ("light", "flare", "leak", "sun"),
     "vignette": ("dark", "edges", "lens", "corner"),

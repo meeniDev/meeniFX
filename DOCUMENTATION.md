@@ -140,6 +140,18 @@ softness keyframe like any other parameter. The browser card renders it through 
 matte because the shipped café reference is fully opaque, which is a preview composition
 only — the reference asset itself is never changed.
 
+**Smart Key and Roto Brush (Matte / Keying)** — Smart Key samples the border of the picture,
+ignores transparent pixels and builds the same soft YCbCr matte as Chroma Key, with spill
+suppression, cleanup, choke, transparency, matte views, a sample-margin control and an Auto
+sample switch. It is the one-click path for a screen whose exact colour is unknown. Roto
+Brush is the stroke-guided path for an ordinary background: selecting the Roto Brush tool (or
+Paint Mask in the effect card) adds the effect and arms the preview; green drags mark the
+subject, Alt-drag red strokes mark the background, and GrabCut refines the result. Feather,
+choke, cleanup, transparency, colour tolerance, edge-refine and diagnostic views are ordinary
+controls. Strokes are stored on the effect entry in project-normalised coordinates, so undo,
+copy/paste, split and `.mfxpf` save/reload preserve them; the brush owns no model download and
+runs entirely on the local OpenCV build.
+
 **Preview and transform** — fit/percentage zoom, cursor-centred wheel zoom, pan, guides.
 A bounding box with eight scale handles, rotation knob, visible anchor, motion path and
 warp pins. A corner drag is a free transform: the dragged corner follows the pointer on

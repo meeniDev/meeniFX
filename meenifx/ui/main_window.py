@@ -298,6 +298,7 @@ class MainWindow(QMainWindow):
             lambda:self._open_keyframe_editor_for(self.engine.session.selected_key_entries()))
         self.effects_panel.preview_requested.connect(self._preview_clip_range)
         self.effects_panel.properties_requested.connect(self._raise_properties)
+        self.effects_panel.roto_requested.connect(lambda: self._set_overlay_mode("roto"))
         self.timeline_panel.canvas.playhead_requested.connect(self._set_playhead)
         self.bridge.changed.connect(self.timeline_panel.canvas.update)
         self._menu_view.addSeparator(); self._menu_view.addAction("Markers List...",self.show_markers_list)
@@ -447,6 +448,7 @@ class MainWindow(QMainWindow):
         self._add_action(transformation_menu,"Selection Tool","V",lambda:self._set_overlay_mode("select"))
         self._add_action(transformation_menu,"Transform Tool","T",lambda:self._set_overlay_mode("transform"))
         self._add_action(transformation_menu,"Puppet Warp Tool","P",lambda:self._set_overlay_mode("puppet"))
+        self._add_action(transformation_menu,"Roto Brush Tool","R",lambda:self._set_overlay_mode("roto"))
         transformation_menu.addSeparator()
         self.autokey_action=self._add_check_action(transformation_menu,"Auto-Keyframe","K",False,self._set_auto_key)
         self.motion_path_action=self._add_check_action(transformation_menu,"Show Motion Path","Ctrl+Shift+P",True,
@@ -645,6 +647,7 @@ class MainWindow(QMainWindow):
         self.select_tool_button=tool_button("select","select","Selection tool (V)","select")
         self.transform_tool_button=tool_button("transform","transform","Transform tool: move, scale, rotate (T)","transform")
         self.puppet_tool_button=tool_button("puppet","puppet","Puppet Warp tool: drag pins on the picture (P)","puppet")
+        self.roto_tool_button=tool_button("roto","key_mask","Roto Brush tool: paint the subject; Alt-drag paints background (R)","roto")
         self.text_button=QToolButton(); self.text_button.setProperty("role","icon")
         self.text_button.setIcon(icon("text")); self.text_button.setFixedSize(tokens.CONTROL_H,tokens.CONTROL_H)
         self.text_button.setToolTip("Add a text clip at the playhead (Ctrl+T)")
@@ -707,6 +710,7 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self.export_button)
         icon_names=[(self.undo_button,"undo"),(self.redo_button,"redo"),(self.select_tool_button,"select"),
                     (self.transform_tool_button,"transform"),(self.puppet_tool_button,"puppet"),
+                    (self.roto_tool_button,"key_mask"),
                     (self.text_button,"text"),(self.captions_button,"captions"),(self.graph_button,"graph"),
                     (self.path_button,"path"),(self.autokey_button,"auto_key")]
         def refresh_icons(_toolbar):
@@ -2738,13 +2742,34 @@ class MainWindow(QMainWindow):
         for button,name in ((getattr(self,"select_tool_button",None),"select"),
                             (getattr(self,"transform_tool_button",None),"transform"),
                             (getattr(self,"puppet_tool_button",None),"puppet"),
+                            (getattr(self,"roto_tool_button",None),"roto"),
                             (getattr(self,"shape_button",None),"shape")):
             if button is not None:
                 button.blockSignals(True); button.setChecked(name==mode); button.blockSignals(False)
         if mode=="puppet": self._ensure_puppet_effect()
+        if mode=="roto": self._ensure_roto_effect()
         if mode in ("select","transform"):
             self.engine.session.tool.set("select")
         self.preview_panel.view.update()
+        self.effects_panel.refresh_properties()
+
+    def _ensure_roto_effect(self):
+        """The Roto Brush tool needs its effect before the first stroke can be painted."""
+        clip=self.overlay.primary()
+        if clip is None:
+            self.toast_message("Select a picture clip first",kind="error")
+            return
+        if any(entry.get("effect_id")=="roto_brush" for entry in clip.effects):
+            return
+        runtime=self.engine.runtime_effects.get("roto_brush")
+        params=dict(runtime.capture_params()) if runtime is not None else {}
+        def action():
+            target=self.engine.timeline.find_clip(clip.id)
+            if target is None or target.track.locked: return
+            if not any(entry.get("effect_id")=="roto_brush" for entry in target.effects):
+                target.effects.append({"effect_id":"roto_brush","enabled":True,
+                                       "params":params,"strokes":[]})
+        self.engine.session.stack.run("Add Roto Brush",action)
         self.effects_panel.refresh_properties()
 
     def _ensure_puppet_effect(self):
