@@ -117,6 +117,16 @@ class PreviewWidget(QWidget):
         self.update()
         self._emit_zoom()
 
+    def clear_frame(self):
+        """Forget the picture: an empty timeline must never keep showing a stale frame.
+
+        The frame size is kept, so a clip added afterwards keeps the zoom the user set;
+        paintEvent already draws the empty workspace when there is no image.
+        """
+        self._image = QImage()
+        self._render_size = (0, 0)
+        self.update()
+
     # ------------------------------------------------------------------ geometry
     def fit_scale(self):
         w, h = self._frame_size

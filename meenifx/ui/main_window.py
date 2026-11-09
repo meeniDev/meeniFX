@@ -843,6 +843,11 @@ class MainWindow(QMainWindow):
 
     def _show_preview(self, frame, image, scale=None):
         """Publish a finished frame to the widget and remember it for other panels."""
+        if getattr(self,"_preview_empty",False) and not self.engine.has_media():
+            # A frame that was already rendering when the last clip was deleted must not
+            # bring the picture back after the preview was cleared.
+            return
+        self._preview_empty=False
         self.last_frame=image
         self.engine.current_processed=image
         self.preview_panel.view.set_frame(image,frame_key=self.engine.current_media_path,
@@ -851,6 +856,17 @@ class MainWindow(QMainWindow):
         if self._playing:
             self.metrics.note_shown()
         self._preview_dirty=False
+
+    def _show_empty_preview(self):
+        """No clips: drop the picture instead of leaving the deleted clip on screen."""
+        self.last_frame=None
+        self.engine.current_processed=None
+        self._shown_frame=-1
+        self._preview_dirty=False
+        self._preview_empty=True
+        panel=getattr(self,"preview_panel",None)
+        if panel is not None:
+            panel.view.clear_frame()
 
     def _on_frame_rendered(self, frame, scale, image):
         """A preview frame finished on the render thread; display it if it is still wanted."""
@@ -1412,6 +1428,9 @@ class MainWindow(QMainWindow):
         what used to leave the picture frozen on one frame during playback.
         """
         if not self.engine.has_media():
+            # An empty timeline shows an empty preview. Returning here used to leave the
+            # last rendered picture of the deleted clip on screen for good.
+            self._show_empty_preview()
             return
         frame=int(self.engine.session.playhead); scale=self.preview_scale()
         cached=self.frame_cache.get(frame,scale)

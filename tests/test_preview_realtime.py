@@ -365,3 +365,28 @@ def test_the_scale_from_center_switch_changes_the_drag_without_the_keyboard(edit
     live = live_clip(window, clip.id)
     assert live.transform["scale_x"] < 99.0
     assert abs(live.transform["position_x"]) < 1.0
+
+
+def test_deleting_the_last_clip_empties_the_preview(editor):
+    """An empty timeline must not keep showing the clip that was just deleted."""
+    window, clip = editor
+    window._request_preview()
+    pump(0.25)
+    view = window.preview_panel.view
+    assert not view._image.isNull(), "the test needs a picture first"
+    stale = window.last_frame.copy()
+    frame, scale = int(window.engine.session.playhead), window.preview_scale()
+
+    window.engine.session.set_selection({clip.id})
+    window.engine.session.delete_selected()
+    pump(0.2)
+
+    assert window.engine.timeline.all_clips() == []
+    assert view._image.isNull(), "an empty timeline must clear the preview"
+    assert window.last_frame is None
+
+    # A frame already rendering when the clip vanished must not resurrect the picture.
+    window._on_frame_rendered(frame, scale, stale)
+    pump(0.05)
+    assert view._image.isNull()
+    assert window.last_frame is None
