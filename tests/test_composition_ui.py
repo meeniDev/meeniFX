@@ -10,6 +10,7 @@ import time
 import numpy as np
 import pytest
 from PyQt6.QtCore import QSettings, Qt
+from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import QApplication
 
 from meenifx.constants import COMPOSITION_MIME
@@ -90,19 +91,28 @@ def test_breadcrumb_opens_a_composition_and_returns_to_the_parent(window):
     bar = window.composition_bar
     assert bar is not None
     assert "Main Timeline" in [action.text() for action in bar.actions()]
-    assert "Editing: Main Timeline" in window.composition_context_label.text()
+    assert not hasattr(window, "composition_context_label"), \
+        "the redundant Editing: label must not come back"
 
     assert window.open_composition(comp.id)
     assert window.editing_composition is comp
     assert window.engine.session.timeline is comp.timeline
     assert window.timeline_panel.canvas.timeline is comp.timeline, \
         "the timeline must draw the composition that is open"
-    assert "Editing: " in window.composition_context_label.text()
-    assert comp.name in window.composition_context_label.text()
     assert comp.name in window.windowTitle()
     labels = [action.text() for action in bar.actions()]
-    assert "Back to Parent" in labels and "Settings..." in labels
-    assert comp.name in labels
+    assert "Main Timeline" in labels and comp.name in labels
+    assert "Back to Parent" not in labels and "Settings..." not in labels
+    assert not any(label.startswith("Editing:") for label in labels)
+    # The active crumb owns a compact menu instead of a pair of toolbar buttons.
+    crumb = next(action for action in bar.actions() if action.text() == comp.name)
+    assert crumb.menu() is not None
+    menu_labels = [action.text() for action in crumb.menu().actions()]
+    assert "Rename Composition..." in menu_labels
+    assert "Composition Settings..." in menu_labels
+    back = next(action for action in window.findChildren(QAction)
+                if action.text() == "Back to Parent Composition")
+    assert back.shortcut().toString() == "Alt+Up"
 
     # Double-clicking the nested clip resolves to the same composition.
     assert window.back_to_parent()
@@ -111,6 +121,75 @@ def test_breadcrumb_opens_a_composition_and_returns_to_the_parent(window):
     assert window.open_composition_clip(nested_id)
     assert window.editing_composition is comp
     assert window.open_composition(comp.id) is False, "a composition cannot contain itself"
+
+
+def test_playheads_belong_to_their_editing_context(window):
+    comp, _nested_id = precompose(window)
+    parent = window.engine.session.timeline
+    window.engine.session.set_playhead(45)
+    assert window.open_composition(comp.id)
+    assert window.engine.session.playhead == 0, "a composition opens at its own start"
+    window.engine.session.set_playhead(20)
+    assert window.back_to_parent()
+    assert window.engine.session.playhead == 45, "the parent playhead moved on its own"
+    assert window.open_composition(comp.id)
+    assert window.engine.session.playhead == 20, "the composition lost its place"
+    assert window.back_to_parent()
+    assert window.engine.session.timeline is parent
+
+
+def test_parent_playback_crosses_a_composition_boundary(window, monkeypatch):
+    """The transport must use the editing timeline, not a transient nested render."""
+    comp, _nested_id = precompose(window)
+    parent = window.engine.session.timeline
+    path = "synthetic-effect-test.png"
+    picture = window.engine.media._entries[path].frames[0]
+    entry = MediaEntry("image", 1, 30)
+    entry.frames = [picture]
+    later_path = "later-text.png"
+    window.engine.media._entries[later_path] = entry
+    track = parent.tracks_of_type("video")[0]
+    later = parent.new_clip("Later text", later_path, track, 60, 120,
+                            source_out=1, source_fps=30)
+    assert later.timeline_start == 60
+    parent.loop_enabled = False
+    parent.loop_at_end = False
+    monkeypatch.setattr(window, "_request_preview", lambda: None)
+    monkeypatch.setattr(window, "_update_timecode", lambda: None)
+    # A nested preview render temporarily points engine.timeline at the child. If the
+    # transport reads that timeline, its 60-frame range wraps at the composition end.
+    window.engine.timeline = comp.timeline
+    try:
+        window._playing = True
+        window._play_head = 59.0
+        window._play_clock = time.perf_counter() - 0.1
+        window._tick_playback()
+    finally:
+        window.engine.timeline = parent
+        window._playing = False
+    assert window._play_range() == (0, parent.duration)
+    assert window.engine.session.playhead >= 60, (
+        "playback jumped back into the precomposition instead of the later clip")
+
+
+def test_nested_breadcrumb_path_tracks_each_level(window):
+    inner, nested_id = precompose(window)
+    outer_id = window.engine.session.precompose("Outer", [nested_id])
+    outer_clip = window.engine.session.timeline.find_clip(outer_id)
+    outer = window.engine.compositions.get(outer_clip.composition_id)
+    assert window.open_composition(outer.id)
+    assert [comp.name for comp in window._composition_chain()] == ["Outer"]
+    inner_clip = next(clip for clip in outer.timeline.all_clips()
+                      if getattr(clip, "is_composition", False)
+                      and clip.composition_id == inner.id)
+    assert inner_clip is not None
+    assert window.open_composition_clip(inner_clip.id)
+    assert [comp.name for comp in window._composition_chain()] == ["Outer", inner.name]
+    assert window.back_to_parent()
+    assert window.editing_composition is outer
+    assert window.back_to_parent()
+    assert window.editing_composition is None
+    assert window.engine.session.timeline is window.engine.root_timeline
 
 
 def test_project_panel_shows_compositions_as_their_own_asset(window):

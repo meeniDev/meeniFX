@@ -548,6 +548,16 @@ class EditorEngine:
             stack.discard(comp.id)
             lock.release()
 
+    TEMPORAL_EFFECTS = frozenset({"posterize_time", "stutter"})
+    MAX_TEMPORAL_DEPTH = 4
+
+    @classmethod
+    def has_temporal_effects(cls, clip):
+        """True when a clip's stack changes *when* the picture is sampled."""
+        return any(entry.get("enabled", True)
+                   and entry.get("effect_id") in cls.TEMPORAL_EFFECTS
+                   for entry in (getattr(clip, "effects", None) or ()))
+
     def compose_frame(self, frame_no, scale=1.0):
         """Composite the visible video layers into one frame at `frame_no`.
 
@@ -568,6 +578,22 @@ class EditorEngine:
         self.current_fx = top.effects
         self.current_media_path = top.source_path
         self.current_clip_local_frame = frame_no - top.timeline_start
+        canvas, painted = self._compose_stack(stack, frame_no, scale, 0)
+        if not painted:
+            return None
+        if canvas.dtype == np.uint8:
+            # The one-clip fast path already produced the exact BGR frame; do not copy
+            # it through a float buffer on every playback tick.
+            return canvas
+        return layer_ops.flatten(canvas)
+
+    def _compose_stack(self, stack, frame_no, scale, depth=0):
+        """Composite `stack` (bottom layer first) and return (float canvas, painted).
+
+        Splitting this from `compose_frame` lets an adjustment layer re-render only the
+        layers below it, at an earlier sampled frame, without re-running itself.
+        """
+        top = stack[-1][0]
         width, height = layer_ops.render_size(self.project_size(), scale)
         canvas = np.empty((height, width, 3), dtype=np.float32)
         canvas[:] = self.background_bgr
@@ -608,10 +634,19 @@ class EditorEngine:
             group.clear()
             group_key = None
 
-        for clip, weight, key in stack:
+        for index, (clip, weight, key) in enumerate(stack):
             local = self.held_frame(clip, frame_no - clip.timeline_start)
             if getattr(clip, "adjustment", False):
                 flush_group()
+                if (depth < self.MAX_TEMPORAL_DEPTH and index > 0
+                        and self.has_temporal_effects(clip)):
+                    # A temporal effect on an adjustment layer holds the *composite*
+                    # below it, not just its own parameters: rebuild those layers at
+                    # the sampled frame before grading them.
+                    sampled, _painted = self._compose_stack(
+                        stack[:index], int(clip.timeline_start + local), scale, depth + 1)
+                    canvas = (sampled if sampled.dtype == np.float32
+                              else sampled.astype(np.float32))
                 canvas = self.compose_adjustment(canvas, clip, frame_no, local, scale)
                 painted = True
                 continue
@@ -679,7 +714,7 @@ class EditorEngine:
                     and pose.is_identity() and state.is_identity()
                     and layer[:, :, 3].min() == 255 and clip.blend == "normal"
                     and not getattr(clip, "adjustment", False)):
-                return np.ascontiguousarray(layer[:, :, :3])
+                return np.ascontiguousarray(layer[:, :, :3]), True
             if key is None:
                 flush_group()
                 layer_ops.composite(canvas, layer, opacity, getattr(clip, "blend", "normal"))
@@ -690,9 +725,7 @@ class EditorEngine:
                     group_key = key
                 group.append((layer, opacity, getattr(clip, "blend", "normal")))
         flush_group()
-        if not painted:
-            return None
-        return layer_ops.flatten(canvas)
+        return canvas, painted
 
     def compose_adjustment(self, canvas, clip, frame_no, local, scale):
         """Run an adjustment layer's effects over everything composited below it.
@@ -895,8 +928,8 @@ class EditorEngine:
                 frame[:] = self.background_bgr
             return frame, frame
 
-    def has_media(self):
-        clips = self.timeline.all_clips()
+    def has_media(self, timeline=None):
+        clips = (timeline if timeline is not None else self.timeline).all_clips()
         return (any(c.source_path or c.is_text or c.is_shape or c.is_composition
                     for c in clips)) and self.source_width > 0
 

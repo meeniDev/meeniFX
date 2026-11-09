@@ -173,6 +173,9 @@ class MainWindow(QMainWindow):
         # timeline. The undo stack stays on the root timeline, whose snapshot includes
         # every definition, so undo behaves the same at any nesting depth.
         self._composition_path=[]
+        # One remembered playhead per editing context, so opening a composition does not
+        # move the parent timeline and returning restores where the user left it.
+        self._context_playheads={}
         self._root_render_state=None
         self._prerender_dialog=None
         self._prerender_failed=False
@@ -276,7 +279,7 @@ class MainWindow(QMainWindow):
         self.preview_panel.play_toggled.connect(self.toggle_playback)
         self.preview_panel.step_requested.connect(self._step_frame)
         self.preview_panel.start_requested.connect(lambda: self._set_playhead(0))
-        self.preview_panel.end_requested.connect(lambda: self._set_playhead(self.engine.timeline.duration))
+        self.preview_panel.end_requested.connect(lambda: self._set_playhead(self.engine.session.timeline.duration))
         self.timeline_panel.canvas.files_dropped.connect(self.import_paths)
         self.timeline_panel.canvas.media_dropped.connect(self._media_ids_dropped)
         self.timeline_panel.canvas.media_lookup = self._media_entries_for
@@ -403,7 +406,9 @@ class MainWindow(QMainWindow):
         # Ctrl+Shift+C already copies keyframes, so pre-composing gets its own chord.
         self._add_action(comp_menu, "Precompose Selected Clips...", "Ctrl+Alt+C",
                          self.show_precompose_dialog)
-        self._add_action(comp_menu, "Back to Parent Composition", None, self.back_to_parent)
+        self._add_action(comp_menu, "Back to Parent Composition", "Alt+Up", self.back_to_parent)
+        self._add_action(comp_menu, "Rename Composition...", None,
+                         self.rename_current_composition)
         self._add_action(comp_menu, "Composition Settings...", None,
                          self.show_composition_settings)
         comp_menu.addSeparator()
@@ -512,7 +517,7 @@ class MainWindow(QMainWindow):
         next_marker=self._add_action(playback,"Next Marker",None,lambda:self.engine.session.jump_to_marker(1))
         next_marker.setShortcut(QKeySequence(Qt.Key.Key_BracketRight))
         next_marker.setToolTip("Jump to the next marker ( ] )")
-        self._add_action(playback,"Home","Home",lambda:self._set_playhead(0)); self._add_action(playback,"End","End",lambda:self._set_playhead(self.engine.timeline.duration))
+        self._add_action(playback,"Home","Home",lambda:self._set_playhead(0)); self._add_action(playback,"End","End",lambda:self._set_playhead(self.engine.session.timeline.duration))
         self.loop_action=self._add_check_action(playback,"Loop Playback","Q",False,self._set_loop_enabled)
         self.loop_end_action=self._add_check_action(playback,"Loop at End",None,True,self._set_loop_at_end)
         self.loop_end_action.setToolTip("Without a loop region, reaching the end jumps back to the start "
@@ -752,7 +757,9 @@ class MainWindow(QMainWindow):
 
     def _refresh_audio(self):
         """Rebuild the mixer snapshot from the timeline and start missing decodes."""
-        timeline=self.engine.timeline; library=self.waveforms.library
+        # The session timeline is the editing context; engine.timeline is briefly a
+        # composition while a nested preview renders and must not retarget the mixer.
+        timeline=self.engine.session.timeline; library=self.waveforms.library
         compositions=getattr(self.engine,"compositions",None)
         for path in missing_audio_paths(timeline,library.cached,compositions):
             if path in self.engine.missing_paths:continue
@@ -786,7 +793,7 @@ class MainWindow(QMainWindow):
 
     def _place_audio(self,path,at_frame,track,find_free):
         """Add one decoded audio clip; the timeline creates a track when none matches."""
-        fps=self.engine.timeline.fps
+        fps=self.engine.session.timeline.fps
         duration=max(1,int(round(self.waveforms.library.duration_seconds(path)*fps)))
         self.engine.import_records([{"name":os.path.basename(path),"path":path,"duration":duration,
                                      "type":"audio"}],at_frame,track,find_free)
@@ -818,7 +825,7 @@ class MainWindow(QMainWindow):
             return
         self._scrub_mode=False
         self._snippet_timer.stop()
-        self.audio.stop_snippet(self.engine.session.playhead/float(self.engine.timeline.fps))
+        self.audio.stop_snippet(self.engine.session.playhead/float(self.engine.session.timeline.fps))
         if self._scrub_resume:
             # Playback was running when the scrub began: carry on from the new position.
             self._scrub_resume=False
@@ -891,7 +898,7 @@ class MainWindow(QMainWindow):
         dropped=(max(0,self.metrics.ticks-self.metrics.frames_shown)
                  if self._playing else self.metrics.frames_dropped)
         return {"fps": self.metrics.fps() if self._playing else 0.0,
-                "target_fps": float(self.engine.timeline.fps),
+                "target_fps": float(self.engine.session.timeline.fps),
                 "dropped": dropped,
                 "shown": self.metrics.frames_shown,
                 "render_ms": self.metrics.render_ms,
@@ -906,7 +913,7 @@ class MainWindow(QMainWindow):
 
     def _invalidate_preview_cache(self):
         """Drop only the cached frames of clips whose contribution actually changed."""
-        current=timeline_digests(self.engine.timeline,getattr(self.engine,"compositions",None))
+        current=timeline_digests(self.engine.session.timeline,getattr(self.engine,"compositions",None))
         ranges=changed_ranges(self._clip_digests,current)
         self._clip_digests=current
         if not ranges:
@@ -933,7 +940,7 @@ class MainWindow(QMainWindow):
         if now-self._last_snippet_at<0.045:
             return False
         self._last_snippet_at=now
-        seconds=max(0.0,frame/float(self.engine.timeline.fps))
+        seconds=max(0.0,frame/float(self.engine.session.timeline.fps))
         if not self.audio.start_snippet(seconds):
             return False
         self._snippet_timer.start(max(50,int(duration_ms or 90)))
@@ -943,7 +950,7 @@ class MainWindow(QMainWindow):
         """Silence a finished snippet - but never interrupt real playback."""
         if self._playing and not self._scrub_mode:
             return
-        self.audio.stop_snippet(self.engine.session.playhead/float(self.engine.timeline.fps))
+        self.audio.stop_snippet(self.engine.session.playhead/float(self.engine.session.timeline.fps))
 
     def toast_message(self, text, kind="info", duration_ms=None):
         """One short, non-blocking notice at the bottom of the window."""
@@ -958,7 +965,7 @@ class MainWindow(QMainWindow):
 
     def _sync_loop_state(self):
         """Keep the Loop button, the menu item and the status text on the same value."""
-        enabled=bool(self.engine.timeline.loop_enabled)
+        enabled=bool(self.engine.session.timeline.loop_enabled)
         if self.loop_action.isChecked()!=enabled:
             self.loop_action.blockSignals(True); self.loop_action.setChecked(enabled); self.loop_action.blockSignals(False)
         self.timeline_panel.set_loop_enabled(enabled)
@@ -968,7 +975,7 @@ class MainWindow(QMainWindow):
         self.engine.session.set_loop_enabled(enabled)
 
     def _set_loop_at_end(self, enabled):
-        self.engine.timeline.loop_at_end=bool(enabled)
+        self.engine.session.timeline.loop_at_end=bool(enabled)
         self._settings.setValue("loopAtEnd",bool(enabled))
         self.bridge.status.emit("Loop at end "+("on" if enabled else "off"))
 
@@ -996,7 +1003,7 @@ class MainWindow(QMainWindow):
         self._update_timecode()
 
     def _update_timecode(self):
-        self.preview_panel.set_timecode(timecode(self.engine.session.playhead,self.engine.timeline.fps))
+        self.preview_panel.set_timecode(timecode(self.engine.session.playhead,self.engine.session.timeline.fps))
 
     # ------------------------------------------------------------------ dock layout
     def build_default_layout(self, apply_sizes=False):
@@ -1235,7 +1242,7 @@ class MainWindow(QMainWindow):
 
     def _on_playhead_changed(self,frame):
         if self._playing:self._play_head=float(frame)
-        seconds=frame/float(self.engine.timeline.fps)
+        seconds=frame/float(self.engine.session.timeline.fps)
         if self._scrub_mode:
             # Only a change of position makes a sound; holding still stays silent.
             self.play_snippet(frame)
@@ -1292,20 +1299,21 @@ class MainWindow(QMainWindow):
         self._after_playhead_move()
 
     def _step_seconds(self,seconds):
-        self._set_playhead(self.engine.session.playhead+int(round(seconds*self.engine.timeline.fps)))
+        self._set_playhead(self.engine.session.playhead+int(round(seconds*self.engine.session.timeline.fps)))
         self._after_playhead_move()
 
     def _jump_edit(self,direction):
         """Ctrl+Left/Right: previous or next edit point, marker or timeline end."""
         frame=self.engine.session.playhead
-        candidates={0,self.engine.timeline.duration,*self.engine.timeline.marker_frames()}
-        for clip in self.engine.timeline.all_clips():
+        timeline=self.engine.session.timeline
+        candidates={0,timeline.duration,*timeline.marker_frames()}
+        for clip in timeline.all_clips():
             candidates.update((clip.timeline_start,clip.end))
         options=[value for value in candidates if value<frame] if direction<0 else [value for value in candidates if value>frame]
         if options:
             target=max(options) if direction<0 else min(options)
         else:
-            target=0 if direction<0 else self.engine.timeline.duration
+            target=0 if direction<0 else self.engine.session.timeline.duration
         self._set_playhead(target)
         self._after_playhead_move()
 
@@ -1692,15 +1700,24 @@ class MainWindow(QMainWindow):
             self._playing=True; self.camera_timer.start(max(1,int(1000/max(1,self.engine.playback_fps.get())))); self._sync_transport(); return
         self._begin_playback()
 
+    def _playback_timeline(self):
+        """The timeline the transport drives.
+
+        `engine.timeline` is temporarily the composition being rendered while a nested
+        frame is built; reading it from the playback clock made a 5-second pre-composition
+        wrap the parent at 5 seconds. The session's timeline is the stable editing context.
+        """
+        return self.engine.session.timeline
+
     def _play_range(self):
         """Loop region when looping is on and one exists, else the whole project."""
-        return self.engine.timeline.play_range()
+        return self._playback_timeline().play_range()
 
     def _begin_playback(self,frame=None):
         """Start timeline playback, optionally jumping to `frame` first."""
-        if not self.engine.has_media():
+        if not self.engine.has_media(self._playback_timeline()):
             self._sync_transport()
-            if not self.engine.timeline.all_clips():
+            if not self._playback_timeline().all_clips():
                 self.toast_message("Nothing to play - the timeline is empty")
             else:
                 self.toast_message("Nothing to play under the playhead - check that a video track is visible")
@@ -1731,7 +1748,7 @@ class MainWindow(QMainWindow):
         if self.engine.reverse_timeline.get() or abs(self.engine.speed_percent.get()-100)>0.5:
             self.bridge.status.emit("Audio muted: reverse and non-100% preview speed play silently")
             return False
-        return self.audio.play(self.engine.session.playhead/float(self.engine.timeline.fps))
+        return self.audio.play(self.engine.session.playhead/float(self.engine.session.timeline.fps))
 
     def stop_playback(self):
         self._playing=False; self.play_timer.stop(); self.camera_timer.stop(); self._sync_transport()
@@ -1759,13 +1776,13 @@ class MainWindow(QMainWindow):
         self.last_frame=frame; self.preview_panel.view.set_frame(frame,frame_key=("camera",self.engine.camera_index.get()))
 
     def _tick_playback(self):
-        fps=self.engine.timeline.fps; lo,hi=self._play_range()
+        timeline=self._playback_timeline(); fps=timeline.fps; lo,hi=self._play_range()
         if hi<=lo:
             self.stop_playback(); return
         direction=-1 if self.engine.reverse_timeline.get() else 1
         # One loop decision: the loop region when one is enabled, otherwise "Loop at End",
         # which makes the playhead jump back to the start and keep playing.
-        looping=self.engine.timeline.loop_enabled or self.engine.timeline.loop_at_end
+        looping=timeline.loop_enabled or timeline.loop_at_end
         if self.audio.playing and direction>0 and not self._scrub_mode:
             # Audio is the master clock: video follows the audible position.
             target=self.audio.clock_seconds()*fps
@@ -1792,7 +1809,7 @@ class MainWindow(QMainWindow):
         """Jump back to the loop start by moving the audio origin, not by restarting the sink."""
         self._play_head=float(lo)
         if self.audio.playing:
-            self.audio.seek_live(lo/float(self.engine.timeline.fps))
+            self.audio.seek_live(lo/float(self._playback_timeline().fps))
 
     def open_export_dialog(self):
         if not self.engine.has_media():
@@ -2115,6 +2132,10 @@ class MainWindow(QMainWindow):
         return [comp for comp in (self.engine.compositions.get(cid)
                                   for cid in self._composition_path) if comp is not None]
 
+    def _remember_playhead(self):
+        """Keep each editing context's position while the user visits another one."""
+        self._context_playheads[tuple(self._composition_path)] = int(self.engine.session.playhead)
+
     def _remember_root_state(self):
         """Capture what the main timeline renders with before entering a composition."""
         if self._composition_path:
@@ -2139,43 +2160,50 @@ class MainWindow(QMainWindow):
         self._sync_composition_bar()
 
     def _sync_composition_bar(self):
-        from PyQt6.QtWidgets import QLabel
+        from PyQt6.QtWidgets import QLabel, QMenu, QSizePolicy, QToolButton, QWidget
+        from .. import tokens
         bar = getattr(self, "composition_bar", None)
         if bar is None:
             return
         bar.clear()
         chain = self._composition_chain()
-        # `clear()` drops widget actions, so the labels are rebuilt with the breadcrumb.
-        label = QLabel("Editing: " + (chain[-1].name if chain else "Main Timeline"))
-        label.setContentsMargins(6, 0, 6, 0)
-        label.setToolTip("The timeline every panel, the preview and the export use right now")
-        bar.addWidget(label)
-        self.composition_context_label = label
-        bar.addSeparator()
+        active = chain[-1] if chain else None
+        # `clear()` drops widget actions, so the breadcrumb and its menu are rebuilt.
         root = bar.addAction("Main Timeline")
-        root.setToolTip("Go back to the main timeline")
+        root.setToolTip("Go back to the main timeline (Alt+Up from a composition)")
         root.triggered.connect(self._go_to_root)
+        if active is None:
+            font = root.font(); font.setBold(True); root.setFont(font)
+        separator_color = tokens.COLORS.get("muted", "#8a8f98")
         for index, comp in enumerate(chain):
-            bar.addAction(" / ")
+            separator = QLabel("\u203a")
+            separator.setStyleSheet(f"color: {separator_color}; padding: 0 6px;")
+            bar.addWidget(separator)
             crumb = bar.addAction(comp.name)
-            crumb.setToolTip(f"Editing {comp.name} ({comp.width}x{comp.height}, {comp.fps} fps)")
-            crumb.triggered.connect(lambda _checked=False, i=index:
-                                    self._go_to_composition_index(i))
-        if chain:
-            bar.addSeparator()
-            back = bar.addAction("Back to Parent")
-            back.setToolTip("Leave this composition and return to the one that contains it")
-            back.triggered.connect(self.back_to_parent)
-            settings_action = bar.addAction("Settings...")
-            settings_action.triggered.connect(self.show_composition_settings)
-        bar.addSeparator()
+            crumb.setToolTip(f"{comp.name} ({comp.width}x{comp.height}, {comp.fps} fps)")
+            if index == len(chain) - 1:
+                font = crumb.font(); font.setBold(True); crumb.setFont(font)
+                menu = QMenu(bar)
+                menu.addAction("Rename Composition...", self.rename_current_composition)
+                menu.addAction("Composition Settings...", self.show_composition_settings)
+                crumb.setMenu(menu)
+                button = bar.widgetForAction(crumb)
+                if isinstance(button, QToolButton):
+                    button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+                    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+            else:
+                crumb.triggered.connect(lambda _checked=False, i=index:
+                                        self._go_to_composition_index(i))
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        bar.addWidget(spacer)
         cache_label = QLabel("")
         cache_label.setProperty("quiet", True)
         cache_label.setToolTip("Preview frames cached for this timeline")
         bar.addWidget(cache_label)
         self.composition_cache_label = cache_label
         self._update_composition_cache_label()
-        self.setWindowTitle(f"{APP_TITLE} - {chain[-1].name}" if chain else APP_TITLE)
+        self.setWindowTitle(f"{APP_TITLE} - {active.name}" if active else APP_TITLE)
 
     def _update_composition_cache_label(self):
         label = getattr(self, "composition_cache_label", None)
@@ -2195,6 +2223,7 @@ class MainWindow(QMainWindow):
         if str(comp.id) in self._composition_path:
             self.toast_message("That composition is already open", duration_ms=1600)
             return False
+        self._remember_playhead()
         self._remember_root_state()
         self._composition_path.append(comp.id)
         self._apply_edit_context()
@@ -2202,7 +2231,8 @@ class MainWindow(QMainWindow):
         return True
 
     def open_composition_clip(self, clip_id):
-        clip = self.engine.timeline.find_clip(clip_id)
+        # Use the editing context: a nested render temporarily swaps engine.timeline.
+        clip = self.engine.session.timeline.find_clip(clip_id)
         if clip is None or not getattr(clip, "is_composition", False):
             return False
         return self.open_composition(clip.composition_id)
@@ -2210,6 +2240,7 @@ class MainWindow(QMainWindow):
     def back_to_parent(self):
         if not self._composition_path:
             return False
+        self._remember_playhead()
         self._composition_path.pop()
         self._apply_edit_context()
         return True
@@ -2217,6 +2248,7 @@ class MainWindow(QMainWindow):
     def _go_to_root(self):
         if not self._composition_path:
             return False
+        self._remember_playhead()
         self._composition_path = []
         self._apply_edit_context()
         return True
@@ -2224,6 +2256,7 @@ class MainWindow(QMainWindow):
     def _go_to_composition_index(self, index):
         if index < 0 or index >= len(self._composition_path):
             return False
+        self._remember_playhead()
         self._composition_path = self._composition_path[:index + 1]
         self._apply_edit_context()
         return True
@@ -2268,7 +2301,7 @@ class MainWindow(QMainWindow):
             canvas._band = None
         session.set_selection(set())
         session.clear_key_selection()
-        session.set_playhead(0)
+        session.set_playhead(int(self._context_playheads.get(tuple(self._composition_path), 0)))
         # Frame numbers now belong to another timeline: cached pictures must not leak
         # across the switch, and in-flight renders are already stale.
         self._content_revision += 1
@@ -2285,6 +2318,23 @@ class MainWindow(QMainWindow):
         self._sync_composition_bar()
         self._request_preview()
         self._refresh_audio()
+
+    def rename_current_composition(self):
+        """Rename the composition currently open, through the breadcrumb menu."""
+        comp = self.editing_composition
+        if comp is None:
+            return False
+        from PyQt6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(self, "Rename Composition", "Name:", text=comp.name)
+        name = name.strip()
+        if not ok or not name or name == comp.name:
+            return False
+        if not self.engine.session.rename_composition(comp.id, name):
+            return False
+        self.projects.mark_dirty()
+        self._refresh_panels()
+        self._sync_composition_bar()
+        return True
 
     def _composition_dropped(self, composition_ids, frame, track):
         """A composition dragged from the Project panel becomes one nested clip."""
@@ -2403,6 +2453,7 @@ class MainWindow(QMainWindow):
         # composition objects are gone with the previous project.
         if self._composition_path:
             self._composition_path=[]
+        self._context_playheads={}
         self._root_render_state=None
         self.engine.session.root_timeline=self.engine.root_timeline
         self.engine.session.timeline=self.engine.timeline
