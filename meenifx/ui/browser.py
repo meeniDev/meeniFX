@@ -135,8 +135,9 @@ class BrowserCard(QFrame):
         self.name.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         if view_mode == "grid":
             self.name.setMinimumHeight(27)
-        self.badge = QLabel("\u2713", self)
-        self.badge.setToolTip("Applied to the selected clip")
+        self.badge = QLabel("\u25d0" if item.get("partial") else "\u2713", self)
+        self.badge.setToolTip("Applied to some selected clips" if item.get("partial")
+                              else "Applied to every selected clip")
         self.badge.setStyleSheet(f"color: {tokens.COLORS['accent']}; font-weight: bold;")
         self.badge.setVisible(bool(item.get("applied")))
         if view_mode == "grid":
@@ -253,8 +254,13 @@ class BrowserCard(QFrame):
         pixmap.setDevicePixelRatio(max(0.5, float(ratio or 1.0)))
         self.thumb.setPixmap(pixmap)
 
-    def set_applied(self, applied):
+    def set_applied(self, applied, partial=False):
+        """Show a full tick, a half-filled tick for some clips, or no badge."""
         self.item["applied"] = bool(applied)
+        self.item["partial"] = bool(applied and partial)
+        self.badge.setText("\u25d0" if self.item["partial"] else "\u2713")
+        self.badge.setToolTip("Applied to some selected clips" if self.item["partial"]
+                              else "Applied to every selected clip")
         self.badge.setVisible(bool(applied))
         self.update()
 
@@ -383,10 +389,12 @@ class BrowserView(QWidget):
         self.category = ""
         self.term = ""
         self.applied_keys = set()
+        self.partial_keys = set()
         self.applied_presets = set()
         self.applied_looks = set()
         self.selection_media = "video"
         self.multiple_clips = False
+        self.selection_count = 0
         self._cards = []
         self._sections = []
         self._collapsed_categories = set()
@@ -689,9 +697,16 @@ class BrowserView(QWidget):
 
     # --------------------------------------------------------------------- items
     def set_context(self, applied_keys, applied_presets, applied_looks, media="video",
-                    multiple=False):
-        """What the selected clips already have, and what media they are."""
+                    multiple=False, partial_keys=None, selection_count=0):
+        """What the selected clips already have, and what media they are.
+
+        `applied_keys` is the union of the selected clips; `partial_keys` is the subset
+        that only some of those clips carry, so a card can show a half tick instead of
+        claiming the effect is on every clip.
+        """
         self.applied_keys = set(applied_keys or ())
+        self.partial_keys = set(partial_keys or ())
+        self.selection_count = int(selection_count or 0)
         self.applied_presets = set(applied_presets or ())
         # A style instance is stored as "dreamy_bloom#2"; the browser only needs the style.
         self.applied_looks = {str(item).split("#", 1)[0] for item in (applied_looks or ())}
@@ -699,7 +714,8 @@ class BrowserView(QWidget):
         self.multiple_clips = bool(multiple)
         for card in self._cards:
             if card.item["kind"] == "effect":
-                card.set_applied(card.item["id"] in self.applied_keys)
+                key = card.item["id"]
+                card.set_applied(key in self.applied_keys, partial=key in self.partial_keys)
             elif card.item["kind"] == "style":
                 card.set_applied(card.item["id"] in self.applied_looks)
 
@@ -726,6 +742,7 @@ class BrowserView(QWidget):
                           "subtitle": category, "section": category,
                           "icon": details["icon"], "details": details,
                           "applied": key in self.applied_keys,
+                          "partial": key in self.partial_keys,
                           "drag_key": key, "effect": effect, "unavailable": not allowed,
                           "tooltip": details["tooltip"]})
         return items

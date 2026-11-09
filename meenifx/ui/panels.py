@@ -181,6 +181,7 @@ class EffectsPanel(QWidget):
         layout.addWidget(self.browser)
         self._rows = []
         self._built_key = None
+        self._batch_mode = "set"
         self._edit_before = None
         self._suspend_sync = False
         self._collapsed = set()
@@ -197,21 +198,32 @@ class EffectsPanel(QWidget):
     def refresh_effect_list(self, *_):
         """Tell the browser what the selected clips already carry (checkmarks, media)."""
         clips = self._selected_clips()
-        keys, presets, looks = set(), set(), set()
+        key_clips, preset_clips, look_clips = {}, {}, {}
         for clip in clips:
             for entry in clip.effects:
-                if entry.get("effect_id") == "look":
-                    looks.add((entry.get("params") or {}).get("look") or entry.get("look_id"))
-                elif entry.get("effect_id"):
-                    keys.add(entry.get("effect_id"))
+                key = entry.get("effect_id")
+                if key == "look":
+                    look = (entry.get("params") or {}).get("look") or entry.get("look_id")
+                    if look:
+                        look_clips.setdefault(look, set()).add(clip.id)
+                elif key:
+                    key_clips.setdefault(key, set()).add(clip.id)
             for row in PM.instances(clip):
                 if row.get("preset"):
-                    presets.add(row["preset"])
+                    preset_clips.setdefault(row["preset"], set()).add(clip.id)
+        keys = set(key_clips)
+        # A key on every clip is fully applied; fewer is a half state in the browser.
+        # Sets of clip ids keep a duplicate effect instance from looking like coverage.
+        partial = {key for key, ids in key_clips.items() if len(ids) < len(clips)}
         media = "video"
         if clips:
-            first = clips[0]
-            media = "text" if first.is_text else self.engine.track_type_of(first)
-        self.browser.set_context(keys, presets, looks, media, multiple=len(clips) > 1)
+            if all(clip.is_text for clip in clips):
+                media = "text"
+            elif all(self.engine.track_type_of(clip) == "audio" for clip in clips):
+                media = "audio"
+        self.browser.set_context(keys, set(preset_clips), set(look_clips), media,
+                                 multiple=len(clips) > 1, partial_keys=partial,
+                                 selection_count=len(clips))
 
     def _browser_apply(self, item):
         """One click path for every card: an effect, a Style or an animation family."""
@@ -241,12 +253,17 @@ class EffectsPanel(QWidget):
             return
         params = copy.deepcopy(effect.capture_params())
         another = bool(item.get("another"))
+        skipped = [clip for clip in clips if clip not in targets]
 
         def add(clip):
             clip.effects.append({"effect_id": key, "enabled": True,
                                  "params": copy.deepcopy(params)})
         label = f"Add another {effect.name}" if another else f"Add {effect.name}"
         self.engine.session.apply_to_clips([clip.id for clip in targets], label, add)
+        message = f"{effect.name} added to {len(targets)} clip{'s' if len(targets) != 1 else ''}"
+        if skipped:
+            message += self._skipped_note(skipped)
+        self.engine.session.status.emit(message)
         self.browser.note_recent(item)
         self.properties_requested.emit()
         self._notify()
@@ -351,13 +368,21 @@ class EffectsPanel(QWidget):
             self.engine.session.status.emit(
                 f"{family['name']} has no {mode} variant for this clip")
             return
-        clips = [clip for clip in self._selected_clips()
+        selected = self._selected_clips()
+        clips = [clip for clip in selected
                  if clip.track is not None and clip.track.type == "video"]
+        if media == "text":
+            clips = [clip for clip in clips if clip.is_text]
         if not clips:
             self.engine.session.status.emit("Select a clip to apply an animation")
             return
         self.engine.session.apply_animation(presets, ids=[clip.id for clip in clips],
                                             family_program=family["program"])
+        skipped = [clip for clip in selected if clip not in clips]
+        if skipped:
+            self.engine.session.status.emit(
+                f"Animation applied to {len(clips)} clip{'s' if len(clips) != 1 else ''}"
+                + self._skipped_note(skipped))
         self.browser.note_recent(item)
         self.properties_requested.emit()
         self.refresh_properties()
@@ -414,11 +439,17 @@ class EffectsPanel(QWidget):
             return
         clips = targets
 
+        skipped = [clip for clip in self._selected_clips() if clip not in targets]
+
         def add(clip):
             if not any(entry["effect_id"] == effect_id for entry in clip.effects):
                 clip.effects.append({"effect_id": effect_id, "enabled": True,
                                      "params": copy.deepcopy(effect.capture_params())})
         self.engine.session.apply_to_clips([c.id for c in clips], "Add effect", add)
+        message = f"{effect.name} added to {len(clips)} clip{'s' if len(clips) != 1 else ''}"
+        if skipped:
+            message += self._skipped_note(skipped)
+        self.engine.session.status.emit(message)
         self.properties_requested.emit()
         self._notify()
         self.refresh_properties()
@@ -501,9 +532,38 @@ class EffectsPanel(QWidget):
         self.refresh_properties()
 
     # --------------------------------------------------------------- properties
+    def _skipped_note(self, clips):
+        """Name the clips a batch skipped, rather than silently applying to fewer."""
+        names = ", ".join(f'"{clip.name or "clip"}"' for clip in clips[:3])
+        if len(clips) > 3:
+            names += f" and {len(clips) - 3} more"
+        return f". Skipped {len(clips)} incompatible clip{'s' if len(clips) != 1 else ''}: {names}."
+
     def _structure_key(self, clips):
         if not clips:
             return ("none",)
+        if len(clips) > 1:
+            # Every selected clip contributes structure: an effect added to the second
+            # clip must rebuild the batch cards just like one added to the first.
+            rows = []
+            for clip in clips:
+                effects = tuple((id(entry), entry.get("effect_id"), entry.get("enabled", True),
+                                 entry.get("look_id"), entry.get("name"),
+                                 tuple(sorted((name, isinstance(value, AnimatedValue))
+                                              for name, value in (entry.get("params") or {}).items())))
+                                for entry in clip.effects)
+                text_style = ()
+                if clip.is_text:
+                    settings = TXT.ensure_text(clip)
+                    text_style = tuple((name, str(settings.get(name)))
+                                       for name in ("font", "align", "color", "stroke_color",
+                                                    "shadow_color"))
+                presets = tuple((row.get("preset"), row.get("program"), row.get("category"),
+                                 int(row.get("duration", 0)),
+                                 (row.get("knobs") or {}).get("unit"))
+                                for row in PM.instances(clip)) if hasattr(clip, "presets") else ()
+                rows.append((clip.id, clip.name, effects, text_style, presets))
+            return ("multi", tuple(rows))
         clip = clips[0]
         effects = tuple((id(entry), entry["effect_id"], entry.get("enabled", True),
                          entry.get("look_id"), entry.get("name"),
@@ -577,6 +637,16 @@ class EffectsPanel(QWidget):
                                            "selection")
             self.properties_layout.addWidget(empty, 1)
             return
+        if len(clips) > 1:
+            # Batch inspector: no clip-specific text editor and no per-clip effect
+            # instances here, so nothing can accidentally write only the primary clip.
+            self._multi_selection_card(clips)
+            self._batch_text_card(clips)
+            self._batch_animation_card(clips)
+            self._batch_common_effects_card(clips)
+            self.properties_layout.addStretch(1)
+            self.sync_playhead()
+            return
         clip = clips[0]
         self._clip_card(clip)
         if clip.track is not None and clip.track.type == "video":
@@ -608,6 +678,616 @@ class EffectsPanel(QWidget):
 
     def _clip_frame(self, clip):
         return max(0, int(self.engine.session.playhead) - int(clip.timeline_start))
+
+    # --------------------------------------------------------------- batch editing
+    @staticmethod
+    def _mixed_value(values):
+        """(first value, has a difference) for a mixed-selection control."""
+        if not values:
+            return None, False
+        first = values[0]
+        return first, any(value != first for value in values[1:])
+
+    @staticmethod
+    def _mixed_badge(text="Mixed"):
+        label = QLabel(text)
+        label.setProperty("quiet", True)
+        label.setStyleSheet(f"color: {tokens.COLORS['accent']}; font-size: 11px;")
+        label.setToolTip("The selected clips have different values; editing this changes them all")
+        return label
+
+    @staticmethod
+    def _video_clips(clips):
+        return [clip for clip in clips
+                if clip.track is not None and clip.track.type == "video"]
+
+    @staticmethod
+    def _text_clips(clips):
+        return [clip for clip in clips if clip.is_text]
+
+    @staticmethod
+    def _audio_clips(clips):
+        return [clip for clip in clips
+                if clip.track is not None and clip.track.type == "audio"]
+
+    def _batch_apply(self, clips, label, fn, rebuild=False):
+        """Write once to every clip in a selection, as one undo step."""
+        if not clips:
+            return False
+        self.engine.session.apply_to_clips([clip.id for clip in clips], label, fn)
+        if rebuild:
+            self._built_key = None
+        self._notify()
+        self.refresh_properties()
+        return True
+
+    def _batch_channel_row(self, form, clips, channel, label=None):
+        """A numeric batch row using the channel's own range and units."""
+        meta = CH.spec(clips[0], channel, self.engine.runtime_effects)
+        if not meta:
+            return
+        self._batch_numeric(form, clips, label or meta["label"], channel,
+                            meta["minimum"], meta["maximum"],
+                            step=max(1e-6, float(meta["step"])),
+                            unit=meta["unit"], decimals=int(meta["decimals"]),
+                            tooltip=meta["label"])
+
+    def _batch_numeric(self, form, clips, label, channel, minimum, maximum, *,
+                       step=1.0, unit="", decimals=0, tooltip=""):
+        values = [CH.numeric_value_at(clip, channel, self._clip_frame(clip))
+                  for clip in clips]
+        values = [float(value) for value in values if value is not None]
+        if not values:
+            return
+        first, mixed = self._mixed_value(values)
+        current = 0.0 if self._batch_mode == "offset" else first
+        field = ScrubField(label, current, minimum, maximum, default=current,
+                           step=step, unit=unit, decimals=decimals,
+                           label_width=LABEL_W, tooltip=tooltip or label)
+        field.setProperty("propertyChannel", channel)
+        field.committed.connect(
+            lambda value, cs=list(clips), ch=channel, name=label:
+            self._batch_commit_channel(cs, ch, float(value), name))
+        holder = QWidget()
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(tokens.SP1)
+        row.addWidget(field, 1)
+        if mixed:
+            row.addWidget(self._mixed_badge())
+        self._rows.append({"kind": "batch_channel", "channel": channel,
+                           "field": field, "clips": list(clips)})
+        form.addWidget(holder)
+
+    def _batch_commit_channel(self, clips, channel, value, label):
+        offset = self._batch_mode == "offset"
+        auto = bool(self.engine.session.auto_keyframe.get())
+
+        def write(clip):
+            target = value
+            if offset:
+                current = CH.numeric_value_at(clip, channel, self._clip_frame(clip))
+                target = (float(current) if current is not None else 0.0) + value
+            CH.set_value(clip, channel, target, self._clip_frame(clip), auto)
+
+        self._batch_apply(clips, f"Set {label}", write)
+
+    def _multi_selection_card(self, clips):
+        """Common clip properties for every compatible clip in the selection."""
+        frame, outer = self._card("batch")
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        title = QLabel(f"{len(clips)} clips selected")
+        title.setStyleSheet(f"font-size: {tokens.FONT_TITLE}px; font-weight: 600;")
+        header.addWidget(title)
+        header.addStretch(1)
+        outer.addLayout(header)
+        video = self._video_clips(clips)
+        audio = self._audio_clips(clips)
+        text = self._text_clips(clips)
+        counts = [f"{len(video)} video", f"{len(audio)} audio", f"{len(text)} text"]
+        summary = QLabel("  \u00b7  ".join(count for count in counts if not count.startswith("0 ")))
+        summary.setProperty("quiet", True)
+        outer.addWidget(summary)
+        note = QLabel("Batch edits are one undo step. Text-only controls never touch audio "
+                      "or media clips, and locked clips are skipped.")
+        note.setWordWrap(True)
+        note.setProperty("quiet", True)
+        outer.addWidget(note)
+        body, form = self._form()
+        mode = QComboBox()
+        mode.addItem("Set same value", "set")
+        mode.addItem("Add relative offset", "offset")
+        mode.setCurrentIndex(max(0, mode.findData(self._batch_mode)))
+        mode.setToolTip("Set writes one value everywhere; Offset adds the number to each "
+                        "clip's current value. Numeric controls only.")
+        mode.currentIndexChanged.connect(self._set_batch_mode)
+        form.addWidget(self._labelled("Mode", mode,
+                                      "Set writes one value everywhere; Offset adds to each value"))
+        if video:
+            self._section_label(form, "Video")
+            self._batch_channel_row(form, video, CH.transform_channel("opacity"))
+            self._batch_channel_row(form, video, CH.transform_channel("position_x"))
+            self._batch_channel_row(form, video, CH.transform_channel("position_y"))
+            self._batch_channel_row(form, video, CH.transform_channel("scale_x"))
+            self._batch_channel_row(form, video, CH.transform_channel("scale_y"))
+            self._batch_channel_row(form, video, CH.transform_channel("rotation"))
+            blends = [normalise_mode(clip.blend) for clip in video]
+            blend, mixed = self._mixed_value(blends)
+            combo = QComboBox()
+            if mixed:
+                combo.addItem("Mixed", None)
+            for key, text_label in BLEND_LABELS:
+                combo.addItem(text_label, key)
+            index = 0 if mixed else combo.findData(blend)
+            combo.setCurrentIndex(index if index >= 0 else 0)
+            combo.setToolTip("How each selected picture clip is mixed with the layers below it")
+            combo.activated.connect(
+                lambda position, box=combo, cs=list(video):
+                self._batch_commit_blend(cs, box, position))
+            form.addWidget(self._labelled("Blend", combo,
+                                          "How each selected picture clip is mixed"))
+        if audio:
+            self._section_label(form, "Audio")
+            self._batch_channel_row(form, audio, CH.gain_channel())
+        outer.addWidget(body)
+        self.properties_layout.addWidget(frame)
+
+    def _set_batch_mode(self, index):
+        mode = self.sender().itemData(index) if self.sender() is not None else "set"
+        if mode not in ("set", "offset"):
+            return
+        self._batch_mode = mode
+        self._built_key = None
+        self.refresh_properties()
+
+    def _batch_commit_blend(self, clips, combo, index):
+        key = combo.itemData(index)
+        if key is None:
+            return
+        self._batch_apply(clips, "Set blend mode",
+                          lambda clip: setattr(clip, "blend", key))
+
+    def _batch_text_card(self, clips):
+        """Typography and text-only styling for every selected text clip."""
+        text_clips = self._text_clips(clips)
+        if not text_clips:
+            return
+        frame, outer = self._card("batch_text")
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        title = QLabel(f"Text  \u00b7  {len(text_clips)} clip{'s' if len(text_clips) != 1 else ''}")
+        title.setStyleSheet(f"font-size: {tokens.FONT_TITLE}px; font-weight: 600;")
+        header.addWidget(title)
+        header.addStretch(1)
+        outer.addLayout(header)
+        note = QLabel("Applies to the selected text clips only. Each caption keeps its own "
+                      "words and timing.")
+        note.setWordWrap(True)
+        note.setProperty("quiet", True)
+        outer.addWidget(note)
+        body, form = self._form()
+        families = [str(TXT.ensure_text(clip).get("font") or TXT.DEFAULTS["font"])
+                    for clip in text_clips]
+        family, mixed = self._mixed_value(families)
+        family_combo = QComboBox()
+        if mixed:
+            family_combo.addItem("Mixed", None)
+        family_combo.addItems(TXT.FAMILIES)
+        if family not in TXT.FAMILIES:
+            family_combo.addItem(family, family)
+        family_combo.setCurrentIndex(0 if mixed else max(0, family_combo.findText(family)))
+        family_combo.setToolTip("Font family for every selected text clip")
+        family_combo.activated.connect(
+            lambda index, box=family_combo, cs=list(text_clips):
+            self._batch_commit_text_choice(cs, box, index, "font", "Text font"))
+        form.addWidget(self._labelled("Font", family_combo, "Font family for every text clip"))
+
+        aligns = [str(TXT.ensure_text(clip).get("align") or "center") for clip in text_clips]
+        align, mixed = self._mixed_value(aligns)
+        align_combo = QComboBox()
+        if mixed:
+            align_combo.addItem("Mixed", None)
+        for name in TXT.ALIGNMENTS:
+            align_combo.addItem(name.title(), name)
+        align_combo.setCurrentIndex(0 if mixed else max(0, align_combo.findData(align)))
+        align_combo.activated.connect(
+            lambda index, box=align_combo, cs=list(text_clips):
+            self._batch_commit_text_choice(cs, box, index, "align", "Text alignment"))
+        form.addWidget(self._labelled("Align", align_combo, "Text alignment"))
+
+        self._batch_channel_row(form, text_clips, CH.text_channel("size"))
+        self._batch_color_row(form, text_clips, "Fill", "color")
+        self._batch_color_row(form, text_clips, "Outline", "stroke_color")
+        self._batch_channel_row(form, text_clips, CH.text_channel("stroke_width"))
+        self._batch_color_row(form, text_clips, "Shadow", "shadow_color")
+        self._batch_channel_row(form, text_clips, CH.text_channel("shadow_opacity"))
+        self._batch_channel_row(form, text_clips, CH.text_channel("shadow_blur"))
+        outer.addWidget(body)
+        self.properties_layout.addWidget(frame)
+
+    def _batch_commit_text_choice(self, clips, combo, index, name, label):
+        value = combo.itemData(index)
+        if value is None:
+            return
+
+        def write(clip):
+            if clip.is_text:
+                TXT.ensure_text(clip)[name] = value
+
+        self._batch_apply(clips, label, write, rebuild=True)
+
+    def _batch_color_row(self, form, clips, label, name):
+        colours = [str(TXT.ensure_text(clip).get(name) or "#000000") for clip in clips]
+        first, mixed = self._mixed_value(colours)
+        button = _swatch_button(first, "Click to choose this colour for every selected clip")
+        if mixed:
+            button.setText("Mixed")
+            button.setToolTip("The selected clips use different colours; click to set one for all")
+        button.clicked.connect(
+            lambda _=False, cs=list(clips), key_name=name, b=button:
+            self._batch_pick_text_colour(cs, key_name, b))
+        holder = QWidget()
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(tokens.SP1)
+        row.addWidget(button)
+        if mixed:
+            row.addWidget(self._mixed_badge())
+        row.addStretch(1)
+        form.addWidget(self._labelled(label, holder,
+                                      f"{label} colour for every selected text clip"))
+
+    def _batch_pick_text_colour(self, clips, name, button):
+        first = TXT.ensure_text(clips[0]).get(name) if clips else "#000000"
+        colour = QColorDialog.getColor(QColor(first or "#000000"), self, "Text color")
+        if colour.isValid():
+            self._batch_set_text_colour(clips, name, colour.name())
+
+    def _batch_set_text_colour(self, clips, name, value):
+        """Set one text colour on every text clip; non-text clips are ignored."""
+        def write(clip):
+            if clip.is_text:
+                TXT.ensure_text(clip)[name] = str(value)
+
+        self._batch_apply(clips, "Text color", write, rebuild=True)
+
+    def _batch_animation_card(self, clips):
+        """Clip-local animation durations for preset families on the selection."""
+        groups = {}
+        for clip in clips:
+            for instance in PM.instances(clip):
+                program = str(instance.get("program") or "")
+                if program:
+                    groups.setdefault(program, []).append((clip, instance))
+        if not groups:
+            return
+        frame, outer = self._card("batch_animation")
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        title = QLabel("Animation")
+        title.setStyleSheet(f"font-size: {tokens.FONT_TITLE}px; font-weight: 600;")
+        header.addWidget(title)
+        header.addStretch(1)
+        outer.addLayout(header)
+        note = QLabel("Durations are per clip and clip-local: In starts at each clip's "
+                      "beginning, Out ends at its end, and Loop runs through its duration.")
+        note.setWordWrap(True)
+        note.setProperty("quiet", True)
+        outer.addWidget(note)
+        body, form = self._form()
+        for program, rows in groups.items():
+            family = next((item for item in FAMILIES.families()
+                           if item.get("program") == program), None)
+            name = (family or {}).get("name") or program.replace("_", " ").title()
+            durations = [int(instance.get("duration", 0)) for _clip, instance in rows]
+            first, mixed = self._mixed_value(durations)
+            coverage = len({clip.id for clip, _instance in rows})
+            field = ScrubField(f"{name} duration", 0 if self._batch_mode == "offset" else first,
+                               1, max(1, max(int(clip.duration) for clip in clips)),
+                               default=first, step=1, unit=" f", label_width=LABEL_W,
+                               tooltip="Length of this animation on each selected clip, in "
+                                       "clip-local frames")
+            field.committed.connect(
+                lambda value, p=program, cs=list(clips):
+                self._batch_set_animation_duration(cs, p, int(round(value))))
+            holder = QWidget()
+            row = QHBoxLayout(holder)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(tokens.SP1)
+            row.addWidget(field, 1)
+            if mixed:
+                row.addWidget(self._mixed_badge())
+            if coverage < len(clips):
+                row.addWidget(self._mixed_badge(f"{coverage}/{len(clips)}"))
+            self._rows.append({"kind": "batch_animation", "program": program,
+                               "field": field, "clips": list(clips)})
+            form.addWidget(holder)
+        outer.addWidget(body)
+        self.properties_layout.addWidget(frame)
+
+    def _batch_set_animation_duration(self, clips, program, value):
+        offset = self._batch_mode == "offset"
+
+        def write(clip):
+            for instance in PM.instances(clip):
+                if str(instance.get("program") or "") != program:
+                    continue
+                duration = int(instance.get("duration", 0)) + value if offset else value
+                PM.set_range(instance, duration=max(1, duration), clip=clip)
+
+        self._batch_apply(clips, "Set animation duration", write)
+
+    def _batch_common_effects_card(self, clips):
+        """Every effect on any selected clip, with coverage and shared controls."""
+        keys = []
+        for clip in clips:
+            for entry in clip.effects:
+                key = entry.get("effect_id")
+                if key and key not in keys:
+                    keys.append(key)
+        if not keys:
+            return
+        frame, outer = self._card("batch_effects")
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        title = QLabel("Effects")
+        title.setStyleSheet(f"font-size: {tokens.FONT_TITLE}px; font-weight: 600;")
+        header.addWidget(title)
+        header.addStretch(1)
+        outer.addLayout(header)
+        note = QLabel("A half tick means the effect is on some selected clips. Parameters "
+                      "change only the clips that have it; Remove never touches other effects.")
+        note.setWordWrap(True)
+        note.setProperty("quiet", True)
+        outer.addWidget(note)
+        body, form = self._form()
+        for key in keys:
+            runtime = next((effect for effect in self.engine.effects if effect.key == key), None)
+            if runtime is None:
+                continue
+            present = [clip for clip in clips
+                       if any(entry.get("effect_id") == key for entry in clip.effects)]
+            if not present:
+                continue
+            self._batch_effect_block(form, clips, key, runtime, present)
+        outer.addWidget(body)
+        self.properties_layout.addWidget(frame)
+
+    def _batch_effect_block(self, form, clips, key, runtime, present):
+        box = QFrame()
+        box.setProperty("subCard", True)
+        column = QVBoxLayout(box)
+        column.setContentsMargins(tokens.SP1 + 2, 2, tokens.SP1 + 2, 2)
+        column.setSpacing(2)
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(tokens.SP1)
+        states = [any(entry.get("enabled", True) for entry in clip.effects
+                      if entry.get("effect_id") == key) for clip in present]
+        enabled = QCheckBox(runtime.name)
+        enabled.setTristate(True)
+        if all(states):
+            enabled.setCheckState(Qt.CheckState.Checked)
+        elif not any(states):
+            enabled.setCheckState(Qt.CheckState.Unchecked)
+        else:
+            enabled.setCheckState(Qt.CheckState.PartiallyChecked)
+        enabled.setToolTip("Enable or disable this effect on every selected clip that has it")
+        enabled.clicked.connect(
+            lambda _checked=False, cs=list(present), k=key, w=enabled:
+            self._batch_enable_effect(cs, k, w.checkState() != Qt.CheckState.Unchecked))
+        top.addWidget(enabled, 1)
+        coverage = QLabel("All" if len(present) == len(clips)
+                          else f"{len(present)}/{len(clips)}")
+        coverage.setProperty("quiet", True)
+        coverage.setToolTip("How many selected clips carry this effect")
+        top.addWidget(coverage)
+        missing = [clip for clip in clips if clip not in present
+                   and self.engine.clip_accepts_effect(clip, key)]
+        if missing and key != "look":
+            add = QToolButton()
+            add.setText("Add to missing")
+            add.setToolTip(f"Add {runtime.name} to the {len(missing)} selected clips that lack it")
+            add.clicked.connect(
+                lambda _=False, cs=list(missing), k=key, effect=runtime:
+                self._batch_add_effect(cs, k, effect))
+            top.addWidget(add)
+        remove = QToolButton()
+        remove.setText("Remove")
+        remove.setToolTip(f"Remove {runtime.name} from every selected clip that has it")
+        remove.clicked.connect(
+            lambda _=False, cs=list(present), k=key:
+            self._batch_remove_effect(cs, k))
+        top.addWidget(remove)
+        column.addLayout(top)
+
+        arrow = QToolButton()
+        arrow.setText("Parameters")
+        arrow.setIcon(icon("chevron_right"))
+        arrow.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        arrow.setCheckable(True)
+        arrow.setStyleSheet("QToolButton { border: 0; background: transparent; }")
+        body, inner = self._form()
+        body.setVisible(False)
+
+        def toggle(on, target=body, button=arrow):
+            target.setVisible(bool(on))
+            button.setIcon(icon("chevron_down" if on else "chevron_right"))
+        arrow.toggled.connect(toggle)
+        self._batch_effect_fields(inner, present, key, runtime)
+        column.addWidget(arrow, 0, Qt.AlignmentFlag.AlignLeft)
+        column.addWidget(body)
+        form.addWidget(box)
+
+    def _batch_effect_fields(self, form, clips, key, runtime):
+        specs = [MIX_SPEC] + [spec for spec in runtime.param_specs() if not spec.advanced]
+        if not specs:
+            hint = QLabel("This effect has no editable parameters.")
+            hint.setProperty("quiet", True)
+            form.addWidget(hint)
+            return
+        for spec in specs:
+            if spec.kind in ("int", "float"):
+                self._batch_effect_numeric(form, clips, key, spec)
+            elif spec.kind == "bool":
+                self._batch_effect_bool(form, clips, key, spec)
+            elif spec.kind == "choice":
+                self._batch_effect_choice(form, clips, key, spec)
+            else:
+                self._batch_effect_text(form, clips, key, spec)
+
+    def _batch_effect_entry(self, clip, key):
+        return next((entry for entry in clip.effects if entry.get("effect_id") == key), None)
+
+    def _batch_effect_values(self, clips, key, spec):
+        values = []
+        for clip in clips:
+            entry = self._batch_effect_entry(clip, key)
+            if entry is None:
+                continue
+            stored = (entry.get("params") or {}).get(spec.name, spec.default)
+            values.append(spec.clamp(parameter_value_at(stored, self._clip_frame(clip))))
+        return values
+
+    def _batch_effect_numeric(self, form, clips, key, spec):
+        values = self._batch_effect_values(clips, key, spec)
+        numbers = [float(value) for value in values if isinstance(value, (int, float))
+                   and not isinstance(value, bool)]
+        if not numbers:
+            return
+        first, mixed = self._mixed_value(numbers)
+        current = 0.0 if self._batch_mode == "offset" else first
+        field = ScrubField(spec.label, current, spec.minimum, spec.maximum,
+                           default=spec.default, step=spec.step, unit=spec.unit,
+                           decimals=0 if spec.kind == "int" else 2,
+                           label_width=LABEL_W, tooltip=spec.help or spec.label)
+        field.committed.connect(
+            lambda value, cs=list(clips), k=key, s=spec:
+            self._batch_set_effect_param(cs, k, s, float(value)))
+        holder = QWidget()
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(tokens.SP1)
+        row.addWidget(field, 1)
+        if mixed:
+            row.addWidget(self._mixed_badge())
+        form.addWidget(holder)
+
+    def _batch_set_effect_param(self, clips, key, spec, value):
+        offset = self._batch_mode == "offset" and spec.kind in ("int", "float")
+        auto = bool(self.engine.session.auto_keyframe.get())
+
+        def write(clip):
+            entry = self._batch_effect_entry(clip, key)
+            if entry is None:
+                return
+            if spec.kind in ("int", "float"):
+                target = value
+                if offset:
+                    stored = (entry.get("params") or {}).get(spec.name, spec.default)
+                    current = parameter_value_at(stored, self._clip_frame(clip))
+                    target = float(current or 0.0) + value
+                CH.set_value(clip, CH.effect_channel(key, spec.name), spec.clamp(target),
+                             self._clip_frame(clip), auto)
+            else:
+                entry.setdefault("params", {})[spec.name] = value
+
+        self._batch_apply(clips, f"Set {spec.label}", write)
+
+    def _batch_effect_bool(self, form, clips, key, spec):
+        values = [bool(value) for value in self._batch_effect_values(clips, key, spec)]
+        if not values:
+            return
+        box = QCheckBox(spec.label)
+        box.setTristate(True)
+        if all(values):
+            box.setCheckState(Qt.CheckState.Checked)
+        elif not any(values):
+            box.setCheckState(Qt.CheckState.Unchecked)
+        else:
+            box.setCheckState(Qt.CheckState.PartiallyChecked)
+        box.setToolTip(spec.help or spec.label)
+        box.clicked.connect(
+            lambda _checked=False, cs=list(clips), k=key, s=spec, w=box:
+            self._batch_set_effect_value(cs, k, s,
+                                         w.checkState() != Qt.CheckState.Unchecked))
+        form.addWidget(box)
+
+    def _batch_effect_choice(self, form, clips, key, spec):
+        values = [spec.clamp(value) for value in self._batch_effect_values(clips, key, spec)]
+        if not values:
+            return
+        first, mixed = self._mixed_value(values)
+        combo = QComboBox()
+        if mixed:
+            combo.addItem("Mixed", None)
+        for choice, label in spec.choice_items():
+            combo.addItem(label, choice)
+        combo.setCurrentIndex(0 if mixed else max(0, combo.findData(first)))
+        combo.setToolTip(spec.help or spec.label)
+        combo.activated.connect(
+            lambda index, cs=list(clips), k=key, s=spec, w=combo:
+            self._batch_commit_effect_choice(cs, k, s, w, index))
+        form.addWidget(self._labelled(spec.label, combo, spec.help or spec.label))
+
+    def _batch_commit_effect_choice(self, clips, key, spec, combo, index):
+        value = combo.itemData(index)
+        if value is None:
+            return
+        self._batch_set_effect_value(clips, key, spec, spec.clamp(value))
+
+    def _batch_effect_text(self, form, clips, key, spec):
+        values = [str(value) for value in self._batch_effect_values(clips, key, spec)]
+        if not values:
+            return
+        first, mixed = self._mixed_value(values)
+        start_text = "" if mixed else first
+        edit = QLineEdit(start_text)
+        edit.setPlaceholderText("Mixed" if mixed else "")
+        edit.setToolTip(spec.help or spec.label)
+
+        def commit(cs=list(clips), k=key, s=spec, w=edit, initial=start_text):
+            # Focus moving through the card must not clear a value the user never edited.
+            if w.text() != initial:
+                self._batch_set_effect_value(cs, k, s, w.text())
+        edit.editingFinished.connect(commit)
+        form.addWidget(self._labelled(spec.label, edit, spec.help or spec.label))
+
+    def _batch_set_effect_value(self, clips, key, spec, value):
+        def write(clip):
+            entry = self._batch_effect_entry(clip, key)
+            if entry is not None:
+                entry.setdefault("params", {})[spec.name] = value
+
+        self._batch_apply(clips, f"Set {spec.label}", write)
+
+    def _batch_enable_effect(self, clips, key, enabled):
+        def write(clip):
+            for entry in clip.effects:
+                if entry.get("effect_id") == key:
+                    entry["enabled"] = bool(enabled)
+
+        self._batch_apply(clips, "Toggle effect", write)
+
+    def _batch_add_effect(self, clips, key, runtime):
+        params = copy.deepcopy(runtime.capture_params())
+
+        def write(clip):
+            if not self.engine.clip_accepts_effect(clip, key):
+                return
+            if not any(entry.get("effect_id") == key for entry in clip.effects):
+                clip.effects.append({"effect_id": key, "enabled": True,
+                                     "params": copy.deepcopy(params)})
+
+        self._batch_apply(clips, f"Add {runtime.name}", write)
+
+    def _batch_remove_effect(self, clips, key):
+        def write(clip):
+            clip.effects = [entry for entry in clip.effects
+                            if entry.get("effect_id") != key]
+
+        self._batch_apply(clips, "Remove effect", write)
 
 
     # --------------------------------------------------------------- transform
