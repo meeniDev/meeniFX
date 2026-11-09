@@ -228,3 +228,28 @@ def test_preview_settings_persist(qapp, tmp_path):
     assert (loaded.image_mode, loaded.custom_path, loaded.background, loaded.quality) == \
            ("custom", str(tmp_path / "p.png"), "light", "high")
     assert loaded.scale() == 3
+
+
+# ------------------------------------------------------------- audio and time
+def test_audio_effects_get_waveform_illustrations_not_the_cafe_picture(qapp, engine):
+    from PyQt6.QtGui import QImage
+
+    images = {}
+    for key in sorted(T.AUDIO_EFFECTS):
+        image = T.audio_preview(key, *SIZE, T.PreviewSettings(background="dark"))
+        assert isinstance(image, QImage) and not image.isNull(), key
+        images[key] = image
+    assert images["audio_gain"] != images["audio_eq"]
+    assert images["audio_lowpass"] != images["audio_highpass"]
+    reference = T.reference_preview(*SIZE, T.PreviewSettings(background="dark"))
+    assert reference is not None and images["audio_gain"] != reference
+
+
+def test_temporal_effects_generate_a_representative_frame_sequence(qapp, engine):
+    settings = T.PreviewSettings(background="dark")
+    for key in sorted(T.TEMPORAL_EFFECTS):
+        frames = T.temporal_preview_frames(engine, key, *SIZE, settings)
+        assert len(frames) >= 6, key
+        assert all(frame.shape[:2] == (SIZE[1], SIZE[0]) for frame in frames), key
+        assert any(np.abs(frames[index].astype(int) - frames[index - 1].astype(int)).mean() > 0.1
+                   for index in range(1, len(frames))), key

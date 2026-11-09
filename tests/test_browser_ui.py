@@ -8,13 +8,16 @@ import copy
 import time
 
 import pytest
+from PyQt6.QtCore import QSettings
 from PyQt6.QtWidgets import QFrame
 
 from conftest import build_engine
 from meenifx import thumbnails as THUMBS
+from meenifx.effects import categories as EFFECTS_META
 from meenifx.icons import icon
 from meenifx.model import looks as LOOKS
 from meenifx.ui.panels import EffectsPanel
+from meenifx.ui.browser import LIST_H
 
 
 @pytest.fixture
@@ -24,7 +27,13 @@ def panel_and_clip(qapp):
     panel = EffectsPanel(engine)
     panel.refresh_effect_list()
     panel.browser.refresh()
-    return panel, engine, clip
+    try:
+        yield panel, engine, clip
+    finally:
+        panel.browser.shutdown()
+        panel.close()
+        panel.deleteLater()
+        qapp.processEvents()
 
 
 def cards(panel):
@@ -87,6 +96,21 @@ def test_browser_toggle_icons_are_real_shared_vectors(panel_and_clip):
         image = icon(name, "#ffffff", 16).pixmap(16, 16).toImage()
         assert any(image.pixelColor(x, y).alpha() for x in range(image.width())
                    for y in range(image.height()))
+
+
+def test_every_effect_has_a_visible_stroke_icon(panel_and_clip):
+    panel, _engine, _clip = panel_and_clip
+    browser = panel.browser
+    icons = {card.item["id"]: card.item["icon"] for card in browser._cards}
+    for key, name in icons.items():
+        image = icon(name, "#ffffff", 16).pixmap(16, 16).toImage()
+        assert not image.isNull(), key
+        assert any(image.pixelColor(x, y).alpha() for x in range(image.width())
+                   for y in range(image.height())), (key, name)
+    audio = {name for key, name in icons.items() if key.startswith("audio_")}
+    time = {icons[key] for key in ("posterize_time", "stutter", "echo")}
+    assert len(audio) >= 8, "audio effects must not all reuse one music glyph"
+    assert len(time) == 3, "each time effect needs its own frame motif"
 
 
 def test_tracker_cards_fall_back_to_the_reference_picture_and_an_icon(panel_and_clip):
@@ -299,3 +323,103 @@ def test_disabling_a_style_group_disables_its_members(panel_and_clip):
     strengths = type(engine).look_strengths(disabled_group.effects, 0)
     assert strengths.get(group_id) == 0.0, "a disabled style contributes nothing"
     assert members
+
+
+# ------------------------------------------------------- library organisation
+def test_effects_use_the_professional_categories_and_short_details(panel_and_clip):
+    panel, _engine, _clip = panel_and_clip
+    browser = panel.browser
+    categories = {card.item["section"] for card in browser._cards}
+    assert categories <= set(EFFECTS_META.CATEGORY_ORDER)
+    assert {"Blur & Glow", "Color & Light", "Distortion", "Time & Motion",
+            "Keying & Masking", "Tracking", "Stylize", "Audio"} <= categories
+    assert "Looks" not in categories
+    details = cards(panel)["posterize_time"].item["details"]
+    assert details["category"] == "Time & Motion"
+    assert details["keyframes"] and details["adjustment"]
+    assert not details["experimental"]
+    assert "Experimental: Yes" in cards(panel)["face_tracker"].item["tooltip"]
+
+
+def test_alphabetical_sort_spans_the_whole_effect_library(panel_and_clip):
+    panel, _engine, _clip = panel_and_clip
+    browser = panel.browser
+    browser.set_sort_mode("name")
+    names = [card.item["name"].casefold() for card in browser._cards]
+    assert names == sorted(names)
+    assert all(section["header"] is None for section in browser._sections)
+
+    browser.set_sort_mode("category")
+    assert any(section["header"] is not None for section in browser._sections)
+
+
+def test_list_view_has_compact_rows_and_collapsible_category_headers(panel_and_clip):
+    panel, _engine, _clip = panel_and_clip
+    browser = panel.browser
+    browser.set_view_mode("list")
+    headers = [section["header"] for section in browser._sections
+               if section["header"] is not None]
+    assert len(headers) >= 5
+    row = cards(panel)["mosaic"]
+    assert row.height() == LIST_H
+    assert row.thumb.width() == 26
+    category = headers[0].category
+    before = len(browser._cards)
+    browser._toggle_category(category)
+    assert category in browser._collapsed_categories
+    assert len(browser._cards) < before
+    browser._toggle_category(category)
+    assert category not in browser._collapsed_categories
+    browser.set_view_mode("grid")
+
+
+def test_the_chosen_view_and_sort_are_remembered(panel_and_clip, tmp_path):
+    panel, _engine, _clip = panel_and_clip
+    browser = panel.browser
+    browser._store = QSettings(str(tmp_path / "browser.ini"), QSettings.Format.IniFormat)
+    browser.set_view_mode("list")
+    browser.set_sort_mode("name")
+    assert browser._store.value("browser/view") == "list"
+    assert browser._store.value("browser/sort") == "name"
+    browser.set_view_mode("grid")
+    browser.set_sort_mode("category")
+
+
+def test_selection_explains_keyframes_adjustment_and_experimental_state(panel_and_clip):
+    panel, _engine, _clip = panel_and_clip
+    browser = panel.browser
+    browser._card_selected(cards(panel)["posterize_time"].item)
+    text = browser.info.text()
+    assert "Time & Motion" in text
+    assert "Keyframes: Yes" in text and "Adjustment: Yes" in text
+    assert "Experimental" not in text
+    browser._card_selected(cards(panel)["face_tracker"].item)
+    assert "Experimental" in browser.info.text()
+
+
+def test_multiple_selected_clips_receive_the_same_compatible_effect(panel_and_clip):
+    panel, engine, clip = panel_and_clip
+    browser = panel.browser
+    second = engine.timeline.new_clip("second", "synthetic.png", clip.track, 200, 40,
+                                      source_out=400, source_fps=30)
+    engine.session.set_selection({clip.id, second.id})
+    panel.refresh_effect_list()
+    browser.refresh()
+    browser._card_activated(cards(panel)["mosaic"].item)
+    assert effects_of(engine, clip) == ["mosaic"]
+    assert effects_of(engine, second) == ["mosaic"]
+
+
+def test_time_effect_hover_uses_a_representative_frame_sequence(panel_and_clip, qapp):
+    panel, _engine, _clip = panel_and_clip
+    browser = panel.browser
+    panel.resize(620, 700)
+    panel.show()
+    qapp.processEvents()
+    card = cards(panel)["posterize_time"]
+    browser._hover_begin(card.item, card)
+    browser._hover_start_playing()
+    assert len(browser._hover_frames) >= 6
+    assert browser._hover_play_timer.isActive()
+    browser._hover_stop_playing()
+    panel.close()

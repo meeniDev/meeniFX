@@ -18,6 +18,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import json
+import math
 import os
 from dataclasses import dataclass
 
@@ -27,6 +28,7 @@ from PyQt6.QtCore import QObject, QRunnable, QSettings, QThreadPool, pyqtSignal
 from PyQt6.QtGui import QImage
 
 from .config import APP_VERSION, ASSETS_ROOT, user_config_dir
+from .tokens import COLORS
 
 DEFAULT_IMAGE_NAME = "figure_cafe.png"
 GROUP = "preview"
@@ -51,6 +53,12 @@ ICON_ONLY = {
     # a card that looked like the plain reference would claim the effect does nothing.
     "face_tracker", "hand_tracker",
 }
+
+# Audio effects get a drawn waveform/frequency illustration, and time effects animate
+# representative frames on hover. These sets let the browser ask for the right preview
+# without guessing from a category name.
+AUDIO_EFFECTS = {key for key in ICON_ONLY if key.startswith("audio_")}
+TEMPORAL_EFFECTS = {"posterize_time", "stutter", "echo"}
 
 # Preview-only configurations. They exist so a card shows what the effect does; the
 # effect's real defaults are never touched (the inspector still starts from them).
@@ -461,10 +469,209 @@ def render_animation_frame(engine, animation, width, height, settings=None, frac
     return _alpha_over(background_layer(width, height, settings.background), layer)
 
 
+# ---------------------------------------------------------------- audio previews
+def _hex_bgr(value):
+    value = str(value or "#8CC4AC").lstrip("#")
+    if len(value) != 6:
+        value = "8CC4AC"
+    return (int(value[4:6], 16), int(value[2:4], 16), int(value[0:2], 16))
+
+
+def _audio_wave(width, height, amplitude, *, phase=0.0, clamp=1.0, envelope=None):
+    """A dense waveform with a little noise-free texture, in pixel coordinates."""
+    middle = height * 0.5
+    points = []
+    for x in range(max(2, int(width * 0.08)), max(3, int(width * 0.92)), 2):
+        t = (x / max(1.0, width - 1.0)) * 8.0 + phase
+        value = (0.62 * np.sin(t * 2.1) + 0.28 * np.sin(t * 5.3 + 0.8)
+                 + 0.10 * np.sin(t * 11.0 + 0.3))
+        value = float(np.clip(value, -clamp, clamp))
+        if envelope is not None:
+            value *= envelope(x / max(1.0, width - 1.0))
+        points.append([int(x), int(round(middle + value * amplitude))])
+    return np.asarray(points, np.int32)
+
+
+def _audio_grid(canvas, light):
+    height, width = canvas.shape[:2]
+    grid = (183, 189, 185) if light else (63, 71, 68)
+    for fraction in (0.2, 0.4, 0.6, 0.8):
+        x = int(width * fraction)
+        y = int(height * fraction)
+        cv2.line(canvas, (x, int(height * 0.12)), (x, int(height * 0.88)), grid, 1)
+        cv2.line(canvas, (int(width * 0.08), y), (int(width * 0.92), y), grid, 1)
+
+
+def audio_preview_layer(effect_key, width, height, settings=None):
+    """BGR illustration for an audio effect: waveform, filter curve or meter.
+
+    The audio tools cannot be judged on the café photograph, so their cards show the shape
+    of the processing instead. These are real illustrations of the effect's job, drawn
+    from its defaults, not a generic music glyph.
+    """
+    settings = settings or PreviewSettings.load()
+    width, height = max(16, int(width)), max(16, int(height))
+    canvas = background_layer(width, height, settings.background)
+    light = float(canvas.mean()) > 150.0
+    _audio_grid(canvas, light)
+    accent = _hex_bgr(COLORS.get("accent"))
+    soft = tuple(min(255, int(channel * 0.58 + (255 if light else 0) * 0.15))
+                 for channel in accent)
+    thickness = max(1, int(round(min(width, height) / 46.0)))
+    left, right = int(width * 0.08), int(width * 0.92)
+    top, bottom = int(height * 0.12), int(height * 0.88)
+    middle = (top + bottom) // 2
+
+    if effect_key == "audio_gain":
+        points = _audio_wave(width, height, height * 0.31)
+        cv2.polylines(canvas, [points], False, accent, thickness, cv2.LINE_AA)
+        cv2.line(canvas, (left, middle), (right, middle), soft, 1)
+    elif effect_key == "audio_fade":
+        envelope = lambda t: max(0.05, min(1.0, t * 1.4)) * max(0.05, min(1.0, (1.0 - t) * 1.4))
+        points = _audio_wave(width, height, height * 0.38, envelope=envelope)
+        cv2.polylines(canvas, [points], False, accent, thickness, cv2.LINE_AA)
+        for direction in (1, -1):
+            cv2.line(canvas, (left, middle),
+                     (right, middle + direction * int(height * 0.38)), soft, 1, cv2.LINE_AA)
+    elif effect_key == "audio_eq":
+        bars = 9
+        for index in range(bars):
+            x = left + int((right - left) * (index + 0.5) / bars)
+            gain = 0.18 + 0.62 * (0.5 + 0.5 * math.sin(index * 1.15 - 0.7))
+            half = int((bottom - top) * gain / 2.0)
+            cv2.line(canvas, (x, middle - half), (x, middle + half), accent, thickness + 1,
+                     cv2.LINE_AA)
+        cv2.line(canvas, (left, middle), (right, middle), soft, 1)
+    elif effect_key in ("audio_lowpass", "audio_highpass"):
+        cv2.line(canvas, (left, bottom), (right, bottom), soft, 1)
+        cv2.line(canvas, (left, top), (left, bottom), soft, 1)
+        points = []
+        for x in range(left, right + 1, max(1, (right - left) // 48)):
+            t = (x - left) / max(1.0, right - left)
+            if effect_key == "audio_lowpass":
+                y = top + (bottom - top) * (0.06 + 0.94 / (1.0 + np.exp((t - 0.42) * 18.0)))
+            else:
+                y = top + (bottom - top) * (0.06 + 0.94 / (1.0 + np.exp((0.58 - t) * 18.0)))
+            points.append([x, int(round(y))])
+        cv2.polylines(canvas, [np.asarray(points, np.int32)], False, accent, thickness + 1,
+                      cv2.LINE_AA)
+    elif effect_key in ("audio_compressor", "audio_limiter"):
+        ceiling = 0.45 if effect_key == "audio_compressor" else 0.28
+        points = _audio_wave(width, height, height * 0.44, clamp=ceiling)
+        cv2.polylines(canvas, [points], False, accent, thickness, cv2.LINE_AA)
+        for level in (ceiling, -ceiling):
+            y = int(middle + level * height)
+            for x in range(left, right, max(8, width // 14)):
+                cv2.line(canvas, (x, y), (min(right, x + max(3, width // 30)), y), soft, 1)
+    elif effect_key == "audio_reverb":
+        points = _audio_wave(width, height, height * 0.25, phase=0.2)
+        for index in range(4):
+            shifted = points.copy()
+            shifted[:, 0] = np.clip(shifted[:, 0] + int(width * 0.04 * (index + 1)), 0, width - 1)
+            cv2.polylines(canvas, [shifted], False, accent if index == 0 else soft,
+                          max(1, thickness - (1 if index else 0)), cv2.LINE_AA)
+    elif effect_key == "audio_delay":
+        for index in range(5):
+            x = left + int((right - left) * (0.12 + index * 0.19))
+            half = int((bottom - top) * (0.40 * (0.72 ** index)))
+            cv2.line(canvas, (x, middle - half), (x, middle + half), accent, thickness + 1,
+                     cv2.LINE_AA)
+        cv2.line(canvas, (left, middle), (right, middle), soft, 1)
+    elif effect_key == "audio_pan":
+        cv2.line(canvas, (left, middle), (right, middle), soft, 1)
+        for side in (-1, 1):
+            points = _audio_wave(width, height, height * 0.22, phase=0.1 if side < 0 else 1.4)
+            points[:, 1] = np.clip(points[:, 1] + side * int(height * 0.22), top, bottom)
+            cv2.polylines(canvas, [points], False, accent, thickness, cv2.LINE_AA)
+    else:
+        points = _audio_wave(width, height, height * 0.32)
+        cv2.polylines(canvas, [points], False, accent, thickness, cv2.LINE_AA)
+    return canvas
+
+
+def audio_preview(effect_key, width, height, settings=None):
+    """QImage version, for tests and one-off callers outside the thumbnail cache."""
+    return to_qimage(audio_preview_layer(effect_key, width, height, settings))
+
+
+# ------------------------------------------------------------ temporal previews
+def _shifted_reference(width, height, settings, fraction):
+    """The reference picture moving across the card, so a time effect has motion to hold."""
+    layer = reference_layer(width, height, settings)
+    if layer is None:
+        return None
+    shift = (fraction * 2.0 - 1.0) * width * 0.065
+    matrix = np.array([[1.0, 0.0, shift], [0.0, 1.0, 0.0]], np.float32)
+    shifted = cv2.warpAffine(layer, matrix, (width, height), flags=cv2.INTER_LINEAR,
+                             borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+    return _alpha_over(background_layer(width, height, settings.background), shifted)
+
+
+def temporal_preview_frames(engine, effect_key, width, height, settings=None, count=8):
+    """Representative frames for Posterize Time, Stutter and Echo.
+
+    The reference slides across the card and the time behavior is applied to that motion:
+    Posterize Time holds samples, Stutter repeats a short cycle, and Echo blends earlier
+    positions into a trail. The frames are generated only for a hover preview, so the
+    regular cached still thumbnails stay cheap.
+    """
+    settings = settings or PreviewSettings.load()
+    width, height = max(16, int(width)), max(16, int(height))
+    count = max(4, int(count))
+    raw = [_shifted_reference(width, height, settings, index / float(count - 1))
+           for index in range(count)]
+    if any(frame is None for frame in raw):
+        return []
+    effect = next((item for item in getattr(engine, "effects", ())
+                   if type(item).key == effect_key), None)
+    if effect is None:
+        return raw
+    params = {name: value for name, value in effect.capture_params().items()}
+
+    if effect_key == "posterize_time":
+        from .effects.temporal import posterize_hold
+        frames = []
+        for index in range(count):
+            sample = posterize_hold(index * 3, params, 30.0)
+            raw_index = int(round(sample / 3.0))
+            frames.append(raw[max(0, min(count - 1, raw_index))])
+        return frames
+
+    if effect_key == "stutter":
+        interval = max(1, int(params.get("interval", 12) or 12))
+        hold = max(1, int(params.get("hold", 4) or 4))
+        offset = int(params.get("offset", 0) or 0)
+        frames = []
+        for index in range(count):
+            frame_number = index * 3 + offset
+            cycle = frame_number % interval
+            held = frame_number - cycle + min(cycle, hold)
+            raw_index = int(round((held - offset) / 3.0))
+            frames.append(raw[max(0, min(count - 1, raw_index))])
+        return frames
+
+    # Echo: screen-blend earlier moving positions into the current one.
+    echo_count = max(1, min(4, int(params.get("count", 3) or 3)))
+    step = max(1, min(count, int(params.get("step", 2) or 2)))
+    decay = max(0.0, min(1.0, float(params.get("decay", 55.0) or 0.0) / 100.0))
+    frames = []
+    for index in range(count):
+        current = raw[index].astype(np.float32)
+        light = np.zeros_like(current)
+        for echo in range(1, echo_count + 1):
+            earlier = raw[max(0, index - echo * step)]
+            light += earlier.astype(np.float32) * (decay ** echo)
+        mixed = 255.0 - (255.0 - current) * (255.0 - np.clip(light, 0.0, 255.0)) / 255.0
+        frames.append(np.clip(mixed, 0, 255).astype(np.uint8))
+    return frames
+
+
 def render_entries(engine, entries, width, height, settings=None, frame=None):
     """BGR thumbnail for an entry stack; None when the reference image is unusable."""
     settings = settings or PreviewSettings.load()
     entries = list(entries or ())
+    if len(entries) == 1 and entries[0].get("audio_preview"):
+        return audio_preview_layer(entries[0]["audio_preview"], width, height, settings)
     if len(entries) == 1 and isinstance(entries[0].get("animation"), dict):
         layer = animation_layer(engine, entries[0]["animation"], width, height, settings)
     else:

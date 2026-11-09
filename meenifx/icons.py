@@ -289,6 +289,299 @@ def _draw(name, p, color):
         p.drawLine(QPointF(10.6, 3.2), QPointF(10.6, 10.6))
         p.drawLine(QPointF(10.6, 3.2), QPointF(13.2, 4.2))
         p.drawEllipse(QPointF(8.4, 11), 2.2, 1.8)
+    elif name == "equalizer":
+        p.drawLine(QPointF(2.2, 13.0), QPointF(13.8, 13.0))
+        p.setBrush(fill); p.setPen(Qt.PenStyle.NoPen)
+        for x, height in ((3.2, 3.0), (5.8, 6.8), (8.4, 4.8), (11.0, 8.8), (13.2, 3.8)):
+            p.drawRoundedRect(QRectF(x - 0.7, 13.0 - height, 1.4, height), 0.7, 0.7)
+    elif name == "compressor":
+        path = QPainterPath(QPointF(2.0, 10.4))
+        path.cubicTo(4.0, 10.4, 4.2, 5.2, 6.2, 5.2)
+        path.cubicTo(8.2, 5.2, 8.0, 10.4, 10.0, 10.4)
+        path.cubicTo(11.8, 10.4, 12.2, 6.8, 14.0, 6.8)
+        p.drawPath(path)
+        p.setPen(QPen(color, 1.0, Qt.PenStyle.DotLine))
+        p.drawLine(QPointF(2.0, 5.2), QPointF(14.0, 5.2))
+        p.drawLine(QPointF(2.0, 10.4), QPointF(14.0, 10.4))
+    elif name == "lowpass":
+        p.drawLine(QPointF(2.2, 13.2), QPointF(13.8, 13.2))
+        p.drawLine(QPointF(2.2, 13.2), QPointF(2.2, 3.0))
+        path = QPainterPath(QPointF(2.8, 4.2))
+        path.lineTo(7.0, 4.2)
+        path.cubicTo(9.4, 4.2, 9.4, 11.8, 13.4, 11.8)
+        p.drawPath(path)
+    elif name == "highpass":
+        p.drawLine(QPointF(2.2, 13.2), QPointF(13.8, 13.2))
+        p.drawLine(QPointF(2.2, 13.2), QPointF(2.2, 3.0))
+        path = QPainterPath(QPointF(2.8, 11.8))
+        path.lineTo(6.6, 11.8)
+        path.cubicTo(9.0, 11.8, 9.4, 4.2, 13.4, 4.2)
+        p.drawPath(path)
+    elif name == "posterize_time":
+        for index in range(3):
+            x = 2.2 + index * 2.6
+            y = 4.0 + (2 - index) * 1.5
+            p.drawRoundedRect(QRectF(x, y, 7.4, 6.0), 1.0, 1.0)
+            p.drawLine(QPointF(x + 4.4, y), QPointF(x + 4.4, y + 6.0))
+        p.drawLine(QPointF(2.2, 14.0), QPointF(13.8, 14.0))
+    elif name == "stutter":
+        for x in (2.0, 5.6, 9.2):
+            p.drawRoundedRect(QRectF(x, 3.8, 4.4, 8.4), 1.0, 1.0)
+            p.drawLine(QPointF(x + 1.5, 3.8), QPointF(x + 1.5, 12.2))
+            p.drawLine(QPointF(x + 2.9, 3.8), QPointF(x + 2.9, 12.2))
+    elif name == "echo_frames":
+        p.setPen(QPen(color, 1.3, Qt.PenStyle.DashLine))
+        p.drawRoundedRect(QRectF(3.6, 2.8, 8.6, 7.0), 1.0, 1.0)
+        p.setPen(QPen(color, 1.6))
+        p.drawRoundedRect(QRectF(2.0, 5.0, 8.6, 7.0), 1.0, 1.0)
+        p.drawRoundedRect(QRectF(4.2, 7.2, 8.6, 7.0), 1.0, 1.0)
+    elif name == "fade":
+        path = QPainterPath(QPointF(2.0, 8.0))
+        path.cubicTo(4.2, 2.5, 6.0, 13.5, 8.0, 8.0)
+        path.cubicTo(10.0, 2.5, 11.8, 13.5, 14.0, 8.0)
+        p.drawPath(path)
+        p.setPen(QPen(color, 1.0, Qt.PenStyle.DotLine))
+        p.drawLine(QPointF(2.0, 4.0), QPointF(14.0, 4.0))
+        p.drawLine(QPointF(2.0, 12.0), QPointF(14.0, 12.0))
+    elif name == "limiter":
+        path = QPainterPath(QPointF(2.0, 4.2))
+        path.lineTo(4.0, 4.2); path.lineTo(5.0, 8.2); path.lineTo(6.0, 4.2)
+        path.lineTo(8.0, 4.2); path.lineTo(9.0, 8.2); path.lineTo(10.0, 4.2)
+        path.lineTo(14.0, 4.2)
+        p.drawPath(path)
+        p.drawLine(QPointF(2.0, 11.8), QPointF(14.0, 11.8))
+    elif name == "reverb":
+        p.drawEllipse(QPointF(5.0, 8.0), 2.0, 2.0)
+        for radius in (3.5, 5.2, 6.9):
+            p.drawArc(QRectF(5.0 - radius, 8.0 - radius, radius * 2, radius * 2),
+                      -55 * 16, 110 * 16)
+    elif name == "delay":
+        p.setBrush(fill); p.setPen(Qt.PenStyle.NoPen)
+        for x, height in ((2.8, 9.0), (5.5, 6.6), (8.2, 4.6), (10.9, 3.0), (13.3, 1.8)):
+            p.drawRoundedRect(QRectF(x - 0.65, 12.4 - height, 1.3, height), 0.65, 0.65)
+        p.setPen(QPen(color, 1.6)); p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawLine(QPointF(2.0, 12.4), QPointF(14.0, 12.4))
+    elif name == "pan":
+        path = QPainterPath(QPointF(2.0, 5.2))
+        path.cubicTo(5.0, 2.0, 7.0, 8.4, 9.0, 5.2)
+        path.cubicTo(11.0, 2.0, 13.0, 8.4, 14.0, 5.2)
+        p.drawPath(path)
+        path = QPainterPath(QPointF(2.0, 11.8))
+        path.cubicTo(5.0, 8.6, 7.0, 15.0, 9.0, 11.8)
+        path.cubicTo(11.0, 8.6, 13.0, 15.0, 14.0, 11.8)
+        p.drawPath(path)
+    elif name == "blur":
+        for radius in (5.8, 4.0, 2.2):
+            p.drawEllipse(QPointF(8.0, 8.0), radius, radius)
+        p.setBrush(fill); p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(QPointF(8.0, 8.0), 0.9, 0.9)
+    elif name == "box_blur":
+        for x, y in ((2.8, 3.2), (4.8, 5.2), (6.8, 7.2)):
+            p.drawRoundedRect(QRectF(x, y, 6.4, 5.4), 0.8, 0.8)
+    elif name == "directional_blur":
+        for offset in (0.0, 3.0, 6.0):
+            p.drawLine(QPointF(2.5 + offset, 12.0 - offset),
+                       QPointF(7.5 + offset, 7.0 - offset))
+    elif name == "radial_blur":
+        p.drawEllipse(QPointF(8.0, 8.0), 1.8, 1.8)
+        for step in range(8):
+            angle = math.radians(step * 45)
+            p.drawLine(QPointF(8 + 3.0 * math.cos(angle), 8 + 3.0 * math.sin(angle)),
+                       QPointF(8 + 5.8 * math.cos(angle), 8 + 5.8 * math.sin(angle)))
+    elif name == "zoom_blur":
+        for inset in (1.6, 3.6, 5.6):
+            p.drawRoundedRect(QRectF(inset, inset, 16.0 - inset * 2, 16.0 - inset * 2),
+                              1.0, 1.0)
+        p.setBrush(fill); p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(QPointF(8.0, 8.0), 0.9, 0.9)
+    elif name == "motion_blur":
+        for y, length in ((4.0, 8.0), (7.0, 11.0), (10.0, 7.0), (13.0, 10.0)):
+            p.drawLine(QPointF(2.0, y), QPointF(2.0 + length, y))
+    elif name == "glow":
+        p.drawEllipse(QPointF(8.0, 8.0), 2.8, 2.8)
+        for step in range(8):
+            angle = math.radians(step * 45)
+            p.drawLine(QPointF(8 + 4.0 * math.cos(angle), 8 + 4.0 * math.sin(angle)),
+                       QPointF(8 + 6.3 * math.cos(angle), 8 + 6.3 * math.sin(angle)))
+    elif name == "bloom":
+        p.setBrush(fill); p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(QPointF(10.8, 4.8), 1.4, 1.4)
+        p.setPen(QPen(color, 1.4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        for y, start, end in ((6.2, 2.2, 10.0), (8.6, 2.2, 14.0), (11.0, 4.0, 12.0)):
+            p.drawLine(QPointF(start, y), QPointF(end, y))
+        p.drawLine(QPointF(10.8, 4.8), QPointF(13.8, 1.8))
+    elif name == "color":
+        p.drawEllipse(QPointF(6.0, 8.0), 3.4, 3.4)
+        p.drawEllipse(QPointF(10.0, 8.0), 3.4, 3.4)
+        p.drawEllipse(QPointF(8.0, 5.0), 3.4, 3.4)
+    elif name == "lut":
+        p.drawRoundedRect(QRectF(2.0, 2.0, 12.0, 12.0), 1.0, 1.0)
+        for position in (6.0, 10.0):
+            p.drawLine(QPointF(position, 2.0), QPointF(position, 14.0))
+            p.drawLine(QPointF(2.0, position), QPointF(14.0, position))
+        p.setBrush(fill); p.setPen(Qt.PenStyle.NoPen)
+        p.drawRect(QRectF(6.0, 2.0, 4.0, 4.0))
+        p.drawRect(QRectF(2.0, 10.0, 4.0, 4.0))
+    elif name == "flash":
+        p.setBrush(fill); p.setPen(Qt.PenStyle.NoPen)
+        p.drawPolygon(_pts(8.8, 1.8, 4.2, 8.2, 7.4, 8.2, 6.2, 14.2,
+                           11.8, 7.0, 8.6, 7.0))
+    elif name == "flicker":
+        p.setBrush(fill); p.setPen(Qt.PenStyle.NoPen)
+        for x, top, bottom in ((2.5, 4.0, 12.0), (5.2, 6.0, 10.0),
+                               (7.9, 3.0, 13.0), (10.6, 5.0, 11.0),
+                               (13.3, 4.0, 12.0)):
+            p.drawRoundedRect(QRectF(x - 0.7, top, 1.4, bottom - top), 0.7, 0.7)
+    elif name == "leak":
+        p.setBrush(fill); p.setPen(Qt.PenStyle.NoPen)
+        p.drawPolygon(_pts(2.0, 12.8, 8.4, 2.0, 11.0, 2.0, 4.6, 12.8))
+        p.drawEllipse(QPointF(11.8, 5.0), 1.5, 1.5)
+        p.drawEllipse(QPointF(13.0, 9.6), 0.9, 0.9)
+    elif name == "warp":
+        p.drawRect(QRectF(2.0, 3.0, 12.0, 10.0))
+        path = QPainterPath(QPointF(3.0, 6.0))
+        path.cubicTo(6.0, 3.0, 10.0, 9.0, 13.0, 6.0)
+        p.drawPath(path)
+        path = QPainterPath(QPointF(3.0, 10.0))
+        path.cubicTo(6.0, 7.0, 10.0, 13.0, 13.0, 10.0)
+        p.drawPath(path)
+    elif name == "corner_pin":
+        p.drawPolygon(_pts(2.5, 2.5, 13.5, 4.0, 11.5, 13.5, 4.0, 11.5))
+        p.setBrush(fill); p.setPen(Qt.PenStyle.NoPen)
+        for x, y in ((2.5, 2.5), (13.5, 4.0), (11.5, 13.5), (4.0, 11.5)):
+            p.drawRect(QRectF(x - 1.0, y - 1.0, 2.0, 2.0))
+    elif name == "perspective":
+        p.drawPolygon(_pts(2.5, 12.5, 5.0, 3.5, 11.0, 3.5, 13.5, 12.5))
+        p.drawLine(QPointF(4.0, 9.0), QPointF(12.0, 9.0))
+    elif name == "mesh":
+        p.drawRect(QRectF(2.0, 2.0, 12.0, 12.0))
+        for position in (6.0, 10.0):
+            p.drawLine(QPointF(2.0, position), QPointF(14.0, position))
+            p.drawLine(QPointF(position, 2.0), QPointF(position, 14.0))
+        p.setBrush(fill); p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(QPointF(6.0, 6.0), 1.0, 1.0)
+        p.drawEllipse(QPointF(10.0, 10.0), 1.0, 1.0)
+    elif name == "skew":
+        p.drawPolygon(_pts(5.0, 3.0, 14.0, 3.0, 11.0, 13.0, 2.0, 13.0))
+    elif name == "distort":
+        for y in (4.5, 8.0, 11.5):
+            path = QPainterPath(QPointF(2.0, y))
+            path.cubicTo(4.5, y - 3.0, 6.5, y + 3.0, 8.0, y)
+            path.cubicTo(9.5, y - 3.0, 11.5, y + 3.0, 14.0, y)
+            p.drawPath(path)
+    elif name == "rgb_split":
+        p.drawEllipse(QRectF(2.0, 3.5, 8.0, 8.0))
+        p.drawEllipse(QRectF(4.5, 3.5, 8.0, 8.0))
+        p.drawEllipse(QRectF(7.0, 3.5, 8.0, 8.0))
+    elif name == "glitch":
+        p.setBrush(fill); p.setPen(Qt.PenStyle.NoPen)
+        for y, x, width in ((3.0, 3.0, 8.0), (6.0, 5.5, 8.5),
+                            (9.0, 2.5, 6.0), (12.0, 6.0, 7.0)):
+            p.drawRect(QRectF(x, y, width, 1.5))
+        p.setPen(QPen(color, 1.2))
+        p.drawLine(QPointF(3.0, 4.5), QPointF(8.0, 4.5))
+    elif name == "wave":
+        path = QPainterPath(QPointF(2.0, 8.0))
+        path.cubicTo(4.0, 2.0, 6.0, 14.0, 8.0, 8.0)
+        path.cubicTo(10.0, 2.0, 12.0, 14.0, 14.0, 8.0)
+        p.drawPath(path)
+    elif name == "pinch":
+        p.drawEllipse(QRectF(2.5, 2.5, 11.0, 11.0))
+        p.drawLine(QPointF(2.0, 8.0), QPointF(6.0, 8.0))
+        p.drawLine(QPointF(10.0, 8.0), QPointF(14.0, 8.0))
+        p.setBrush(fill); p.setPen(Qt.PenStyle.NoPen)
+        p.drawPolygon(_pts(6.0, 6.0, 8.0, 8.0, 6.0, 10.0))
+        p.drawPolygon(_pts(10.0, 6.0, 8.0, 8.0, 10.0, 10.0))
+    elif name == "twirl":
+        path = QPainterPath(QPointF(8.0, 8.0))
+        for step in range(1, 31):
+            angle = math.radians(step * 28)
+            radius = step * 0.19
+            path.lineTo(8 + radius * math.cos(angle), 8 + radius * math.sin(angle))
+        p.drawPath(path)
+    elif name == "kaleidoscope":
+        p.drawEllipse(QPointF(8.0, 8.0), 5.8, 5.8)
+        p.drawLine(QPointF(8.0, 2.2), QPointF(8.0, 13.8))
+        p.drawLine(QPointF(2.2, 8.0), QPointF(13.8, 8.0))
+        p.drawLine(QPointF(3.9, 3.9), QPointF(12.1, 12.1))
+        p.drawLine(QPointF(12.1, 3.9), QPointF(3.9, 12.1))
+    elif name == "vhs":
+        p.drawRoundedRect(QRectF(1.8, 3.0, 12.4, 10.0), 1.3, 1.3)
+        for y in (5.2, 7.2, 9.2, 11.2):
+            p.drawLine(QPointF(3.2, y), QPointF(12.8, y))
+        p.drawLine(QPointF(3.2, 7.2), QPointF(5.2, 11.2))
+    elif name == "grain":
+        p.setBrush(fill); p.setPen(Qt.PenStyle.NoPen)
+        for x, y in ((3.0, 3.5), (5.5, 5.0), (8.0, 3.0), (11.0, 5.2),
+                     (13.0, 3.8), (4.0, 8.5), (7.0, 9.5), (10.0, 8.2),
+                     (12.5, 10.5), (3.5, 12.5), (6.5, 12.0), (9.0, 13.0)):
+            p.drawEllipse(QPointF(x, y), 0.7, 0.7)
+    elif name == "halftone":
+        p.setBrush(fill); p.setPen(Qt.PenStyle.NoPen)
+        for row in range(4):
+            for column in range(4):
+                radius = 0.55 + 0.16 * (row + column)
+                p.drawEllipse(QPointF(3.2 + column * 3.2, 3.0 + row * 3.2), radius, radius)
+    elif name == "posterize":
+        p.setBrush(fill); p.setPen(Qt.PenStyle.NoPen)
+        for index, y in enumerate((2.8, 5.8, 8.8, 11.8)):
+            p.drawRoundedRect(QRectF(2.2, y, 11.6, 2.1), 0.6, 0.6)
+    elif name == "edge":
+        p.drawRoundedRect(QRectF(2.2, 3.2, 11.6, 9.6), 1.4, 1.4)
+        path = QPainterPath(QPointF(4.8, 10.2))
+        path.cubicTo(6.3, 5.4, 8.2, 12.0, 11.2, 6.0)
+        p.drawPath(path)
+    elif name == "duotone":
+        p.drawEllipse(QPointF(6.2, 8.0), 3.6, 3.6)
+        p.drawEllipse(QPointF(9.8, 8.0), 3.6, 3.6)
+        p.setBrush(fill); p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(QPointF(6.2, 8.0), 1.0, 1.0)
+    elif name == "invert":
+        p.drawEllipse(QRectF(2.0, 2.0, 12.0, 12.0))
+        p.setBrush(fill); p.setPen(Qt.PenStyle.NoPen)
+        p.drawPie(QRectF(2.0, 2.0, 12.0, 12.0), 90 * 16, 180 * 16)
+    elif name == "vignette":
+        p.drawRoundedRect(QRectF(2.0, 2.0, 12.0, 12.0), 2.0, 2.0)
+        p.setPen(QPen(color, 2.0))
+        for sx, sy in ((1, 1), (-1, 1), (1, -1), (-1, -1)):
+            cx, cy = (3.2 if sx > 0 else 12.8), (3.2 if sy > 0 else 12.8)
+            p.drawLine(QPointF(cx, cy), QPointF(cx + sx * 1.6, cy + sy * 1.6))
+    elif name == "mosaic":
+        for row in range(3):
+            for column in range(3):
+                p.setBrush(fill if (row + column) % 2 == 0 else Qt.BrushStyle.NoBrush)
+                p.drawRoundedRect(QRectF(2.4 + column * 4.0, 2.4 + row * 4.0, 3.2, 3.2),
+                                  0.6, 0.6)
+    elif name == "key_mask":
+        p.drawEllipse(QRectF(2.0, 2.0, 12.0, 12.0))
+        p.setBrush(fill); p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(QPointF(8.0, 6.8), 1.9, 1.9)
+        p.drawPolygon(_pts(6.7, 8.2, 9.3, 8.2, 10.0, 12.4, 6.0, 12.4))
+    elif name == "tracking_face":
+        p.drawEllipse(QRectF(3.2, 3.2, 9.6, 9.6))
+        p.drawLine(QPointF(6.2, 7.0), QPointF(6.2, 7.1)); p.drawLine(QPointF(9.8, 7.0), QPointF(9.8, 7.1))
+        p.drawArc(QRectF(5.6, 7.8, 4.8, 3.6), 200 * 16, 140 * 16)
+        p.setBrush(fill); p.setPen(Qt.PenStyle.NoPen)
+        for x, y in ((2.2, 2.2), (13.8, 2.2), (2.2, 13.8), (13.8, 13.8)):
+            p.drawRect(QRectF(x - 0.7, y - 0.7, 1.4, 1.4))
+    elif name == "tracking_hand":
+        p.drawLine(QPointF(5.0, 13.0), QPointF(5.0, 7.0))
+        p.drawLine(QPointF(7.0, 12.5), QPointF(7.0, 5.0))
+        p.drawLine(QPointF(9.0, 12.5), QPointF(9.0, 5.5))
+        p.drawLine(QPointF(11.0, 12.0), QPointF(11.0, 7.0))
+        p.drawPolyline(_pts(4.0, 10.0, 4.0, 8.0, 5.0, 7.0, 6.0, 8.0, 6.0, 12.5))
+        p.drawLine(QPointF(4.5, 13.0), QPointF(11.5, 13.0))
+    elif name == "tracking_blob":
+        p.drawPolygon(_pts(4.0, 7.0, 6.0, 4.0, 9.5, 3.2, 12.0, 5.5,
+                           12.5, 9.0, 10.0, 12.5, 6.5, 12.8, 4.0, 10.2))
+        p.drawEllipse(QPointF(8.0, 8.0), 1.0, 1.0)
+    elif name == "sort":
+        p.drawLine(QPointF(2.5, 4.0), QPointF(9.5, 4.0))
+        p.drawLine(QPointF(2.5, 8.0), QPointF(7.5, 8.0))
+        p.drawLine(QPointF(2.5, 12.0), QPointF(5.5, 12.0))
+        p.drawLine(QPointF(12.5, 2.8), QPointF(12.5, 13.2))
+        p.setBrush(fill); p.setPen(Qt.PenStyle.NoPen)
+        p.drawPolygon(_pts(10.0, 10.4, 12.5, 13.2, 15.0, 10.4))
     elif name == "image":
         p.drawRoundedRect(QRectF(2.4, 3.2, 11.2, 9.6), 2, 2)
         p.drawPolyline(_pts(3.2, 11.2, 6.4, 7.6, 8.8, 10, 10.4, 8.6, 12.8, 11.2))

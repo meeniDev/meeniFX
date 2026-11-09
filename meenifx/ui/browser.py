@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel
 from .. import thumbnails as THUMBS
 from .. import tokens
 from ..constants import EFFECT_MIME
+from ..effects import categories as EFFECTS_META
 from ..icons import icon, paint as paint_icon
 from ..model import animation_families as FAMILIES
 from ..model import looks as LOOKS
@@ -32,9 +33,9 @@ from ..model import looks as LOOKS
 TABS = ("effects", "animations", "styles")
 TAB_LABELS = {"effects": "Effects", "animations": "Animations", "styles": "Styles"}
 RECENT_LIMIT = 12
-CARD_W, CARD_H = 132, 120         # grid card (logical px)
+CARD_W, CARD_H = 132, 128         # grid card (logical px)
 THUMB_W, THUMB_H = 124, 84        # grid thumbnail (logical px)
-LIST_H, LIST_THUMB = (48, (54, 36))
+LIST_H, LIST_THUMB = (36, (26, 26))
 
 # Everyday words people type instead of the effect's own name.
 KEYWORDS = {
@@ -110,26 +111,29 @@ class BrowserCard(QFrame):
         self.thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
         if view_mode == "grid":
             self.thumb.setFixedSize(THUMB_W, THUMB_H)
+            self._placeholder()
+            if item.get("kind") == "effect" and item["id"] in THUMBS.ICON_ONLY:
+                # Some effects have no meaningful still preview (audio and time effects).
+                # The card used to leave an empty tile; a readable, effect-specific glyph
+                # is the last fallback the browser promises. Audio cards are replaced by
+                # a cached waveform illustration as soon as their lazy render arrives.
+                if item["id"] in THUMBS.TRACKERS:
+                    # A tracker on a still life would look like the untouched picture, so
+                    # the card shows the bundled reference image with the tracker's own
+                    # icon on top. It never pretends a detection happened.
+                    self._tracker_preview()
+                else:
+                    self._words_fallback()
         else:
             self.thumb.setFixedSize(*LIST_THUMB)
-        self._placeholder()
-        if item.get("kind") == "effect" and item["id"] in THUMBS.ICON_ONLY:
-            # Some effects have no meaningful still preview (audio and time effects).
-            # The card used to leave an empty tile; a readable, effect-specific label is
-            # the last fallback the browser promises.
-            if item["id"] in THUMBS.TRACKERS:
-                # A tracker on a still life would look like the untouched picture, so the
-                # card shows the bundled reference image with the tracker's own icon on
-                # top. It never pretends a detection happened.
-                self._tracker_preview()
-                self.setToolTip(
-                    item["name"] + " (live tracking: the reference picture has no face or "
-                    "hand to detect, so the card shows the effect icon instead)")
-            else:
-                self._words_fallback()
+            self._list_icon()
 
         self.name = QLabel(item["name"], self)
-        self.name.setStyleSheet("font-weight: 600;")
+        self.name.setStyleSheet("font-weight: 600; font-size: 11px;")
+        self.name.setWordWrap(view_mode == "grid")
+        self.name.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        if view_mode == "grid":
+            self.name.setMinimumHeight(27)
         self.badge = QLabel("\u2713", self)
         self.badge.setToolTip("Applied to the selected clip")
         self.badge.setStyleSheet(f"color: {tokens.COLORS['accent']}; font-weight: bold;")
@@ -175,13 +179,30 @@ class BrowserCard(QFrame):
         painter.end()
         self.thumb.setPixmap(pixmap)
 
-    _ICON_FOR = {"audio_gain": "volume", "audio_fade": "volume", "audio_pan": "volume",
-                 "audio_compressor": "volume", "audio_limiter": "volume",
-                 "posterize_time": "clock", "stutter": "clock", "echo": "clock"}
+    def _icon_name(self):
+        effect = self.item.get("effect") or self.item["id"]
+        return self.item.get("icon") or EFFECTS_META.icon_for(effect)
+
+    def _list_icon(self):
+        """A compact, high-DPI stroke glyph for a list row (never a cropped thumbnail)."""
+        size = self.thumb.size()
+        ratio = self.devicePixelRatioF() or 1.0
+        pixmap = QPixmap(max(1, int(round(size.width() * ratio))),
+                         max(1, int(round(size.height() * ratio))))
+        pixmap.setDevicePixelRatio(ratio)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        side = min(18.0, size.width() - 4.0)
+        paint_icon(painter, self._icon_name(),
+                   QRectF((size.width() - side) / 2.0, (size.height() - side) / 2.0,
+                          side, side), tokens.COLORS["muted"])
+        painter.end()
+        self.thumb.setPixmap(pixmap)
 
     def _words_fallback(self):
         """Draw a themed icon on the tile when no picture can be shown."""
-        name = self._ICON_FOR.get(self.item["id"], "music")
+        name = self._icon_name()
         size = self.thumb.size()
         self._placeholder()
         pixmap = QPixmap(self.thumb.pixmap())
@@ -215,7 +236,7 @@ class BrowserCard(QFrame):
         painter.setPen(QPen(QColor(tokens.COLORS["border"]), 1))
         painter.setBrush(QColor(11, 13, 16, 200))
         painter.drawRoundedRect(plate, tokens.RADIUS + 1, tokens.RADIUS + 1)
-        paint_icon(painter, "tracking",
+        paint_icon(painter, self._icon_name(),
                    QRectF(plate.center().x() - 8, plate.center().y() - 8, 16, 16),
                    tokens.COLORS["accent"])
         painter.end()
@@ -302,6 +323,50 @@ class BrowserCard(QFrame):
 
 
 # ------------------------------------------------------------------------------- view
+class CategoryHeader(QFrame):
+    """One collapsible section heading above a group of browser rows or tiles."""
+
+    toggled = pyqtSignal(str)
+
+    def __init__(self, category, count, collapsed=False, parent=None):
+        super().__init__(parent)
+        self.category = str(category)
+        self.collapsed = bool(collapsed)
+        self.setProperty("categoryHeader", True)
+        self.setFixedHeight(26)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 0, 4, 0)
+        layout.setSpacing(tokens.SP1)
+        self.arrow = QToolButton(self)
+        self.arrow.setProperty("role", "icon")
+        self.arrow.setAutoRaise(True)
+        self.arrow.setFixedSize(QSize(20, 20))
+        self.arrow.setIconSize(QSize(14, 14))
+        self.arrow.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.label = QLabel(self.category, self)
+        self.label.setStyleSheet("font-weight: 600; font-size: 11px;")
+        self.count = QLabel(str(max(0, int(count))), self)
+        self.count.setProperty("quiet", True)
+        layout.addWidget(self.arrow, 0)
+        layout.addWidget(self.label, 0)
+        layout.addStretch(1)
+        layout.addWidget(self.count, 0)
+        self._sync_arrow()
+        self.arrow.clicked.connect(lambda: self.toggled.emit(self.category))
+
+    def _sync_arrow(self):
+        self.arrow.setIcon(icon("chevron_right" if self.collapsed else "chevron_down"))
+        self.setToolTip(("Show " if self.collapsed else "Hide ") + self.category)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.toggled.emit(self.category)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
 class BrowserView(QWidget):
     """Tabs + search + filters + a responsive card grid (or a compact list)."""
 
@@ -322,12 +387,19 @@ class BrowserView(QWidget):
         self.selection_media = "video"
         self.multiple_clips = False
         self._cards = []
+        self._sections = []
+        self._collapsed_categories = set()
         self._thumb_ratios = {}
         self._selected_item = None
         self._columns_now = None
         self._store = QSettings(QSettings.Format.IniFormat, QSettings.Scope.UserScope,
                                 "meeniFX", "Studios")
         self.view_mode = str(self._store.value("browser/view", "grid") or "grid")
+        if self.view_mode not in ("grid", "list"):
+            self.view_mode = "grid"
+        self.sort_mode = str(self._store.value("browser/sort", "category") or "category")
+        if self.sort_mode not in ("category", "name"):
+            self.sort_mode = "category"
         self._cache = THUMBS.ThumbnailCache(engine, self)
         self._cache.ready.connect(self._thumbnail_ready)
         self._hover_card = None
@@ -362,6 +434,19 @@ class BrowserView(QWidget):
         self.list_button = self._toggle(icon("list", tokens.COLORS["muted"]), "List view")
         self.grid_button.clicked.connect(lambda: self.set_view_mode("grid"))
         self.list_button.clicked.connect(lambda: self.set_view_mode("list"))
+        self.sort_button = self._toggle(icon("sort", tokens.COLORS["muted"]), "Sort")
+        self.sort_button.setCheckable(False)
+        self.sort_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._sort_menu = QMenu(self.sort_button)
+        self._sort_actions = {}
+        for mode, label in (("category", "Category groups"),
+                            ("name", "Alphabetical (A\u2013Z)")):
+            action = self._sort_menu.addAction(label)
+            action.setCheckable(True)
+            action.triggered.connect(
+                lambda checked, mode=mode: checked and self.set_sort_mode(mode))
+            self._sort_actions[mode] = action
+        self.sort_button.setMenu(self._sort_menu)
         self.menu_button = QToolButton()
         self.menu_button.setProperty("role", "icon")
         self.menu_button.setIcon(icon("dots"))
@@ -392,6 +477,7 @@ class BrowserView(QWidget):
         filters.addWidget(self.category_combo, 1)
         filters.addWidget(self.grid_button)
         filters.addWidget(self.list_button)
+        filters.addWidget(self.sort_button)
 
         self.mode_combo = QComboBox()
         self.mode_combo.setToolTip("When this animation plays")
@@ -413,6 +499,12 @@ class BrowserView(QWidget):
         options.addWidget(self.direction_combo, 1)
         options.addWidget(self.apply_button)
         self.options_bar.setVisible(False)
+
+        self.info = QLabel("")
+        self.info.setProperty("quiet", True)
+        self.info.setWordWrap(True)
+        self.info.setTextFormat(Qt.TextFormat.PlainText)
+        self.info.setVisible(False)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -439,6 +531,7 @@ class BrowserView(QWidget):
         layout.addWidget(self.tabs)
         layout.addLayout(filters)
         layout.addWidget(self.options_bar)
+        layout.addWidget(self.info)
         layout.addWidget(self.empty)
         layout.addWidget(self.scroll, 1)
 
@@ -451,6 +544,7 @@ class BrowserView(QWidget):
         self._layout_timer.setInterval(0)
         self._layout_timer.timeout.connect(self._relayout)
         self._sync_buttons()
+        self._sync_sort_actions()
         self._sync_categories()
         self.refresh()
 
@@ -504,6 +598,24 @@ class BrowserView(QWidget):
         self._sync_buttons()
         self.refresh()
 
+    def set_sort_mode(self, mode):
+        """Category groups (default) or one alphabetical A-Z library."""
+        self.sort_mode = mode if mode in ("category", "name") else "category"
+        self._store.setValue("browser/sort", self.sort_mode)
+        self._store.sync()
+        self._sync_sort_actions()
+        self.refresh()
+
+    def _sync_sort_actions(self):
+        for mode, action in self._sort_actions.items():
+            action.blockSignals(True)
+            action.setChecked(mode == self.sort_mode)
+            action.blockSignals(False)
+        self.sort_button.setToolTip("Sort: " + ("Alphabetical (A-Z)" if self.sort_mode == "name"
+                                              else "Category groups"))
+        self.sort_button.setIcon(icon("sort", tokens.COLORS["accent"]
+                                      if self.sort_mode == "name" else tokens.COLORS["muted"]))
+
     def _toggle(self, icon_value, tip):
         button = QToolButton()
         button.setProperty("role", "icon")
@@ -525,6 +637,7 @@ class BrowserView(QWidget):
             button.blockSignals(True)
             button.setChecked(active)
             button.blockSignals(False)
+        self._sync_sort_actions()
 
     # ------------------------------------------------------------------ filtering
     def _search_changed(self, text):
@@ -541,6 +654,7 @@ class BrowserView(QWidget):
         self.category = ""
         self._selected_item = None
         self.options_bar.setVisible(False)
+        self.info.setVisible(False)
         self.search.setPlaceholderText({"effects": "Search effects",
                                         "animations": "Search animations",
                                         "styles": "Search styles"}[self.tab])
@@ -556,9 +670,7 @@ class BrowserView(QWidget):
     def _sync_categories(self):
         values = []
         if self.tab == "effects":
-            values = sorted({getattr(effect, "category", "") or "Stylize"
-                             for effect in self.engine.effects
-                             if getattr(effect, "category", "") != "Looks"})
+            values = EFFECTS_META.available_categories(self.engine.effects)
         elif self.tab == "animations":
             values = sorted({family["behaviour"] for family in FAMILIES.families()})
         else:
@@ -598,21 +710,23 @@ class BrowserView(QWidget):
         track = "audio" if self.selection_media == "audio" else "video"
         for effect in self.engine.effects:
             key = type(effect).key
-            category = getattr(effect, "category", "") or "Stylize"
-            if key == "look" or category == "Looks":
+            if key == "look":
                 continue
+            details = EFFECTS_META.details_for(effect)
+            category = details["category"]
             words = " ".join([effect.name.lower(), key, category.lower(),
-                              *KEYWORDS.get(key, ())])
+                              details["description"].lower(), *KEYWORDS.get(key, ())])
             if not self._matches(words):
                 continue
             if self.category and category != self.category:
                 continue
             allowed = effect.supports_track_type(track)
             items.append({"kind": "effect", "id": key, "name": effect.name,
-                          "subtitle": category, "applied": key in self.applied_keys,
+                          "subtitle": category, "section": category,
+                          "icon": details["icon"], "details": details,
+                          "applied": key in self.applied_keys,
                           "drag_key": key, "effect": effect, "unavailable": not allowed,
-                          "tooltip": f"{effect.name} ({effect.media_label()}) - "
-                                     f"double-click to add or remove"})
+                          "tooltip": details["tooltip"]})
         return items
 
     def _animation_items(self):
@@ -629,8 +743,9 @@ class BrowserView(QWidget):
                 continue
             preset = FAMILIES.variant(family, media, FAMILIES.default_mode(family), "")
             items.append({"kind": "animation", "id": family["key"], "name": family["name"],
-                          "subtitle": FAMILIES.summary(family), "family": family,
-                          "media": media,
+                          "subtitle": FAMILIES.summary(family),
+                          "section": family["behaviour"], "icon": "film",
+                          "family": family, "media": media,
                           "applied": bool(preset and preset["id"] in self.applied_presets),
                           "tooltip": f"{family['name']} - choose a mode and direction, "
                                      f"then double-click to apply"})
@@ -650,6 +765,7 @@ class BrowserView(QWidget):
                 continue
             items.append({"kind": "style", "id": look["id"], "name": look["name"],
                           "subtitle": look.get("description") or "Style",
+                          "section": folder, "icon": "star",
                           "applied": look["id"] in self.applied_looks, "look": look,
                           "drag_key": f"look:{look['id']}",
                           "tooltip": f"{look['name']} - double-click to apply or remove "
@@ -669,12 +785,38 @@ class BrowserView(QWidget):
             return chosen
         return items
 
+    def _sorted(self, items):
+        """Alphabetical inside categories, or one A-Z library when the user asks for it."""
+        if self.filter == "recent":
+            return items                    # recency is the whole point of this filter
+        if self.sort_mode == "name":
+            return sorted(items, key=lambda item: (item["name"].casefold(), item["id"]))
+        if self.tab == "effects":
+            return sorted(items, key=lambda item: (EFFECTS_META.category_rank(item["section"]),
+                                                   item["name"].casefold(), item["id"]))
+        return sorted(items, key=lambda item: ((item.get("section") or "").casefold(),
+                                               item["name"].casefold(), item["id"]))
+
+    def _group_items(self, items):
+        if self.sort_mode == "name":
+            return [("", list(items))] if items else []
+        groups = {}
+        for item in items:
+            groups.setdefault(item.get("section") or item.get("subtitle") or "", []).append(item)
+        if self.tab == "effects":
+            order = EFFECTS_META.CATEGORY_ORDER
+            keys = sorted(groups, key=lambda key: (order.index(key) if key in order else len(order),
+                                                   key.casefold()))
+        else:
+            keys = sorted(groups, key=str.casefold)
+        return [(key, groups[key]) for key in keys]
+
     def items(self):
         if self.tab == "effects":
-            return self._filtered(self._effect_items())
+            return self._sorted(self._filtered(self._effect_items()))
         if self.tab == "animations":
-            return self._filtered(self._animation_items())
-        return self._filtered(self._style_items())
+            return self._sorted(self._filtered(self._animation_items()))
+        return self._sorted(self._filtered(self._style_items()))
 
     # ------------------------------------------------------------------ rendering
     def refresh(self):
@@ -682,6 +824,7 @@ class BrowserView(QWidget):
         items = self.items()
         self.options_bar.setVisible(self.tab == "animations" and self._selected_item is not None)
         self._cards = []
+        self._sections = []
         while self.grid.count():
             item = self.grid.takeAt(0)
             widget = item.widget()
@@ -693,23 +836,55 @@ class BrowserView(QWidget):
         if not items:
             self.empty.setText("Nothing here yet." if not self.term
                                else "Nothing matches this search.")
+            self.info.setVisible(False)
             return
         self._columns_now = self._columns()
-        for index, item in enumerate(items):
-            card = BrowserCard(item, self.view_mode, self.grid_host)
-            card.activated.connect(self._card_activated)
-            card.menu_requested.connect(self._card_menu)
-            card.selected.connect(self._card_selected)
-            card.hover_started.connect(lambda item, c=card: self._hover_begin(item, c))
-            card.hover_stopped.connect(lambda item, c=card: self._hover_end(item, c))
-            card.show()
-            row, column = divmod(index, self._columns_now)
-            self.grid.addWidget(card, row, column)
-            self._cards.append(card)
+        row = column = 0
+        for category, group in self._group_items(items):
+            collapsed = bool(category and self.sort_mode != "name"
+                             and category in self._collapsed_categories)
+            header = None
+            if category:
+                header = CategoryHeader(category, len(group), collapsed, self.grid_host)
+                header.toggled.connect(self._toggle_category)
+                header.show()
+                if column:
+                    row += 1
+                    column = 0
+                self.grid.addWidget(header, row, 0, 1, self._columns_now)
+                row += 1
+            cards = []
+            if not collapsed:
+                for item in group:
+                    card = BrowserCard(item, self.view_mode, self.grid_host)
+                    card.activated.connect(self._card_activated)
+                    card.menu_requested.connect(self._card_menu)
+                    card.selected.connect(self._card_selected)
+                    card.hover_started.connect(lambda item, c=card: self._hover_begin(item, c))
+                    card.hover_stopped.connect(lambda item, c=card: self._hover_end(item, c))
+                    card.show()
+                    self.grid.addWidget(card, row, column)
+                    self._cards.append(card)
+                    cards.append(card)
+                    column += 1
+                    if column >= self._columns_now:
+                        column = 0
+                        row += 1
+            if column:
+                row += 1
+                column = 0
+            self._sections.append({"category": category, "header": header, "cards": cards})
         self.grid.setColumnStretch(self._columns_now, 1)
         # Lay out now, so the first thumbnail pass knows which cards are really on screen.
         self.grid.activate()
         self._queue_visible()
+
+    def _toggle_category(self, category):
+        if category in self._collapsed_categories:
+            self._collapsed_categories.discard(category)
+        else:
+            self._collapsed_categories.add(category)
+        self.refresh()
 
     def _columns(self):
         available = max(1, self.scroll.viewport().width() - 12)
@@ -719,17 +894,33 @@ class BrowserView(QWidget):
 
     def _relayout(self):
         """A dock resize only moves the cards; it must not throw their thumbnails away."""
-        if not self._cards:
+        if not self._cards and not self._sections:
             return
         columns = self._columns()
         if columns == self._columns_now:
             return
         self._columns_now = columns
-        for index, card in enumerate(self._cards):
-            row, column = divmod(index, columns)
-            self.grid.addWidget(card, row, column)
-        for column in range(self.grid.columnCount()):
-            self.grid.setColumnStretch(column, 1 if column == columns else 0)
+        row = column = 0
+        for section in self._sections:
+            header = section.get("header")
+            if header is not None:
+                if column:
+                    row += 1
+                    column = 0
+                self.grid.addWidget(header, row, 0, 1, columns)
+                row += 1
+            for card in section.get("cards") or ():
+                self.grid.addWidget(card, row, column)
+                column += 1
+                if column >= columns:
+                    column = 0
+                    row += 1
+            if column:
+                row += 1
+                column = 0
+        for old_column in range(self.grid.columnCount()):
+            self.grid.setColumnStretch(old_column, 0)
+        self.grid.setColumnStretch(columns, 1)
         self.grid.activate()
 
     def eventFilter(self, obj, event):
@@ -745,6 +936,10 @@ class BrowserView(QWidget):
     def _thumb_entries(self, item):
         if item["kind"] == "effect":
             effect = item.get("effect")
+            if item["id"] in THUMBS.AUDIO_EFFECTS:
+                # Audio effects get a cached waveform/frequency illustration, not the
+                # café photograph and not an empty tile.
+                return [{"audio_preview": item["id"]}]
             if effect is None or item["id"] in THUMBS.ICON_ONLY:
                 return None
             return [THUMBS.preview_entry(effect)]
@@ -775,12 +970,12 @@ class BrowserView(QWidget):
         return ""
 
     def _queue_visible(self, *_args):
-        if not self.isVisible() or not self._cards:
+        if self.view_mode != "grid" or not self.isVisible() or not self._cards:
             return
         self._visible_timer.start()
 
     def _load_visible(self):
-        if not self.isVisible():
+        if self.view_mode != "grid" or not self.isVisible():
             return
         if self._layout_timer.isActive():
             # Wait for the columns to settle: re-laying out moves every card.
@@ -811,8 +1006,13 @@ class BrowserView(QWidget):
 
     # ---------------------------------------------------------- hover previews
     def _hover_begin(self, item, card):
-        """A short hover delay, then sample the real preset only for animation cards."""
-        if item.get("kind") != "animation" or self.tab != "animations" or not self.isVisible():
+        """A short hover delay, then sample the real animation or time behavior."""
+        if self.view_mode != "grid" or not self.isVisible():
+            return
+        is_animation = item.get("kind") == "animation" and self.tab == "animations"
+        is_temporal = (item.get("kind") == "effect" and self.tab == "effects"
+                       and item.get("id") in THUMBS.TEMPORAL_EFFECTS)
+        if not (is_animation or is_temporal):
             return
         if getattr(self.window(), "_playing", False):
             return
@@ -846,6 +1046,23 @@ class BrowserView(QWidget):
                  * max(1, int(self._cache.settings.scale())))
         width = max(16, int(round(THUMB_W * ratio)))
         height = max(16, int(round(THUMB_H * ratio)))
+        if item.get("kind") == "effect" and item.get("id") in THUMBS.TEMPORAL_EFFECTS:
+            key = (item["id"], "temporal", width, height)
+            frames = self._hover_cache.get(key)
+            if frames is None:
+                raw = THUMBS.temporal_preview_frames(
+                    self.engine, item["id"], width, height, self._cache.settings)
+                frames = [THUMBS.to_qimage(image) for image in raw]
+                if frames:
+                    self._hover_cache = {key: frames}
+            if not frames:
+                return
+            self._hover_frames = frames
+            self._hover_index = 0
+            self._hover_steps = 0
+            card.set_thumbnail(frames[0], ratio)
+            self._hover_play_timer.start()
+            return
         entry = THUMBS.animation_entry(item.get("family"), item.get("media") or "clip")
         preset = (entry or {}).get("animation") or item.get("animation")
         if not preset:
@@ -921,8 +1138,20 @@ class BrowserView(QWidget):
         else:
             self.apply_requested.emit(item)
 
+    def _show_details(self, item):
+        details = item.get("details")
+        if details:
+            text = EFFECTS_META.detail_line(details) + "  \u2014  " + details["description"]
+        else:
+            text = item["name"]
+            if item.get("subtitle"):
+                text += " \u00b7 " + str(item["subtitle"])
+        self.info.setText(text)
+        self.info.setVisible(True)
+
     def _card_selected(self, item):
         self._selected_item = item
+        self._show_details(item)
         if item.get("kind") != "animation":
             self.options_bar.setVisible(False)
             return
