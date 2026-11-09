@@ -109,7 +109,8 @@ def is_trusted_redirect_url(url):
     except ValueError:
         return False
     return parsed.scheme == "https" and parsed.netloc.lower() in (
-        "github.com", "objects.githubusercontent.com")
+        "github.com", "objects.githubusercontent.com",
+        "release-assets.githubusercontent.com")
 
 
 def is_trusted_release_url(url):

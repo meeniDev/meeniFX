@@ -316,6 +316,18 @@ def test_a_checksum_file_is_fetched_only_from_the_official_release(tmp_path):
     assert caught.value.kind == "untrusted"
 
 
+def test_githubs_current_release_asset_redirect_host_is_trusted(tmp_path):
+    body = f"{'d' * 64}  installer.exe\n".encode()
+    source = ("https://github.com/meeniDev/meeniFX/releases/download/"
+              "v0.1.0-alpha.2/SHA256SUMS.txt")
+    final = "https://release-assets.githubusercontent.com/github-production-release-asset/file"
+    parsed = download.fetch_checksums(source, opener=Opener(download_response(body, url=final)))
+    assert parsed["installer.exe"] == "d" * 64
+    assert model.is_trusted_redirect_url(final)
+    assert model.is_trusted_redirect_url("https://objects.githubusercontent.com/asset")
+    assert not model.is_trusted_redirect_url("https://release-assets.githubusercontent.com.evil/x")
+
+
 def test_checksums_parse_common_sha256sum_shapes():
     digest = "a" * 64
     parsed = download.parse_checksums(f"{digest}  installer.exe\n# comment\n"

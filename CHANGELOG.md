@@ -7,6 +7,16 @@ usable and tested, but unfinished, and some features are still experimental.
 
 _Nothing yet._
 
+## 0.1.0-alpha.7 - 9 November 2026
+
+### Fixed
+
+- **Automatic updates could not download anything in Alpha 6.** GitHub now redirects
+  release assets to `release-assets.githubusercontent.com`, and the updater's redirect
+  allowlist rejected that host after the check had succeeded. The current GitHub asset
+  host is allowed, with a regression test. Alpha 4, 5 and 6 installations need this build
+  installed manually once; Alpha 7 and later can download updates from inside the app.
+
 ## 0.1.0-alpha.6 - 9 November 2026
 
 ### Added
