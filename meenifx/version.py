@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from functools import total_ordering
 from pathlib import Path
 
-VERSION = "0.1.0-alpha.2"
+VERSION = "0.1.0-alpha.3"
 CHANNEL = "alpha"
 
 STABLE = 4

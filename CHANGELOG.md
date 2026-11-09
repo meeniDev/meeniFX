@@ -7,6 +7,19 @@ usable and tested, but unfinished, and some features are still experimental.
 
 _Nothing yet._
 
+## 0.1.0-alpha.3 - 9 November 2026
+
+### Fixed
+
+- **0.1.0-alpha.2 could not be built from its tag.** The Roto Brush mouse-press block was
+  committed in the wrong position, so importing the preview overlay raised
+  `IndentationError`, the release workflow stopped during test collection and no installer
+  was produced. The handler is restored; the Roto Brush feature itself is unchanged.
+- **The installer rejected its Windows version resource.** `VersionInfoProductVersion` used
+  the prerelease tag (`0.1.0-alpha.2`), which Inno Setup does not accept. It now uses the
+  generated numeric version (`0.1.0.1002`); this was the second reason no installer had been
+  attached to either Alpha.
+
 ## 0.1.0-alpha.2 - 9 November 2026
 
 ### Added
