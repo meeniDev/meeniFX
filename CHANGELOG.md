@@ -5,6 +5,10 @@ usable and tested, but unfinished, and some features are still experimental.
 
 ## Unreleased
 
+_Nothing yet._
+
+## 0.1.0-alpha.2 - 9 November 2026
+
 ### Added
 
 - **Pre-compositions**: select clips and choose *Composition > Precompose Selected Clips*
@@ -24,9 +28,15 @@ usable and tested, but unfinished, and some features are still experimental.
 - **Smart Key**: samples the border of a shot, builds a soft YCbCr matte, suppresses spill
   and exposes the same matte views as Chroma Key. It is for footage where the screen colour
   is unknown or not perfectly uniform; Auto sample can be switched off for a manual fallback.
-- **Roto Brush**: a stroke-guided subject cutout. Green strokes mark the subject, Alt-drag
-  red strokes mark the background, and the effect refines the mask with GrabCut. Strokes are
-  stored on the effect entry, so they undo, copy, split, save and reload with the clip.
+- **Roto Brush** is now a complete rotoscoping workflow instead of a click-to-erase mask:
+  a dedicated preview mode (transform handles hidden, circular brush cursor), green keep /
+  Alt-red remove / Refine Edge brushes, a purple outline on the real boundary, a base frame,
+  Forward / Backward / Analyze All propagation with progress and Stop, correction strokes
+  per source frame, four preview modes, matte controls that all shape the alpha, and Freeze /
+  Unfreeze / Recalculate / Clear Cache. Masks live in a per-clip disk cache keyed by the
+  strokes, so a changed stroke never reuses old pixels; projects keep only strokes, settings
+  and cache metadata. The shipped segmenter is the honest classical GrabCut + guided filter
+  + Farneback flow fallback (SAM 2 is documented as the upgrade path, not bundled).
 
 ### Improved
 
@@ -36,6 +46,13 @@ usable and tested, but unfinished, and some features are still experimental.
   exact (24000/1001 and 30000/1001) instead of becoming 23.98, and 24/25/30/50/60 remain
   exact fractions.
 - Long property names such as **Frame Rate** widen the label column instead of being elided.
+
+### Fixed
+
+- Roto Brush matte shaping (smoothing, feather, choke, edge contrast) now follows the render
+  scale, so a half-quality preview shows the same edge as the full-quality export.
+- Roto Brush edge colour cleanup now extrapolates the subject's solid interior into the
+  alpha band instead of re-averaging the fringe, so it visibly removes a bright or green rim.
 
 ## 0.1.0-alpha.1 - 8 November 2026
 
