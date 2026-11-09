@@ -184,18 +184,47 @@ class PreviewOverlay:
 
     def image_size(self, clip):
         if getattr(clip, "is_text", False) or getattr(clip, "is_shape", False):
-            # Text and shapes are generated at project size, so their picture is the frame.
+            # Generated layers really are full-frame pictures. Their intrinsic content is
+            # reported separately by content_rect(), so fit/anchor/transform semantics
+            # stay exactly what the renderer uses.
             return self.project_size()
         size = self.engine.media.source_size(clip.source_path)
         return size or self.project_size()
+
+    def content_rect(self, clip):
+        """(x, y, w, h) of the visible content in the layer's own pixels.
+
+        A generated layer is a full project-sized transparent picture by design, so its
+        bounds must come from the geometry rather than image_size(). Media layers still
+        fill their source rectangle; the fit is applied by the transform matrix.
+        """
+        if getattr(clip, "is_shape", False):
+            from ..model import shape as shape_model
+            from ..processing import shapes
+            rect = shapes.bounds(shape_model.resolve(clip, self.local_frame(clip)),
+                                 *self.project_size())
+        elif getattr(clip, "is_text", False):
+            from ..model import text as text_model
+            from ..processing import text
+            rect = text.bounds(text_model.resolve(clip, self.local_frame(clip)),
+                               *self.project_size())
+        else:
+            width, height = self.image_size(clip)
+            rect = (0.0, 0.0, float(width), float(height))
+        if rect is None:
+            # Empty text draws nothing; keep an editable point at the frame centre.
+            width, height = self.project_size()
+            return ((width - 1.0) / 2.0, (height - 1.0) / 2.0, 1.0, 1.0)
+        return tuple(float(value) for value in rect)
 
     def matrix(self, clip):
         return T.matrix(self.state(clip), self.project_size(), self.image_size(clip))
 
     def clip_corners(self, clip):
-        """The four transformed picture corners, in project pixels."""
+        """The four transformed content corners, in project pixels."""
         state = self.state(clip)
-        return T.content_corners(state, self.project_size(), self.image_size(clip))
+        return T.content_corners_rect(state, self.project_size(), self.image_size(clip),
+                                      self.content_rect(clip))
 
     def handle_points(self, clip):
         corners = self.clip_corners(clip)
@@ -318,7 +347,8 @@ class PreviewOverlay:
                 source = T.invert(project, self.state(clip), self.project_size(), (width, height))
                 if source is None:
                     continue
-                if 0 <= source[0] < width and 0 <= source[1] < height:
+                x0, y0, content_w, content_h = self.content_rect(clip)
+                if x0 <= source[0] < x0 + content_w and y0 <= source[1] < y0 + content_h:
                     return clip
         return None
 
@@ -461,36 +491,6 @@ class PreviewOverlay:
     # These run inside the preview widget's paint/mouse overrides, so an exception here
     # would abort the process: each entry point is guarded and logs instead.
     @crashlog.guard("preview overlay")
-    def paint(self, painter):
-        if not self.enabled:
-            return
-        painter.setRenderHint(painter.RenderHint.Antialiasing, True)
-        for clip in self.video_clips():
-            self._paint_clip(painter, clip)
-        if self._shape_draft is not None:
-            self._paint_shape_draft(painter)
-        clip = self.primary()
-        if clip is not None:
-            if self.show_motion_path and CH.key_times(clip, "transform.position_x"):
-                self._paint_motion_path(painter, clip)
-            self._paint_warps(painter, clip)
-        self._paint_guides(painter)
-
-    def _paint_clip(self, painter, clip):
-        primary = clip is self.primary()
-        corners = [self.to_widget(*corner) for corner in self.clip_corners(clip)]
-        colour = QColor(tokens.COLORS["accent"] if primary else tokens.COLORS["muted"])
-        pen = QPen(colour, 1.6 if primary else 1.0)
-        if not primary:
-            pen.setStyle(Qt.PenStyle.DashLine)
-        painter.save()
-        painter.setPen(pen)
-        # Outline in the clip's own (possibly rotated) space.
-        painter.drawPolygon(QPolygonF(corners))
-        if not primary:
-            painter.restore()
-            return
-        painter.setPen(QPen(colour, 1.2))
     # ------------------------------------------------------------------ roto brush
     def roto_clip_and_entry(self):
         clip = self.primary()
@@ -651,8 +651,8 @@ class PreviewOverlay:
             f"brush {int(round(self.roto_brush_size * 200))}%",
             f"source frame {self.roto_source_frame(clip)}  |  base {base}  |  "
             f"{analysed} analysed{'  (frozen)' if frozen else ''}",
-            "Green drag keep  Â·  Alt red remove  Â·  B refine edge  Â·  [ ] size  Â·  "
-            "O outline  Â·  Esc done",
+            "Green drag keep  ·  Alt red remove  ·  B refine edge  ·  [ ] size  ·  "
+            "O outline  ·  Esc done",
         ]
         painter.save()
         font = painter.font()
@@ -699,10 +699,10 @@ class PreviewOverlay:
         self.widget.update()
         return self.roto_brush_size
 
-        for name in HANDLE_NAMES:
-            point = self.to_widget(*self.handle_points(clip)[name])
-            rect = QRectF(point.x() - HANDLE / 2, point.y() - HANDLE / 2, HANDLE, HANDLE)
-            painter.fillRect(rect, QColor(tokens.COLORS["panel"]))
+    def paint(self, painter):
+        if not self.enabled:
+            return
+        painter.setRenderHint(painter.RenderHint.Antialiasing, True)
         if self.mode == "roto":
             # Rotoscoping is its own editing mode. No bounding box, resize handles,
             # rotation knob, anchor or motion path over the picture - only the brush,
@@ -710,6 +710,36 @@ class PreviewOverlay:
             self._paint_roto(painter)
             self._paint_guides(painter)
             return
+        for clip in self.video_clips():
+            self._paint_clip(painter, clip)
+        if self._shape_draft is not None:
+            self._paint_shape_draft(painter)
+        clip = self.primary()
+        if clip is not None:
+            if self.show_motion_path and CH.key_times(clip, "transform.position_x"):
+                self._paint_motion_path(painter, clip)
+            self._paint_warps(painter, clip)
+        self._paint_guides(painter)
+
+    def _paint_clip(self, painter, clip):
+        primary = clip is self.primary()
+        corners = [self.to_widget(*corner) for corner in self.clip_corners(clip)]
+        colour = QColor(tokens.COLORS["accent"] if primary else tokens.COLORS["muted"])
+        pen = QPen(colour, 1.6 if primary else 1.0)
+        if not primary:
+            pen.setStyle(Qt.PenStyle.DashLine)
+        painter.save()
+        painter.setPen(pen)
+        # Outline in the clip's own (possibly rotated) space.
+        painter.drawPolygon(QPolygonF(corners))
+        if not primary:
+            painter.restore()
+            return
+        painter.setPen(QPen(colour, 1.2))
+        for name in HANDLE_NAMES:
+            point = self.to_widget(*self.handle_points(clip)[name])
+            rect = QRectF(point.x() - HANDLE / 2, point.y() - HANDLE / 2, HANDLE, HANDLE)
+            painter.fillRect(rect, QColor(tokens.COLORS["panel"]))
             painter.drawRect(rect)
         # Rotation knob and its tether. When the picture has left the viewport the knob
         # is pinned to the edge: the tether then points at the real handle position, so
@@ -955,6 +985,12 @@ class PreviewOverlay:
             point = self.roto_picture_point(pos)
             if clip is None or entry is None or point is None:
                 return False
+            mode = ("background" if event.modifiers() & Qt.KeyboardModifier.AltModifier
+                    else self.roto_brush_mode)
+            frame = self.roto_source_frame(clip)
+            # The first stroke defines the base frame; later frames become corrections.
+            if not entry.get("strokes"):
+                entry["base_frame"] = int(frame)
             # Snapshot before the first point: the whole painted stroke is one undo step.
             self.session.begin_gesture()
             stroke = {"frame": int(frame),
@@ -963,6 +999,7 @@ class PreviewOverlay:
                       "mode": str(mode)}
             entry.setdefault("strokes", []).append(stroke)
             self._drag = {"kind": "roto", "clip": clip, "stroke": stroke}
+            self._roto_outline_cache.clear()
             self.widget.update()
             self._notify()
             return True
@@ -984,12 +1021,6 @@ class PreviewOverlay:
                 self._selected_corner = index
                 self.session.begin_gesture()
                 self._drag = {"kind": "corner", "clip": clip, "index": index}
-            mode = ("background" if event.modifiers() & Qt.KeyboardModifier.AltModifier
-                    else self.roto_brush_mode)
-            frame = self.roto_source_frame(clip)
-            # The first stroke defines the base frame; later frames become corrections.
-            if not entry.get("strokes"):
-                entry["base_frame"] = int(frame)
                 self.widget.update()
                 return True
         if clip is not None and self.mode in ("transform", "select", "puppet", "corner"):
@@ -999,7 +1030,6 @@ class PreviewOverlay:
         if self.mode in ("puppet", "transform"):
             hit_entry, pin = self._pin_at(clip) if clip is not None else (None, None)
             if pin is not None:
-            self._roto_outline_cache.clear()
                 pin_id = int(pin.get("id", 0))
                 if event.modifiers() & (Qt.KeyboardModifier.ControlModifier
                                         | Qt.KeyboardModifier.ShiftModifier):
@@ -1184,6 +1214,10 @@ class PreviewOverlay:
                     self.widget.update()
                     self._notify()
             return True
+        if self.mode == "roto":
+            self.roto_hover = QPointF(pos)
+            self.widget.setCursor(Qt.CursorShape.CrossCursor)
+            self.widget.update()
         if drag is None:
             if self.mode in ("shape", "roto"):
                 self._hover = None
@@ -1214,10 +1248,6 @@ class PreviewOverlay:
         else:
             snap_rotation = shift
         drag["alt"] = alt
-        if self.mode == "roto":
-            self.roto_hover = QPointF(pos)
-            self.widget.setCursor(Qt.CursorShape.CrossCursor)
-            self.widget.update()
         if kind == "move":
             project = self.to_project(pos)
             origin = drag["origin"]
@@ -1318,24 +1348,29 @@ class PreviewOverlay:
         """
         project_size = self.project_size()
         image_size = self.image_size(clip)
-        width, height = float(max(1, image_size[0])), float(max(1, image_size[1]))
-        tl, tr, _br, bl = T.content_corners(state, project_size, image_size)
+        rect = self.content_rect(clip)
+        x0, y0, width, height = rect
+        width, height = float(max(1.0, width)), float(max(1.0, height))
+        tl, tr, _br, bl = T.content_corners_rect(state, project_size, image_size, rect)
         u = (tr[0] - tl[0], tr[1] - tl[1])
         v = (bl[0] - tl[0], bl[1] - tl[1])
         uu = u[0] * u[0] + u[1] * u[1]
         vv = v[0] * v[0] + v[1] * v[1]
         if uu <= 1e-9 or vv <= 1e-9:
             return None
-        source = {"nw": (0.0, 0.0), "n": (width / 2.0, 0.0), "ne": (width, 0.0),
-                  "e": (width, height / 2.0), "se": (width, height),
-                  "s": (width / 2.0, height), "sw": (0.0, height),
-                  "w": (0.0, height / 2.0)}
-        opposite = {"nw": (width, height), "n": (width / 2.0, height),
-                    "ne": (0.0, height), "e": (0.0, height / 2.0),
-                    "se": (0.0, 0.0), "s": (width / 2.0, 0.0),
-                    "sw": (width, 0.0), "w": (width, height / 2.0)}
+        source = {"nw": (x0, y0), "n": (x0 + width / 2.0, y0),
+                  "ne": (x0 + width, y0), "e": (x0 + width, y0 + height / 2.0),
+                  "se": (x0 + width, y0 + height),
+                  "s": (x0 + width / 2.0, y0 + height),
+                  "sw": (x0, y0 + height), "w": (x0, y0 + height / 2.0)}
+        opposite = {"nw": (x0 + width, y0 + height),
+                    "n": (x0 + width / 2.0, y0 + height),
+                    "ne": (x0, y0 + height), "e": (x0, y0 + height / 2.0),
+                    "se": (x0, y0), "s": (x0 + width / 2.0, y0),
+                    "sw": (x0 + width, y0), "w": (x0, y0 + height / 2.0)}
         handle_src = source[handle]
-        fixed_src = ((width / 2.0, height / 2.0) if from_centre else opposite[handle])
+        fixed_src = ((x0 + width / 2.0, y0 + height / 2.0) if from_centre
+                     else opposite[handle])
         fixed = T.forward(fixed_src, state, project_size, image_size)
         grabbed = T.forward(handle_src, state, project_size, image_size)
 
@@ -1409,7 +1444,10 @@ class PreviewOverlay:
         if ctrl and ratio_x is not None and ratio_y is not None:
             ratio = max(abs(ratio_x), abs(ratio_y))
             ratio_x = ratio_y = ratio
-        _x0, _y0, fit_w, fit_h = T.fit_rect(self.project_size(), self.image_size(clip))
+        if getattr(clip, "is_text", False) or getattr(clip, "is_shape", False):
+            fit_w, fit_h = self.content_rect(clip)[2:]
+        else:
+            _x0, _y0, fit_w, fit_h = T.fit_rect(self.project_size(), self.image_size(clip))
         # Positive ratios only: a resize clamps at a small minimum instead of flipping.
         # Flipping stays an explicit inspector operation (flip H/V).
         if ratio_x is not None:
@@ -1594,6 +1632,8 @@ class PreviewOverlay:
                   "path_handle": "Adjust motion path", "roto": "Roto Brush stroke"}
         self.session.commit_gesture(labels.get(drag.get("kind"), "Edit transform"))
         self._notify()
+        if drag.get("kind") == "roto" and callable(self.on_roto_change):
+            self.on_roto_change()
         self.widget.update()
         return True
 
@@ -1632,8 +1672,6 @@ class PreviewOverlay:
                                          if int(pin.get("id", 0)) not in removing]
             label = "Delete puppet pin" if len(removing) == 1 else f"Delete {len(removing)} puppet pins"
             self.session.stack.run(label, action)
-        if drag.get("kind") == "roto" and callable(self.on_roto_change):
-            self.on_roto_change()
             self._notify()
             return True
         if self._selected_path_key is not None:
