@@ -15,6 +15,9 @@ any surface and every other surface sees it immediately.
 from __future__ import annotations
 
 from . import animation as ANIM
+from . import mask as MASK
+from . import motion as MOTION
+from . import path as PATHS
 from . import shape as SHAPE
 from . import text as TXT
 from . import transform as T
@@ -22,6 +25,7 @@ from .keyframes import AnimatedValue, Keyframe
 
 TRANSFORM_PREFIX = "transform."
 AUDIO_PREFIX = "audio."
+PATH_PREFIX = "path."
 PIN_MARK = ".pin."
 GAIN = "gain"
 
@@ -47,6 +51,18 @@ def shape_channel(name):
     return SHAPE.shape_channel(name)
 
 
+def mask_path_channel(mask_id):
+    return f"{PATH_PREFIX}mask.{int(mask_id)}"
+
+
+def motion_path_channel():
+    return PATH_PREFIX + "motion"
+
+
+def shape_path_channel():
+    return PATH_PREFIX + "shape"
+
+
 def effect_channel(effect_id, name):
     return f"fx.{effect_id}.{name}"
 
@@ -66,6 +82,8 @@ def parse(channel):
         return "text", None, text[len(TXT.TEXT_PREFIX):]
     if text.startswith(SHAPE.SHAPE_PREFIX):
         return "shape", None, text[len(SHAPE.SHAPE_PREFIX):]
+    if text.startswith(PATH_PREFIX):
+        return "path", None, text[len(PATH_PREFIX):]
     if text.startswith("fx."):
         rest = text[3:]
         effect_id, _sep, tail = rest.partition(".")
@@ -73,6 +91,41 @@ def parse(channel):
             return "pin", effect_id, tail[4:]
         return "effect", effect_id, tail
     return "transform", None, text
+
+
+def _path_for(clip, name):
+    """The mutable path container addressed by a path channel, or None."""
+    if name == "motion":
+        return MOTION.ensure(clip).setdefault("path", PATHS.blank())
+    if name == "shape":
+        if not getattr(clip, "is_shape", False):
+            return None
+        return SHAPE.ensure_shape(clip).setdefault("path", PATHS.blank())
+    if str(name).startswith("mask."):
+        try:
+            mask_id = int(str(name).split(".", 1)[1])
+        except (TypeError, ValueError):
+            return None
+        mask = MASK.find(clip, mask_id)
+        if mask is None:
+            return None
+        return mask.setdefault("path", PATHS.blank())
+    return None
+
+
+def _set_path_for(clip, name, value):
+    if name == "motion":
+        MOTION.ensure(clip)["path"] = PATHS.normalise(value)
+    elif name == "shape" and getattr(clip, "is_shape", False):
+        SHAPE.ensure_shape(clip)["path"] = PATHS.normalise(value)
+    elif str(name).startswith("mask."):
+        try:
+            mask_id = int(str(name).split(".", 1)[1])
+        except (TypeError, ValueError):
+            return
+        mask = MASK.find(clip, mask_id)
+        if mask is not None:
+            mask["path"] = PATHS.normalise(value)
 
 
 def pin_parts(channel):
@@ -121,6 +174,8 @@ def next_pin_id(clip, effect_id):
 def stored(clip, channel):
     """The raw stored value (number, bool or AnimatedValue), or None."""
     kind, effect_id, name = parse(channel)
+    if kind == "path":
+        return _path_for(clip, name)
     if kind == "transform":
         return T.ensure_transform(clip).get(name)
     if kind == "audio":
@@ -150,6 +205,8 @@ def stored(clip, channel):
 def value_at(clip, channel, frame):
     """Evaluated value at a clip-local frame."""
     kind, _effect_id, name = parse(channel)
+    if kind == "path":
+        return PATHS.at(_path_for(clip, name), frame)
     if kind == "text":
         if not getattr(clip, "is_text", False):
             return None
@@ -213,6 +270,8 @@ def numeric_value_at(clip, channel, frame):
 
 def is_animated(clip, channel):
     kind, _effect_id, name = parse(channel)
+    if kind == "path":
+        return bool(PATHS.key_frames(_path_for(clip, name)))
     if kind == "text":
         if not getattr(clip, "is_text", False):
             return False
@@ -231,6 +290,8 @@ def is_animated(clip, channel):
 def set_value(clip, channel, value, frame=0, auto_key=False):
     """Write a value through the same rules the inspector and the preview use."""
     kind, effect_id, name = parse(channel)
+    if kind == "path":
+        return False
     if kind == "transform":
         return T.set_channel(clip, name, value, frame, auto_key)
     if kind == "audio":
@@ -312,6 +373,11 @@ def _animated_from(old_value, frame, new_value):
 def animate(clip, channel, frame):
     """Turn a property into an animated one, keyed at `frame`."""
     kind, effect_id, name = parse(channel)
+    if kind == "path":
+        path = _path_for(clip, name)
+        if path is not None:
+            return PATHS.set_key(path, frame)
+        return None
     if kind == "transform":
         return T.animate_channel(clip, name, frame)
     if kind == "audio":
@@ -360,6 +426,11 @@ def animate(clip, channel, frame):
 
 def unanimate(clip, channel, frame):
     kind, effect_id, name = parse(channel)
+    if kind == "path":
+        path = _path_for(clip, name)
+        if path is not None:
+            path["keys"] = {}
+        return
     if kind == "transform":
         return T.unanimate_channel(clip, name, frame)
     if kind == "audio":
@@ -392,6 +463,8 @@ def unanimate(clip, channel, frame):
 
 def key_times(clip, channel):
     kind, _effect_id, name = parse(channel)
+    if kind == "path":
+        return PATHS.key_frames(_path_for(clip, name))
     if kind == "text":
         if name == TXT.CONTENT:
             return TXT.content_keys(clip)
@@ -406,6 +479,8 @@ def key_times(clip, channel):
 
 def has_key(clip, channel, frame):
     kind, _effect_id, name = parse(channel)
+    if kind == "path":
+        return int(frame) in PATHS.key_frames(_path_for(clip, name))
     if kind == "text":
         if name == TXT.CONTENT:
             return TXT.has_content_key(clip, frame)
@@ -421,6 +496,13 @@ def has_key(clip, channel, frame):
 def ensure_key(clip, channel, frame):
     """Add a keyframe at `frame` if there is none (never removes one). Returns True on add."""
     kind, _effect_id, name = parse(channel)
+    if kind == "path":
+        path = _path_for(clip, name)
+        if path is None or int(frame) in PATHS.key_frames(path):
+            return False
+        path = PATHS.set_key(path, frame)
+        _set_path_for(clip, name, path)
+        return True
     if kind == "text" and name == TXT.CONTENT:
         if TXT.has_content_key(clip, frame):
             return False
@@ -445,6 +527,12 @@ def ensure_key(clip, channel, frame):
 def remove_key(clip, channel, frame):
     """Delete one keyframe from any channel (text words included)."""
     kind, _effect_id, name = parse(channel)
+    if kind == "path":
+        path = _path_for(clip, name)
+        if path is not None and PATHS.remove_key(path, frame):
+            _set_path_for(clip, name, path)
+            return True
+        return False
     if kind == "text" and name == TXT.CONTENT:
         return TXT.remove_content_key(clip, frame)
     if kind == "shape" and name in SHAPE.COLOR_FIELDS:
@@ -456,6 +544,11 @@ def remove_key(clip, channel, frame):
 def toggle_key(clip, channel, frame):
     """Diamond: add a key at `frame`, or delete the existing one."""
     kind, effect_id, name = parse(channel)
+    if kind == "path":
+        if has_key(clip, channel, frame):
+            remove_key(clip, channel, frame)
+            return False
+        return ensure_key(clip, channel, frame)
     if kind == "transform":
         return T.toggle_keyframe(clip, name, frame)
     if kind == "text":
@@ -480,6 +573,18 @@ def toggle_key(clip, channel, frame):
 def set_key_time(clip, channel, old_time, new_time):
     """Move one keyframe in time (live drag); returns the frame it landed on."""
     kind, _effect_id, name = parse(channel)
+    if kind == "path":
+        path = _path_for(clip, name)
+        if path is None:
+            return None
+        keys = dict(path.get("keys") or {})
+        old_time, new_time = int(old_time), max(0, int(new_time))
+        if old_time not in keys or old_time == new_time:
+            return None
+        keys[new_time] = keys.pop(old_time)
+        path["keys"] = {int(time): value for time, value in sorted(keys.items())}
+        _set_path_for(clip, name, path)
+        return new_time
     if kind == "text":
         if name == TXT.CONTENT:
             return TXT.move_content_key(clip, old_time, new_time)
@@ -508,6 +613,21 @@ def set_key_time(clip, channel, old_time, new_time):
 def spec(clip, channel, resolver=None):
     """Display metadata for a channel: label, unit, range, step, decimals, group."""
     kind, effect_id, name = parse(channel)
+    if kind == "path":
+        if name == "motion":
+            return {"label": "Motion Path", "unit": " pts", "minimum": 0,
+                    "maximum": 10000, "step": 1, "decimals": 0,
+                    "group": "Path", "kind": "path"}
+        if name == "shape":
+            return {"label": "Shape Path", "unit": " pts", "minimum": 0,
+                    "maximum": 10000, "step": 1, "decimals": 0,
+                    "group": "Path", "kind": "path"}
+        mask_id = name.split(".", 1)[1] if "." in name else name
+        mask = MASK.find(clip, int(mask_id)) if str(mask_id).isdigit() else None
+        label = (mask.get("name") if isinstance(mask, dict) else None) or f"Mask {mask_id} Path"
+        return {"label": label, "unit": " pts", "minimum": 0,
+                "maximum": 10000, "step": 1, "decimals": 0,
+                "group": "Path", "kind": "path"}
     if kind == "transform":
         label, unit, minimum, maximum, step, decimals = T.SPECS.get(name, (name, "", -1e9, 1e9, 1.0, 2))
         group = "Transform"
@@ -561,6 +681,28 @@ def spec(clip, channel, resolver=None):
 def list_channels(clip, resolver=None, include_static_effects=False):
     """Every channel of a clip, transform first, then effects in pipeline order."""
     rows = []
+    meta = getattr(clip, "transform_meta", None)
+    stored_masks = meta.get("masks") if isinstance(meta, dict) else None
+    for mask in (MASK.masks(clip) if isinstance(stored_masks, list) and stored_masks else ()):
+        mask_id = int(mask.get("id", 0))
+        channel = mask_path_channel(mask_id)
+        rows.append({**spec(clip, channel, resolver), "id": channel, "name": f"mask{mask_id}",
+                     "animated": is_animated(clip, channel),
+                     "value": len(PATHS.points(mask.get("path")))})
+    motion = meta.get("motion") if isinstance(meta, dict) else None
+    if isinstance(motion, dict) and (PATHS.points(motion.get("path"))
+                                      or PATHS.key_frames(motion.get("path"))):
+        channel = motion_path_channel()
+        rows.append({**spec(clip, channel, resolver), "id": channel, "name": "motion",
+                     "animated": is_animated(clip, channel),
+                     "value": len(PATHS.points(motion.get("path")))})
+    if getattr(clip, "is_shape", False):
+        shape_path = SHAPE.ensure_shape(clip).get("path") or {}
+        if PATHS.points(shape_path) or PATHS.key_frames(shape_path):
+            channel = shape_path_channel()
+            rows.append({**spec(clip, channel, resolver), "id": channel, "name": "shape_path",
+                         "animated": is_animated(clip, channel),
+                         "value": len(PATHS.points(shape_path))})
     if getattr(clip, "is_shape", False):
         for name in SHAPE.NUMERIC:
             channel = SHAPE.shape_channel(name)
@@ -646,6 +788,13 @@ def key_records(clip, channel):
     timeline group-move, the clipboard and the text preset generator all move around.
     """
     kind, _effect_id, name = parse(channel)
+    if kind == "path":
+        path = _path_for(clip, name)
+        if path is None:
+            return []
+        return [(int(time), {"points": __import__("copy").deepcopy(value.get("points")),
+                             "closed": bool(value.get("closed"))}, "linear", None, None)
+                for time, value in sorted((path.get("keys") or {}).items())]
     if kind == "text" and name == TXT.CONTENT:
         return [(int(time), TXT.content_at(clip, int(time)), "hold", None, None)
                 for time in TXT.content_keys(clip)]
@@ -667,6 +816,19 @@ def replace_keys(clip, channel, records, base_value=None):
         time = int(row[0])
         rows[time] = row
     ordered = [rows[time] for time in sorted(rows)]
+    if kind == "path":
+        path = _path_for(clip, name)
+        if path is None:
+            return
+        base = PATHS.normalise(path)
+        keys = {}
+        for row in ordered:
+            value = row[1] if isinstance(row[1], dict) else {"points": row[1]}
+            keys[int(row[0])] = {"points": __import__("copy").deepcopy(PATHS.points(value)),
+                                 "closed": bool(value.get("closed", base.get("closed")))}
+        base["keys"] = keys
+        _set_path_for(clip, name, base)
+        return
     if kind == "text" and name == TXT.CONTENT:
         data = TXT.ensure_text(clip)
         data["keys"] = {int(row[0]): str(row[1]) for row in ordered}
@@ -711,6 +873,9 @@ def replace_keys(clip, channel, records, base_value=None):
 def set_static(clip, channel, value):
     """Write a plain, unanimated value (used when a generated animation is removed)."""
     kind, effect_id, name = parse(channel)
+    if kind == "path":
+        _set_path_for(clip, name, value)
+        return
     if kind == "transform":
         T.ensure_transform(clip)[name] = value
         return

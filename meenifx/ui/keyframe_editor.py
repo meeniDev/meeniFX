@@ -310,7 +310,9 @@ class KeyframeEditorPanel(QWidget):
         self._row_widgets = []
         self._group_rows = {}
         self._group_buttons = {}
-        self._collapsed = set()
+        # A path is one row, not one row per point. It starts folded so a mask with
+        # dozens of points never floods the editor; the group header expands it.
+        self._collapsed = {"Path"}
         self._active_channel = None
         self._signature = object()
         self._drag = None
@@ -445,7 +447,10 @@ class KeyframeEditorPanel(QWidget):
             return []
         rows = []
         for row in CH.list_channels(clip, self.engine.runtime_effects):
-            if row.get("kind") not in ("float", "int"):
+            if row.get("kind") not in ("float", "int", "path"):
+                continue
+            if row.get("kind") == "path":
+                rows.append(row)
                 continue
             if not row.get("animated") and not str(row.get("id", "")).startswith(
                     (CH.TRANSFORM_PREFIX, CH.AUDIO_PREFIX, "text.")):
@@ -637,7 +642,9 @@ class KeyframeEditorPanel(QWidget):
             for row in group_rows:
                 label = QLabel(f"  {row.get('label', row['id'])}")
                 label.setContentsMargins(tokens.SP2, 0, 0, 0)
-                label.setToolTip(row["id"])
+                label.setToolTip(row["id"] + ("\nPaths with different vertex counts hold "
+                                              "the previous pose instead of interpolating."
+                                              if row.get("kind") == "path" else ""))
                 label.setFixedHeight(ROW_H)
                 value = QLabel()
                 value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -680,6 +687,10 @@ class KeyframeEditorPanel(QWidget):
         frame = _clamp(int(self.session.playhead) - int(clip.timeline_start), 0,
                        max(0, clip.duration - 1))
         for row, _label, value, _lane in self._row_widgets:
+            if row.get("kind") == "path":
+                points = CH.value_at(clip, row["id"], frame) or {}
+                value.setText(f"{len(points.get('points') or ())} pts")
+                continue
             number = CH.numeric_value_at(clip, row["id"], frame)
             value.setText(_format_value(number, row) if number is not None else "")
 
@@ -709,7 +720,8 @@ class KeyframeEditorPanel(QWidget):
             button.setEnabled(has_clip and selected)
         self.paste_button.setEnabled(has_clip and active
                                      and self.session.has_key_clipboard())
-        self.value_edit.setEnabled(has_clip and active)
+        self.value_edit.setEnabled(has_clip and active
+                                   and (self.channel_meta(active) or {}).get("kind") != "path")
 
     # ---------------------------------------------------------- value editing
     def _sync_value_field(self):
@@ -723,6 +735,10 @@ class KeyframeEditorPanel(QWidget):
                 self.value_edit.setEnabled(False)
                 return
             meta = self.channel_meta(channel) or {}
+            if meta.get("kind") == "path":
+                self.value_edit.setEnabled(False)
+                self.value_edit.setToolTip("Edit path points in the Preview panel")
+                return
             self.value_edit.setDecimals(max(0, min(4, int(meta.get("decimals", 2)))))
             self.value_edit.setRange(float(meta.get("minimum", -1e9)),
                                      float(meta.get("maximum", 1e9)))
@@ -760,6 +776,8 @@ class KeyframeEditorPanel(QWidget):
         clip = self.clip()
         channel = self.active_channel()
         if clip is None or channel is None or clip.track.locked:
+            return False
+        if (self.channel_meta(channel) or {}).get("kind") == "path":
             return False
         value = float(self.value_edit.value())
         selected = self.selected_entries()

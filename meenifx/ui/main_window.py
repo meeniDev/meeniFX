@@ -183,7 +183,7 @@ class MainWindow(QMainWindow):
         self._layout_touched=False; self._split_drag=None
         self._layout_save_timer=QTimer(self); self._layout_save_timer.setSingleShot(True)
         self._layout_save_timer.setInterval(600); self._layout_save_timer.timeout.connect(self._save_layout_now)
-        self._connect_model(); self._build_ui(); self._connect_audio(); self._restore_layout(); self._bind_shortcuts(); self._connect_values()
+        self._connect_model(); self._build_ui(); self._apply_snap_settings(self.timeline_settings); self._connect_audio(); self._restore_layout(); self._bind_shortcuts(); self._connect_values()
         self.play_timer=QTimer(self); self.play_timer.setTimerType(Qt.TimerType.PreciseTimer); self.play_timer.timeout.connect(self._tick_playback)
         self.camera_timer=QTimer(self); self.camera_timer.timeout.connect(self._tick_camera)
         # Coalesce panel/preview refreshes so dragging the playhead stays smooth.
@@ -349,7 +349,7 @@ class MainWindow(QMainWindow):
             self._wave_actions[mode]=action
         graph_dock=self.docks.get("graph")
         if graph_dock is not None:
-            toggle=graph_dock.toggleViewAction(); toggle.setShortcut(QKeySequence("G")); toggle.setText("Graph Editor")
+            toggle=graph_dock.toggleViewAction(); toggle.setShortcut(QKeySequence("Shift+Alt+G")); toggle.setText("Graph Editor")
         keyframe_dock=self.docks.get("keyframe")
         if keyframe_dock is not None:
             toggle=keyframe_dock.toggleViewAction(); toggle.setShortcut(QKeySequence("Shift+G"))
@@ -477,7 +477,7 @@ class MainWindow(QMainWindow):
         self._add_action(edit,"Delete All Markers",None,self.engine.session.delete_all_markers)
         edit.addSeparator()
         # Tools and snapping are also here so the toolbar buttons always have a twin.
-        self._add_action(edit,"Select Tool","V",lambda:self.engine.session.tool.set("select"))
+        self._add_action(edit,"Select Tool","V",lambda:self._set_overlay_mode("select"))
         self._add_action(edit,"Razor Tool","S",lambda:self.engine.session.tool.set("razor"))
         tools=bar.addMenu("Tools")
         captions_menu=tools.addMenu("Captions")
@@ -490,10 +490,11 @@ class MainWindow(QMainWindow):
         self._add_action(tools,"Remove Dead Silence...",None,self.open_silence_dialog)
         self._add_action(tools,"Normalize Audio...",None,self.normalize_audio)
         transformation_menu=bar.addMenu("Transform")
-        self._add_action(transformation_menu,"Selection Tool","V",lambda:self._set_overlay_mode("select"))
+        self._add_action(transformation_menu,"Selection Tool",None,lambda:self._set_overlay_mode("select"))
         self._add_action(transformation_menu,"Transform Tool","T",lambda:self._set_overlay_mode("transform"))
         self._add_action(transformation_menu,"Puppet Warp Tool","P",lambda:self._set_overlay_mode("puppet"))
         self._add_action(transformation_menu,"Roto Brush Tool","R",lambda:self._set_overlay_mode("roto"))
+        self._add_action(transformation_menu,"Pen Tool","G",lambda:self._start_pen_tool())
         transformation_menu.addSeparator()
         self.autokey_action=self._add_check_action(transformation_menu,"Auto-Keyframe","K",False,self._set_auto_key)
         self.motion_path_action=self._add_check_action(transformation_menu,"Show Motion Path","Ctrl+Shift+P",True,
@@ -752,6 +753,27 @@ class MainWindow(QMainWindow):
         shape_row.addWidget(self.shape_button); shape_row.addWidget(self.shape_menu_button)
         self.shape_button.clicked.connect(lambda _=False:self._start_shape_tool(self._shape_kind))
         toolbar.addWidget(shape_holder)
+        # Pen tool: Shape Path, Mask Path or Motion Path. The button keeps the last mode;
+        # the disclosure menu chooses a different one without opening a dialog.
+        self._pen_mode="shape"
+        self.pen_button=QToolButton(); self.pen_button.setProperty("role","icon")
+        self.pen_button.setIcon(icon(SHAPE.ICONS["path"]))
+        self.pen_button.setFixedSize(tokens.CONTROL_H,tokens.CONTROL_H)
+        self.pen_button.setCheckable(True)
+        self.pen_button.setToolTip("Pen tool (G): draw a shape, mask or motion path")
+        self.pen_button.clicked.connect(lambda _=False:self._start_pen_tool())
+        pen_picker=QMenu(self)
+        for _mode,_label in (("shape","Shape Path"),("mask","Mask Path"),("motion","Motion Path")):
+            pen_picker.addAction(_label,lambda _checked=False,m=_mode:self._start_pen_tool(m))
+        self.pen_menu_button=QToolButton(); self.pen_menu_button.setProperty("role","icon")
+        self.pen_menu_button.setIcon(icon("chevron_down")); self.pen_menu_button.setFixedSize(tokens.CONTROL_H-6,tokens.CONTROL_H)
+        self.pen_menu_button.setToolTip("Choose the Pen mode")
+        self.pen_menu_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.pen_menu_button.setMenu(pen_picker)
+        pen_holder=QWidget(); pen_row=QHBoxLayout(pen_holder)
+        pen_row.setContentsMargins(0,0,0,0); pen_row.setSpacing(0)
+        pen_row.addWidget(self.pen_button); pen_row.addWidget(self.pen_menu_button)
+        toolbar.addWidget(pen_holder)
         self.captions_button=QToolButton(); self.captions_button.setProperty("role","icon")
         self.captions_button.setIcon(icon("captions")); self.captions_button.setFixedSize(tokens.CONTROL_H,tokens.CONTROL_H)
         self.captions_button.setToolTip("Generate Auto Captions from the audio")
@@ -759,7 +781,7 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self.captions_button)
         toolbar.addSeparator()
         self.graph_button=QToolButton(); self.graph_button.setProperty("role","icon"); self.graph_button.setCheckable(True)
-        self.graph_button.setIcon(icon("graph")); self.graph_button.setToolTip("Graph Editor (G)")
+        self.graph_button.setIcon(icon("graph")); self.graph_button.setToolTip("Graph Editor (Shift+Alt+G)")
         self.graph_button.setFixedSize(tokens.CONTROL_H,tokens.CONTROL_H)
         self.graph_button.clicked.connect(lambda _=False:self._toggle_graph_dock())
         toolbar.addWidget(self.graph_button)
@@ -782,7 +804,7 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self.export_button)
         icon_names=[(self.undo_button,"undo"),(self.redo_button,"redo"),(self.select_tool_button,"select"),
                     (self.transform_tool_button,"transform"),(self.puppet_tool_button,"puppet"),
-                    (self.roto_tool_button,"key_mask"),
+                    (self.roto_tool_button,"key_mask"),(self.pen_button,"shape_polygon"),
                     (self.text_button,"text"),(self.captions_button,"captions"),(self.graph_button,"graph"),
                     (self.path_button,"path"),(self.autokey_button,"auto_key")]
         def refresh_icons(_toolbar):
@@ -1576,6 +1598,27 @@ class MainWindow(QMainWindow):
     def show_preferences(self, section=None):
         from .start_window import PreferencesDialog
         PreferencesDialog(self, section=section).exec()
+
+    def _apply_snap_settings(self, settings=None):
+        """Push application snapping preferences into the editor and preview."""
+        settings = settings or self.timeline_settings
+        overlay = getattr(self, "overlay", None)
+        if overlay is not None:
+            overlay.snap_enabled = bool(settings.snap_preview)
+            overlay.snap_threshold = float(settings.preview_snap_px)
+            overlay.snap_show_guides = bool(settings.show_snap_guides)
+            overlay.snap_edges = bool(settings.snap_edges)
+            overlay.snap_center = bool(settings.snap_center)
+            overlay.snap_objects = bool(settings.snap_objects)
+            overlay.widget.update()
+        engine = getattr(self, "engine", None)
+        if engine is not None:
+            engine.session.snap_enabled.set(bool(settings.snap_timeline))
+        canvas = getattr(getattr(self, "timeline_panel", None), "canvas", None)
+        if canvas is not None:
+            canvas.snap_in_px = float(settings.timeline_snap_px)
+            canvas.snap_out_px = float(settings.timeline_snap_px) + 2.0
+            canvas.update()
 
     def _reload_effect_previews(self):
         """A new reference image or quality: rebuild the browser's thumbnails."""
@@ -2641,6 +2684,18 @@ class MainWindow(QMainWindow):
         self._request_preview()
         return clip_id
 
+    def _start_pen_tool(self, mode=None):
+        """Arm the Pen tool and keep the toolbar's check state in step."""
+        if mode is not None:
+            self._pen_mode=mode
+        if not self.overlay.pen.set_mode(self._pen_mode):
+            return False
+        self._set_overlay_mode("pen")
+        self.preview_panel.view.setFocus()
+        label={"shape":"shape path","mask":"mask path","motion":"motion path"}.get(self._pen_mode,"path")
+        self.bridge.status.emit(f"Pen tool ({label}): click to add points, drag for curves, Esc finishes")
+        return True
+
     def _start_shape_tool(self, kind="rectangle"):
         """Arm the shape tool: the next drag in the preview draws that shape."""
         from ..model import shape as SHAPE
@@ -2910,6 +2965,8 @@ class MainWindow(QMainWindow):
             self.overlay.roto_choose_subject=False
             self.overlay._roto_outline_cache.clear()
             self.preview_panel.view.setCursor(Qt.CursorShape.ArrowCursor)
+        if mode!="pen" and self.overlay.mode=="pen":
+            self.overlay.pen.cancel(finish=True)
         self.overlay.mode=mode
         self.preview_panel.set_roto_workspace(mode=="roto")
         from PyQt6.QtWidgets import QApplication
@@ -2923,7 +2980,8 @@ class MainWindow(QMainWindow):
                             (getattr(self,"transform_tool_button",None),"transform"),
                             (getattr(self,"puppet_tool_button",None),"puppet"),
                             (getattr(self,"roto_tool_button",None),"roto"),
-                            (getattr(self,"shape_button",None),"shape")):
+                            (getattr(self,"shape_button",None),"shape"),
+                            (getattr(self,"pen_button",None),"pen")):
             if button is not None:
                 button.blockSignals(True); button.setChecked(name==mode); button.blockSignals(False)
         if mode=="puppet": self._ensure_puppet_effect()

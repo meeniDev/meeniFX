@@ -14,11 +14,12 @@ from __future__ import annotations
 
 import copy
 
+from . import path as PATHS
 from .keyframes import AnimatedValue
 
 SHAPE_PREFIX = "shape."
 
-KINDS = ("rectangle", "rounded_rectangle", "ellipse", "polygon", "star", "line")
+KINDS = ("rectangle", "rounded_rectangle", "ellipse", "polygon", "star", "line", "path")
 
 # Icon name per kind, so the toolbar menu, the inspector and the Add menu all draw the
 # same glyph for the same shape.
@@ -29,6 +30,7 @@ ICONS = {
     "polygon": "shape_polygon",
     "star": "shape_star",
     "line": "shape_line",
+    "path": "shape_polygon",
 }
 
 LABELS = {
@@ -38,18 +40,31 @@ LABELS = {
     "polygon": "Polygon",
     "star": "Star",
     "line": "Line",
+    "path": "Custom Path",
 }
 
 DEFAULTS = {
     "kind": "rectangle",
     "fill_color": "#4C9AFF",
     "fill_opacity": 100.0,
+    "gradient_enabled": False,
+    "gradient_type": "linear",
+    "gradient_angle": 0.0,
+    "gradient_scale": 100.0,
+    "gradient_offset": 0.0,
+    # Semicolon-separated positions and colours also accepted by the inspector.
+    "gradient_stops": [{"position": 0.0, "color": "#4C9AFF"},
+                       {"position": 100.0, "color": "#7A5CFF"}],
     "stroke_enabled": True,
     "stroke_color": "#FFFFFF",
     "stroke_width": 2.0,
     "stroke_opacity": 100.0,
     # center | inside | outside: where the stroke sits relative to the path.
     "stroke_align": "center",
+    "stroke_dash": 0.0,
+    "stroke_gap": 0.0,
+    "stroke_join": "miter",
+    "stroke_miter_limit": 4.0,
     "width": 320.0,
     "height": 180.0,
     "radius": 24.0,
@@ -60,15 +75,20 @@ DEFAULTS = {
     "cap": "butt",
     "arrow_start": False,
     "arrow_end": False,
+    # Custom paths use project pixels inside the full-frame generated layer.
+    "path": {"points": [], "closed": False},
 }
 
 NUMERIC = ("fill_opacity", "stroke_width", "stroke_opacity", "width", "height", "radius",
-           "sides", "points", "inner_ratio")
+           "sides", "points", "inner_ratio", "gradient_angle", "gradient_scale",
+           "gradient_offset", "stroke_dash", "stroke_gap", "stroke_miter_limit")
 
 COLOR_FIELDS = ("fill_color", "stroke_color")
 
 ALIGNMENTS = ("center", "inside", "outside")
 CAPS = ("butt", "round", "square")
+JOINS = ("miter", "round", "bevel")
+GRADIENT_TYPES = ("linear", "radial")
 
 # label, unit, minimum, maximum, step, decimals, slider span
 SPECS = {
@@ -81,6 +101,12 @@ SPECS = {
     "fill_opacity": ("Fill opacity", "%", 0.0, 100.0, 1.0, 0, 100.0),
     "stroke_opacity": ("Stroke opacity", "%", 0.0, 100.0, 1.0, 0, 100.0),
     "stroke_width": ("Stroke width", "px", 0.0, 200.0, 0.5, 1, 40.0),
+    "gradient_angle": ("Gradient angle", "\u00b0", -360.0, 360.0, 1.0, 0, 360.0),
+    "gradient_scale": ("Gradient scale", "%", 1.0, 400.0, 1.0, 0, 300.0),
+    "gradient_offset": ("Gradient position", "%", -100.0, 100.0, 1.0, 0, 200.0),
+    "stroke_dash": ("Dash length", "px", 0.0, 200.0, 1.0, 0, 50.0),
+    "stroke_gap": ("Dash gap", "px", 0.0, 200.0, 1.0, 0, 50.0),
+    "stroke_miter_limit": ("Miter limit", "", 1.0, 20.0, 0.5, 1, 10.0),
 }
 
 
@@ -100,6 +126,11 @@ def ensure_shape(clip):
     for name, value in DEFAULTS.items():
         if name not in data:
             data[name] = copy.deepcopy(value)
+    stops = data.get("gradient_stops")
+    if isinstance(stops, str):
+        data["gradient_stops"] = parse_stops(stops)
+    elif not isinstance(stops, list) or len(stops) < 2:
+        data["gradient_stops"] = copy.deepcopy(DEFAULTS["gradient_stops"])
     for name in COLOR_FIELDS:
         stored = data.get(name)
         if isinstance(stored, dict):
@@ -119,6 +150,37 @@ def is_shape_clip(clip):
 
 def shape_channel(name):
     return SHAPE_PREFIX + name
+
+
+def parse_stops(value):
+    """Parse ``0:#112233; 55:#ff8800; 100:white`` into a validated stop list."""
+    if isinstance(value, list):
+        raw = value
+    else:
+        raw = []
+        for part in str(value or "").split(";"):
+            position, _sep, colour = part.partition(":")
+            if colour:
+                raw.append({"position": position, "color": colour.strip()})
+    out = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            position = max(0.0, min(100.0, float(item.get("position", 0.0))))
+        except (TypeError, ValueError):
+            position = 0.0
+        colour = str(item.get("color") or "#ffffff").strip()
+        out.append({"position": position, "color": colour})
+    if len(out) < 2:
+        return copy.deepcopy(DEFAULTS["gradient_stops"])
+    return sorted(out, key=lambda item: item["position"])
+
+
+def stops_text(settings):
+    data = ensure_shape(settings) if hasattr(settings, "shape") else settings
+    return ";".join(f"{int(round(float(stop.get('position', 0))))}:{stop.get('color')}"
+                    for stop in (data or {}).get("gradient_stops") or ())
 
 
 # ----------------------------------------------------------------------- colours
@@ -320,6 +382,11 @@ def resolve(clip, frame):
         "fill_color": color_at(clip, "fill_color", frame),
         "stroke_color": color_at(clip, "stroke_color", frame),
         "stroke_enabled": bool(data.get("stroke_enabled")),
+        "gradient_enabled": bool(data.get("gradient_enabled")),
+        "gradient_type": str(data.get("gradient_type") or "linear"),
+        "gradient_stops": copy.deepcopy(data.get("gradient_stops") or []),
+        "stroke_join": str(data.get("stroke_join") or "miter"),
+        "path": PATHS.at(data.get("path") or {"points": [], "closed": False}, frame),
         "align": str(data.get("stroke_align") or "center"),
         "cap": str(data.get("cap") or "butt"),
         "arrow_start": bool(data.get("arrow_start")),
@@ -329,6 +396,10 @@ def resolve(clip, frame):
         spec["align"] = "center"
     if spec["cap"] not in CAPS:
         spec["cap"] = "butt"
+    if spec["stroke_join"] not in JOINS:
+        spec["stroke_join"] = "miter"
+    if spec["gradient_type"] not in GRADIENT_TYPES:
+        spec["gradient_type"] = "linear"
     for name in NUMERIC:
         spec[name] = float(value_at(clip, name, frame) or 0.0)
     spec["fill_opacity"] = max(0.0, min(100.0, spec["fill_opacity"])) / 100.0

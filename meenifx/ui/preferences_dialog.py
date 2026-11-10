@@ -333,28 +333,75 @@ class PreferencesDialog(QDialog):
         from .timeline_settings import TimelineSettings
 
         page = self._page("timeline", "Timeline",
-                          "Defaults for editing clips on the timeline.")
+                          "Editing defaults and snapping for the timeline and preview.")
         self._timeline_settings = TimelineSettings.load()
         self.auto_transitions = QCheckBox("Create a crossfade when clips overlap")
         self.auto_transitions.setChecked(self._timeline_settings.auto_overlap_transitions)
         self.auto_transitions.setToolTip("Dropping a clip over another on the same track "
                                          "adds a crossfade in the overlap.")
         page.addWidget(self.auto_transitions)
+        self._subheading(page, "Snapping",
+                         "Thresholds are screen pixels: zooming the timeline does not "
+                         "change how close a snap feels.")
+        form = self._form()
+        self.snap_timeline = QCheckBox("Enable timeline snapping")
+        self.snap_timeline.setChecked(self._timeline_settings.snap_timeline)
+        form.addRow("", self.snap_timeline)
+        self.snap_preview = QCheckBox("Enable preview snapping")
+        self.snap_preview.setChecked(self._timeline_settings.snap_preview)
+        form.addRow("", self.snap_preview)
+        self.timeline_snap_px = QSpinBox()
+        self.timeline_snap_px.setRange(1, 40)
+        self.timeline_snap_px.setSuffix(" px")
+        self.timeline_snap_px.setValue(self._timeline_settings.timeline_snap_px)
+        form.addRow("Timeline threshold", self.timeline_snap_px)
+        self.preview_snap_px = QSpinBox()
+        self.preview_snap_px.setRange(1, 40)
+        self.preview_snap_px.setSuffix(" px")
+        self.preview_snap_px.setValue(self._timeline_settings.preview_snap_px)
+        form.addRow("Preview threshold", self.preview_snap_px)
+        self.show_snap_guides = QCheckBox("Show snapping guides")
+        self.show_snap_guides.setChecked(self._timeline_settings.show_snap_guides)
+        form.addRow("", self.show_snap_guides)
+        self.snap_edges = QCheckBox("Snap to composition edges")
+        self.snap_edges.setChecked(self._timeline_settings.snap_edges)
+        form.addRow("", self.snap_edges)
+        self.snap_center = QCheckBox("Snap to composition center")
+        self.snap_center.setChecked(self._timeline_settings.snap_center)
+        form.addRow("", self.snap_center)
+        self.snap_objects = QCheckBox("Snap to other objects")
+        self.snap_objects.setChecked(self._timeline_settings.snap_objects)
+        form.addRow("", self.snap_objects)
+        page.addLayout(form)
         page.addStretch(1)
 
     def _apply_timeline_settings(self):
         from .timeline_settings import TimelineSettings
         settings = TimelineSettings(
-            {"auto_overlap_transitions": self.auto_transitions.isChecked()})
+            {"auto_overlap_transitions": self.auto_transitions.isChecked(),
+             "snap_timeline": self.snap_timeline.isChecked(),
+             "snap_preview": self.snap_preview.isChecked(),
+             "timeline_snap_px": self.timeline_snap_px.value(),
+             "preview_snap_px": self.preview_snap_px.value(),
+             "show_snap_guides": self.show_snap_guides.isChecked(),
+             "snap_edges": self.snap_edges.isChecked(),
+             "snap_center": self.snap_center.isChecked(),
+             "snap_objects": self.snap_objects.isChecked()})
         settings.save()
         self._timeline_settings = settings
         parent = self.parent()
         engine = getattr(parent, "engine", None)
         if engine is not None:
             engine.session.auto_transitions.set(settings.auto_overlap_transitions)
+            engine.session.snap_enabled.set(settings.snap_timeline)
         canvas = getattr(getattr(parent, "timeline_panel", None), "canvas", None)
         if canvas is not None:
+            canvas.snap_in_px = float(settings.timeline_snap_px)
+            canvas.snap_out_px = float(settings.timeline_snap_px) + 2.0
             canvas.update()
+        apply_snapping = getattr(parent, "_apply_snap_settings", None)
+        if callable(apply_snapping):
+            apply_snapping(settings)
 
     # ----------------------------------------------------------------- playback
     def _build_playback(self):

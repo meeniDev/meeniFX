@@ -66,6 +66,7 @@ class TimelineSession:
         self.selected = set()
         self.marker_selected = set()   # marker ids, independent of the clip selection
         self.key_selection = set()     # (clip_id, channel, time) keyframe selection
+        self.active_mask = (0, 0)      # (clip_id, mask_id) edited in the Pen overlay
         self._primary = None
         self.tool = Value("select")
         self.snap_enabled = Value(True)
@@ -2354,6 +2355,229 @@ class TimelineSession:
         self.reveal_requested.emit(clip.timeline_start)
         self.status.emit(f"{SHAPE.LABELS.get(kind, 'Shape')} added")
         return clip.id
+
+    def add_path_shape_clip(self, points, closed=True, start=None, duration=None,
+                            track=None):
+        """Create a custom drawn vector shape from project-space path points."""
+        from . import path as PATHS
+        from . import shape as SHAPE
+
+        clean = PATHS.normalise({"points": points, "closed": bool(closed)})
+        if len(clean["points"]) < 2:
+            return None
+        tl = self.timeline
+        start = max(0, int(self.playhead if start is None else start))
+        duration = max(1, int(duration if duration is not None else round(tl.fps * 5)))
+        settings = SHAPE.blank("path")
+        settings["path"] = clean
+        box = PATHS.bounds(clean)
+        if box is not None:
+            settings["width"] = max(1.0, float(box[2]))
+            settings["height"] = max(1.0, float(box[3]))
+        transform = T.default_transform()
+        holder = {}
+
+        def free_track():
+            for lane in tl.tracks_of_type("video"):
+                busy = any(not (clip.end <= start or clip.timeline_start >= start + duration)
+                           for clip in lane.clips)
+                if not busy and not lane.locked:
+                    return lane
+            return tl.add_track("video")
+
+        def action():
+            target = track
+            if target is None or target.type != "video":
+                target = free_track()
+            holder["clip"] = tl.new_clip(
+                name="Custom Path", source_path="", track=target, start=start,
+                duration=duration, transform=transform, shape=settings)
+
+        self.stack.run("Draw shape", action)
+        clip = holder.get("clip")
+        if clip is None:
+            return None
+        self.set_selection({clip.id})
+        self.reveal_requested.emit(clip.timeline_start)
+        self.status.emit("Custom path added")
+        return clip.id
+
+    def _find_clip(self, clip_id):
+        finder = getattr(self.timeline, "find_clip", None)
+        if callable(finder):
+            return finder(clip_id)
+        return next((clip for clip in self.timeline.all_clips()
+                     if int(getattr(clip, "id", 0)) == int(clip_id)), None)
+
+    def add_clip_mask(self, clip_id, points, closed=True, mode="add", name=None,
+                      frame=None):
+        """Add one keyframeable mask to a clip (project-space path points)."""
+        from . import mask as MASK
+
+        holder = {}
+
+        def action():
+            clip = self._find_clip(clip_id)
+            if clip is None:
+                return
+            mask = MASK.add(clip, points, closed=closed, mode=mode, name=name)
+            if frame is not None:
+                # A mask created away from frame zero gets its first key there, with an
+                # identical key at zero, so enabling animation does not snap the shape.
+                path = mask.get("path") or {}
+                path = PATHS_set_key(path, 0, path)
+                path = PATHS_set_key(path, max(0, int(frame) - clip.timeline_start), path)
+                mask["path"] = path
+            holder["mask"] = mask
+
+        def PATHS_set_key(path, at, value):
+            from . import path as PATHS
+            return PATHS.set_key(path, at, value)
+
+        self.stack.run("Add mask", action)
+        mask = holder.get("mask")
+        if mask is None:
+            return None
+        self.status.emit(f"{mask.get('name') or 'Mask'} added")
+        return int(mask.get("id", 0))
+
+    def update_clip_mask(self, clip_id, mask_id, values):
+        """Undoable edit of one mask's mode, feather, expansion, opacity or path."""
+        from . import mask as MASK
+        from . import path as PATHS
+
+        holder = {"changed": False}
+
+        def action():
+            clip = self._find_clip(clip_id)
+            mask = MASK.find(clip, mask_id) if clip is not None else None
+            if mask is None:
+                return
+            for name, value in dict(values or {}).items():
+                if name == "path":
+                    mask["path"] = PATHS.normalise(value)
+                elif name in ("feather", "expansion", "opacity", "mode", "invert",
+                              "visible", "show_outline", "name"):
+                    mask[name] = value
+            holder["changed"] = True
+
+        self.stack.run("Edit mask", action)
+        if holder["changed"]:
+            self.status.emit("Mask updated")
+        return holder["changed"]
+
+    def select_clip_mask(self, clip_id, mask_id):
+        """Make one mask the Pen overlay's edit target (view state, not undoable)."""
+        from . import mask as MASK
+        clip = self._find_clip(clip_id)
+        mask = MASK.find(clip, mask_id) if clip is not None else None
+        if mask is None:
+            return False
+        self.active_mask = (int(clip_id), int(mask_id))
+        self.changed.emit()
+        return True
+
+    def set_clip_mask_path(self, clip_id, mask_id, path, frame=None):
+        """Commit a path edited in the preview back to its mask."""
+        from . import mask as MASK
+        holder = {"changed": False}
+
+        def action():
+            clip = self._find_clip(clip_id)
+            mask = MASK.find(clip, mask_id) if clip is not None else None
+            if mask is None:
+                return
+            MASK.set_path(mask, path, frame=frame)
+            holder["changed"] = True
+
+        self.stack.run("Edit mask path", action)
+        if holder["changed"]:
+            self.active_mask = (int(clip_id), int(mask_id))
+            self.status.emit("Mask path updated")
+        return holder["changed"]
+
+    def duplicate_clip_mask(self, clip_id, mask_id):
+        """Copy a mask, giving the copy its own id, name and deep-copied path keys."""
+        from . import mask as MASK
+        holder = {}
+
+        def action():
+            clip = self._find_clip(clip_id)
+            source = MASK.find(clip, mask_id) if clip is not None else None
+            if source is None:
+                return
+            data = __import__("copy").deepcopy(source)
+            data["id"] = MASK.next_id(clip)
+            data["name"] = f"{source.get('name') or 'Mask'} copy"
+            MASK.masks(clip).append(data)
+            holder["mask"] = data
+
+        self.stack.run("Duplicate mask", action)
+        mask = holder.get("mask")
+        if mask is not None:
+            self.active_mask = (int(clip_id), int(mask.get("id", 0)))
+            self.status.emit("Mask duplicated")
+            return int(mask.get("id", 0))
+        return None
+
+    def remove_clip_mask(self, clip_id, mask_id):
+        from . import mask as MASK
+
+        holder = {"removed": False}
+
+        def action():
+            clip = self._find_clip(clip_id)
+            if clip is not None:
+                holder["removed"] = MASK.remove(clip, mask_id)
+
+        self.stack.run("Remove mask", action)
+        return holder["removed"]
+
+    def set_clip_matte(self, clip_id, source_id=0, mode="alpha", enabled=None):
+        from . import matte as MATTE
+
+        def action():
+            clip = self._find_clip(clip_id)
+            if clip is None:
+                return
+            settings = MATTE.ensure(clip)
+            settings["source_id"] = max(0, int(source_id or 0))
+            settings["mode"] = mode if mode in MATTE.MODES else "alpha"
+            settings["enabled"] = bool(source_id) if enabled is None else bool(enabled)
+
+        self.stack.run("Set matte", action)
+        self.status.emit("Matte source updated")
+
+    def set_motion_path(self, clip_id, points, closed=False, enabled=True):
+        """Attach a center-relative motion path to a clip (undoable)."""
+        from . import motion as MOTION
+
+        holder = {}
+
+        def action():
+            clip = self._find_clip(clip_id)
+            if clip is None:
+                return
+            holder["settings"] = MOTION.set_path(clip, points, closed=closed,
+                                                enabled=enabled, mode="offset")
+
+        self.stack.run("Set motion path", action)
+        return holder.get("settings")
+
+    def update_motion_settings(self, clip_id, values):
+        from . import motion as MOTION
+
+        def action():
+            clip = self._find_clip(clip_id)
+            if clip is None:
+                return
+            settings = MOTION.ensure(clip)
+            for name, value in dict(values or {}).items():
+                if name in MOTION.DEFAULTS and name != "path":
+                    settings[name] = value
+            MOTION.ensure(clip)
+
+        self.stack.run("Edit motion path", action)
 
     def add_media(self, entries, start=None, track=None, find_free=False, reveal=True,
                   select=True, fit=False, label="Import media"):

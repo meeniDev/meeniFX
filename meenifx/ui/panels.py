@@ -617,8 +617,10 @@ class EffectsPanel(QWidget):
         preset_rows = tuple((row.get("preset"), row.get("category"), int(row.get("duration", 0)),
                              (row.get("knobs") or {}).get("unit"))
                             for row in PM.instances(clip)) if hasattr(clip, "presets") else ()
+        from .creative_properties import creative_signature
         return (tuple(sorted(c.id for c in clips)), clip.id, clip.name, effects, animated, flags,
-                gain, text_animation, text_font, shape_key, preset_rows)
+                gain, text_animation, text_font, shape_key, preset_rows,
+                creative_signature(clip))
 
     def refresh_properties(self):
         """Rebuild only when the structure changed; otherwise just follow the playhead."""
@@ -672,6 +674,8 @@ class EffectsPanel(QWidget):
             elif clip.is_shape:
                 self._shape_card(clip)
             self._transform_card(clip)
+            from .creative_properties import add_creative_card
+            add_creative_card(self, clip)
             self._animation_card(clip)
         elif clip.track is not None and clip.track.type == "audio":
             self._audio_card(clip)
@@ -1516,6 +1520,31 @@ class EffectsPanel(QWidget):
         form.addWidget(self._labelled("Color", fill_row,
                                       "Fill colour; keyframe it to animate the colour"))
         self._channel_row(form, clip, SHAPE.shape_channel("fill_opacity"))
+        gradient = QCheckBox("Gradient fill")
+        gradient.setChecked(bool(settings.get("gradient_enabled")))
+        gradient.toggled.connect(lambda on, c=clip: self._set_shape_static(
+            c, "gradient_enabled", bool(on), "Shape gradient"))
+        form.addWidget(gradient)
+        if settings.get("gradient_enabled"):
+            gradient_type = QComboBox()
+            gradient_type.addItem("Linear", "linear")
+            gradient_type.addItem("Radial", "radial")
+            gradient_type.setCurrentIndex(max(0, gradient_type.findData(
+                settings.get("gradient_type"))))
+            gradient_type.activated.connect(lambda at, box=gradient_type, c=clip:
+                                            self._set_shape_static(
+                                                c, "gradient_type", box.itemData(at),
+                                                "Gradient type"))
+            form.addWidget(self._labelled("Gradient type", gradient_type,
+                                          "Linear or radial gradient"))
+            stops = QLineEdit(SHAPE.stops_text(settings))
+            stops.setToolTip("Multiple stops: 0:#4C9AFF; 50:#FFFFFF; 100:#7A5CFF")
+            stops.editingFinished.connect(
+                lambda field=stops, c=clip: self._set_shape_gradient_stops(c, field.text()))
+            form.addWidget(self._labelled("Stops", stops,
+                                          "Position and colour pairs, separated by semicolons"))
+            for name in ("gradient_angle", "gradient_scale", "gradient_offset"):
+                self._channel_row(form, clip, SHAPE.shape_channel(name))
 
         self._section_label(form, "Stroke")
         stroke = QCheckBox("Stroke this shape")
@@ -1539,6 +1568,15 @@ class EffectsPanel(QWidget):
             c, "stroke_align", text.lower(), "Stroke alignment"))
         form.addWidget(self._labelled("Align", align,
                                       "Where the stroke sits relative to the outline"))
+        for name in ("stroke_dash", "stroke_gap"):
+            self._channel_row(form, clip, SHAPE.shape_channel(name))
+        join = QComboBox()
+        join.addItems([name.title() for name in SHAPE.JOINS])
+        join.setCurrentText(str(settings.get("stroke_join") or "miter").title())
+        join.currentTextChanged.connect(lambda text, c=clip: self._set_shape_static(
+            c, "stroke_join", text.lower(), "Stroke joins"))
+        form.addWidget(self._labelled("Join", join, "How corners of the stroke meet"))
+        self._channel_row(form, clip, SHAPE.shape_channel("stroke_miter_limit"))
 
         self._section_label(form, "Geometry")
         for name in ("width", "height"):
@@ -1569,6 +1607,25 @@ class EffectsPanel(QWidget):
                 arrow_row.addWidget(box)
             arrow_row.addStretch(1)
             form.addWidget(self._labelled("Arrows", arrows, "Optional arrowheads"))
+        if kind == "path":
+            path_row = QWidget()
+            path_layout = QHBoxLayout(path_row)
+            path_layout.setContentsMargins(0, 0, 0, 0)
+            path_layout.setSpacing(tokens.SP2)
+            cap = QComboBox()
+            cap.addItems([name.title() for name in SHAPE.CAPS])
+            cap.setCurrentText(str(settings.get("cap") or "butt").title())
+            cap.currentTextChanged.connect(lambda text, c=clip: self._set_shape_static(
+                c, "cap", text.lower(), "Path caps"))
+            key = QToolButton()
+            key.setText("Key path")
+            key.setToolTip("Key the custom path at the playhead")
+            key.clicked.connect(lambda _=False, c=clip: self._key_shape_path(c))
+            path_layout.addWidget(cap)
+            path_layout.addWidget(key)
+            path_layout.addStretch(1)
+            form.addWidget(self._labelled("Path", path_row,
+                                          "Caps and path-shape keyframes"))
 
         # Position, rotation and the clip's own opacity are the shared transform values:
         # the same rows as the Transform section, never a second set of numbers.
@@ -1610,6 +1667,21 @@ class EffectsPanel(QWidget):
 
     def _toggle_shape_color_key(self, clip, name):
         self.engine.session.toggle_channel_key(clip, SHAPE.shape_channel(name))
+        self._notify()
+        self.refresh_properties()
+
+    def _set_shape_gradient_stops(self, clip, value):
+        def action():
+            target = self.engine.timeline.find_clip(clip.id)
+            if target is not None:
+                SHAPE.ensure_shape(target)["gradient_stops"] = SHAPE.parse_stops(value)
+        self.engine.session.stack.run("Shape gradient stops", action)
+        self._notify()
+        self.refresh_properties()
+
+    def _key_shape_path(self, clip):
+        frame = self._clip_frame(clip)
+        self.engine.session.add_keyframe(clip.id, CH.shape_path_channel(), frame)
         self._notify()
         self.refresh_properties()
 

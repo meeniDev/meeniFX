@@ -94,6 +94,23 @@ def _shape(clip):
     return ";".join(parts)
 
 
+def _creative_metadata(clip):
+    """Masks, track mattes and motion paths are part of the rendered picture."""
+    data = getattr(clip, "transform_meta", None)
+    if not isinstance(data, dict) or not data:
+        return ""
+
+    def clean(value):
+        if isinstance(value, dict):
+            return "{" + ",".join(f"{key!r}:{clean(item)}" for key, item in
+                                    sorted(value.items(), key=lambda pair: str(pair[0]))) + "}"
+        if isinstance(value, (list, tuple)):
+            return "[" + ",".join(clean(item) for item in value) + "]"
+        return repr(value)
+
+    return clean(data)
+
+
 def _presets(clip):
     """The preset instances are part of the picture, so they are part of the digest."""
     from ..model import presets as preset_model
@@ -154,6 +171,7 @@ def clip_digest(clip, compositions=None, seen=None):
         _effects(clip),
         _text(clip),
         _shape(clip),
+        _creative_metadata(clip),
         _presets(clip),
         # How the layer is composited changes the picture just as much as its effects.
         str(getattr(clip, "blend", "normal")),
@@ -192,6 +210,22 @@ def timeline_digests(timeline, compositions=None, seen=None):
                 # clip used to keep showing: its own digest never changed).
                 digest += ":hidden"
             result[clip.id] = (digest, int(clip.timeline_start), int(clip.end), quiet)
+    # A matte target's cached picture also depends on the source clip. Editing the
+    # source must invalidate the target even when the target itself did not change.
+    for track in timeline.tracks:
+        for clip in track.clips:
+            meta = getattr(clip, "transform_meta", None)
+            raw = meta.get("matte") if isinstance(meta, dict) else None
+            if not isinstance(raw, dict) or not raw.get("enabled"):
+                continue
+            try:
+                source_id = int(raw.get("source_id", 0) or 0)
+            except (TypeError, ValueError):
+                source_id = 0
+            if source_id and source_id in result and source_id != clip.id:
+                digest, start, end, quiet = result[clip.id]
+                result[clip.id] = (digest + ":matte[" + result[source_id][0] + "]",
+                                   start, end, quiet)
     return result
 
 

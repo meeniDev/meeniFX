@@ -19,6 +19,8 @@ import numpy as np
 
 from PIL import ImageColor
 
+from ..model import path as PATHS
+
 _TILE_CACHE = {}
 CACHE_LIMIT = 96
 SUPERSAMPLE = 2.0
@@ -44,6 +46,101 @@ def _bgr(colour):
         except ValueError:
             rgb = (0, 0, 0)
     return float(rgb[2]), float(rgb[1]), float(rgb[0])
+
+
+def _gradient_planes(spec, width, height):
+    """(b, g, r) float planes for a linear or radial multi-stop gradient."""
+    stops = []
+    for stop in spec.get("gradient_stops") or ():
+        try:
+            position = max(0.0, min(1.0, float(stop.get("position", 0.0)) / 100.0))
+        except (TypeError, ValueError):
+            position = 0.0
+        stops.append((position, _bgr(stop.get("color"))))
+    if len(stops) < 2:
+        stops = [(0.0, _bgr(spec.get("fill_color"))),
+                 (1.0, _bgr(spec.get("gradient_color") or spec.get("fill_color")))]
+    stops.sort(key=lambda item: item[0])
+    yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
+    nx, ny = xx / max(1.0, width - 1.0) - 0.5, yy / max(1.0, height - 1.0) - 0.5
+    angle = math.radians(float(spec.get("gradient_angle", 0.0) or 0.0))
+    scale = max(0.01, float(spec.get("gradient_scale", 100.0) or 100.0) / 100.0)
+    offset = float(spec.get("gradient_offset", 0.0) or 0.0) / 100.0
+    if str(spec.get("gradient_type") or "linear") == "radial":
+        t = np.sqrt(nx * nx + ny * ny) * 2.0 * scale + offset
+    else:
+        t = (nx * math.cos(angle) + ny * math.sin(angle)) * scale + 0.5 + offset
+    t = np.clip(t, 0.0, 1.0)
+    planes = [np.zeros((height, width), dtype=np.float32) for _ in range(3)]
+    for index in range(3):
+        values = np.zeros((height, width), dtype=np.float32)
+        for (p0, c0), (p1, c1) in zip(stops, stops[1:]):
+            if p1 <= p0:
+                continue
+            local = np.clip((t - p0) / (p1 - p0), 0.0, 1.0)
+            values = np.where(t >= p0, c0[index] + (c1[index] - c0[index]) * local,
+                              values)
+        values = np.where(t >= stops[-1][0], stops[-1][1][index], values)
+        planes[index] = values
+    return planes
+
+
+def _point_on(points, distance):
+    """Point at an arc-length distance along a polyline."""
+    walked = 0.0
+    for first, second in zip(points, points[1:]):
+        length = math.hypot(second[0] - first[0], second[1] - first[1])
+        if walked + length >= distance or length < 1e-9:
+            local = (distance - walked) / max(1e-9, length)
+            return (first[0] + (second[0] - first[0]) * local,
+                    first[1] + (second[1] - first[1]) * local)
+        walked += length
+    return points[-1] if points else (0.0, 0.0)
+
+
+def _stroke_polyline(mask, path, weight, closed, spec, scale=1.0):
+    """Stroke a sampled path with dashes, caps and the common join styles."""
+    if weight <= 0 or len(path) < 2:
+        return
+    points = np.round(np.array(path)).astype(np.int32)
+    weight = max(1, int(round(weight)))
+    dash = float(spec.get("stroke_dash", 0.0) or 0.0) * scale
+    gap = float(spec.get("stroke_gap", 0.0) or 0.0) * scale
+    if dash > 0.0:
+        chain = list(path) + ([path[0]] if closed else [])
+        total = sum(math.hypot(b[0] - a[0], b[1] - a[1])
+                    for a, b in zip(chain, chain[1:]))
+        cursor = 0.0
+        while cursor < total:
+            end = min(total, cursor + max(1.0, dash))
+            first, second = _point_on(chain, cursor), _point_on(chain, end)
+            cv2.line(mask, (int(round(first[0])), int(round(first[1]))),
+                     (int(round(second[0])), int(round(second[1]))), 255, weight,
+                     lineType=cv2.LINE_AA)
+            if str(spec.get("cap")) == "round":
+                for point in (first, second):
+                    cv2.circle(mask, (int(round(point[0])), int(round(point[1]))),
+                               max(1, weight // 2), 255, -1, lineType=cv2.LINE_AA)
+            cursor = end + max(0.0, gap)
+        return
+    cv2.polylines(mask, [points], closed, 255, weight, lineType=cv2.LINE_AA)
+    if str(spec.get("stroke_join")) == "round" and not closed:
+        for point in points[1:-1]:
+            cv2.circle(mask, (int(point[0]), int(point[1])), max(1, weight // 2),
+                       255, -1, lineType=cv2.LINE_AA)
+    cap = str(spec.get("cap") or "butt")
+    if not closed and cap == "round":
+        for point in (points[0], points[-1]):
+            cv2.circle(mask, (int(point[0]), int(point[1])), max(1, weight // 2),
+                       255, -1, lineType=cv2.LINE_AA)
+    elif not closed and cap == "square":
+        half = weight / 2.0
+        for point, previous in ((points[0], points[1]), (points[-1], points[-2])):
+            dx, dy = point[0] - previous[0], point[1] - previous[1]
+            length = max(1e-6, math.hypot(dx, dy))
+            cv2.line(mask, (int(point[0]), int(point[1])),
+                     (int(point[0] + dx / length * half), int(point[1] + dy / length * half)),
+                     255, weight, lineType=cv2.LINE_AA)
 
 
 def _rounded_path(x, y, w, h, radius, segments=12):
@@ -136,8 +233,67 @@ def _ring(fill, width, align):
     return np.clip(coverage * 255.0, 0, 255).astype(np.uint8)
 
 
+def _path_tile(spec, project_w, project_h, scale):
+    """A custom Bezier path, cropped to its own bounds like the primitive shapes."""
+    path = spec.get("path") or {}
+    values = PATHS.sampled(path, steps=20)
+    if len(values) < 2:
+        # A newly added Custom Path has no points yet; show a centred triangle until the
+        # user draws one, instead of a clip that renders completely invisible.
+        cx, cy = float(project_w) / 2.0, float(project_h) / 2.0
+        half_w = max(20.0, float(spec.get("width", 320.0))) / 2.0
+        half_h = max(20.0, float(spec.get("height", 180.0))) / 2.0
+        values = [(cx, cy - half_h), (cx + half_w, cy + half_h), (cx - half_w, cy + half_h)]
+    stroke = float(spec.get("stroke_width", 0.0)) if spec.get("stroke_enabled") else 0.0
+    margin = max(stroke, 1.0) * 2.0 + 6.0
+    raw_x = [value[0] for value in values]
+    raw_y = [value[1] for value in values]
+    left = max(0.0, min(raw_x) - margin)
+    top = max(0.0, min(raw_y) - margin)
+    right = min(float(project_w), max(raw_x) + margin)
+    bottom = min(float(project_h), max(raw_y) + margin)
+    if right - left < 1.0 or bottom - top < 1.0:
+        return None, (0, 0)
+    tile_w = max(1, int(round((right - left) * scale)))
+    tile_h = max(1, int(round((bottom - top) * scale)))
+    supersample = SUPERSAMPLE
+    big_w, big_h = max(1, int(tile_w * supersample)), max(1, int(tile_h * supersample))
+    sx, sy = big_w / max(1e-6, right - left), big_h / max(1e-6, bottom - top)
+    points = np.array([[((x - left) * sx), ((y - top) * sy)] for x, y in values], np.float32)
+    points = np.round(points).astype(np.int32)
+    closed = bool(path.get("closed")) or not PATHS.points(path)
+    fill = np.zeros((big_h, big_w), dtype=np.uint8)
+    stroke_mask = np.zeros((big_h, big_w), dtype=np.uint8)
+    if closed and len(points) >= 3:
+        cv2.fillPoly(fill, [points], 255, lineType=cv2.LINE_AA)
+    thickness = stroke * (sx + sy) / 2.0
+    if thickness > 0:
+        _stroke_polyline(stroke_mask, [(point[0], point[1]) for point in points],
+                         thickness, closed, spec, scale=(sx + sy) / 2.0)
+    fill_layer = (_resize(fill, tile_w, tile_h).astype(np.float32) / 255.0
+                  * float(spec.get("fill_opacity", 1.0)))
+    stroke_layer = (_resize(stroke_mask, tile_w, tile_h).astype(np.float32) / 255.0
+                    * float(spec.get("stroke_opacity", 1.0)))
+    alpha = stroke_layer + fill_layer * (1.0 - stroke_layer)
+    safe = np.maximum(alpha, 1e-6)
+    gradient = _gradient_planes(spec, tile_w, tile_h) if spec.get("gradient_enabled") else None
+    b_f, g_f, r_f = _bgr(spec.get("fill_color"))
+    b_s, g_s, r_s = _bgr(spec.get("stroke_color"))
+    tile = np.zeros((tile_h, tile_w, 4), dtype=np.uint8)
+    for index, (fill_c, stroke_c) in enumerate(((b_f, b_s), (g_f, g_s), (r_f, r_s))):
+        if gradient is not None:
+            fill_c = gradient[index]
+        tile[:, :, index] = np.clip(
+            (stroke_c * stroke_layer + fill_c * fill_layer * (1.0 - stroke_layer)) / safe,
+            0, 255)
+    tile[:, :, 3] = np.clip(alpha * 255.0, 0, 255)
+    return tile, (int(round(left * scale)), int(round(top * scale)))
+
+
 def _tile(spec, project_w, project_h, scale):
     """(BGRA uint8 tile, (left, top)) for one shape at one render scale."""
+    if str(spec.get("kind") or "") == "path":
+        return _path_tile(spec, project_w, project_h, scale)
     width = max(1.0, float(spec.get("width", 1.0)))
     height = max(1.0, float(spec.get("height", 1.0)))
     kind = str(spec.get("kind") or "rectangle")
@@ -176,13 +332,8 @@ def _tile(spec, project_w, project_h, scale):
             start_x -= weight / 2.0
             end_x += weight / 2.0
         start, end = (start_x, cy), (end_x, cy)
-        cv2.line(stroke_mask, (int(round(start[0])), int(round(start[1]))),
-                 (int(round(end[0])), int(round(end[1]))), 255, int(round(weight)),
-                 lineType=cv2.LINE_AA)
-        if spec.get("cap") == "round":
-            for point in (start, end):
-                cv2.circle(stroke_mask, (int(round(point[0])), int(round(point[1]))),
-                           max(1, int(round(weight / 2.0))), 255, -1, lineType=cv2.LINE_AA)
+        _stroke_polyline(stroke_mask, [start, end], weight, False, spec,
+                         scale=(px + py) / 2.0)
         _arrow_masks(stroke_mask, start, end, weight, spec)
     else:
         if kind == "ellipse":
@@ -196,7 +347,11 @@ def _tile(spec, project_w, project_h, scale):
         if align in ("inside", "outside"):
             stroke_mask = _ring(fill, thickness, align)
         else:
-            _stroke_path(stroke_mask, path, thickness)
+            if float(spec.get("stroke_dash", 0.0) or 0.0) > 0.0:
+                _stroke_polyline(stroke_mask, path, thickness, True, spec,
+                                 scale=(px + py) / 2.0)
+            else:
+                _stroke_path(stroke_mask, path, thickness)
 
     # Masks arrive in 0..255; compositing needs them in 0..1 or the source-over maths
     # multiplies by a negative (1 - 255) and the antialiased edge vanishes.
@@ -210,9 +365,12 @@ def _tile(spec, project_w, project_h, scale):
     alpha = stroke_layer + fill_layer * (1.0 - stroke_layer)
     b_f, g_f, r_f = _bgr(spec.get("fill_color"))
     b_s, g_s, r_s = _bgr(spec.get("stroke_color"))
+    gradient = _gradient_planes(spec, tile_w, tile_h) if spec.get("gradient_enabled") else None
     safe = np.maximum(alpha, 1e-6)
     tile = np.zeros((tile_h, tile_w, 4), dtype=np.uint8)
     for index, (fill_c, stroke_c) in enumerate(((b_f, b_s), (g_f, g_s), (r_f, r_s))):
+        if spec.get("gradient_enabled"):
+            fill_c = gradient[index]
         tile[:, :, index] = np.clip(
             (stroke_c * stroke_layer + fill_c * fill_layer * (1.0 - stroke_layer)) / safe,
             0, 255)
@@ -230,11 +388,26 @@ def _resize(mask, width, height):
 def bounds(spec, project_w, project_h):
     """(x, y, width, height) of the shape's visible geometry in project pixels.
 
-    The rendered layer is intentionally full-frame, so the overlay cannot use the
-    picture's dimensions as the object's box. This is the actual drawn extent: the
-    shape's centred width/height box plus the stroke, cap or arrow that reaches beyond
-    it. It is pure geometry (no rasterisation), so painting the overlay stays cheap.
+    A custom path is measured from its sampled Bezier geometry, not from the primitive
+    width/height box, so the preview's selection box follows the drawn path.
     """
+    if str(spec.get("kind") or "") == "path":
+        path = spec.get("path") or {}
+        values = PATHS.sampled(path, steps=20)
+        if not values:
+            cx, cy = float(project_w) / 2.0, float(project_h) / 2.0
+            half_w = max(20.0, float(spec.get("width", 320.0))) / 2.0
+            half_h = max(20.0, float(spec.get("height", 180.0))) / 2.0
+            values = [(cx, cy - half_h), (cx + half_w, cy + half_h), (cx - half_w, cy + half_h)]
+        stroke = float(spec.get("stroke_width", 0.0)) if spec.get("stroke_enabled") else 0.0
+        left, top = min(v[0] for v in values), min(v[1] for v in values)
+        right, bottom = max(v[0] for v in values), max(v[1] for v in values)
+        margin = max(stroke, 1.0) / 2.0
+        return left - margin, top - margin, right - left + margin * 2.0, bottom - top + margin * 2.0
+    # The rendered layer is intentionally full-frame, so the overlay cannot use the
+    # picture's dimensions as the object's box. This is the actual drawn extent: the
+    # shape's centred width/height box plus the stroke, cap or arrow that reaches beyond
+    # it. It is pure geometry (no rasterisation), so painting the overlay stays cheap.
     project_w, project_h = max(1.0, float(project_w)), max(1.0, float(project_h))
     width = max(1.0, float(spec.get("width", 1.0)))
     height = max(1.0, float(spec.get("height", 1.0)))
@@ -273,6 +446,10 @@ def _cache_key(spec, project_w, project_h, scale):
             return value
         if isinstance(value, (int, float)):
             return round(float(value), 4)
+        if isinstance(value, dict):
+            return tuple(sorted((str(key), clean(item)) for key, item in value.items()))
+        if isinstance(value, (list, tuple)):
+            return tuple(clean(item) for item in value)
         return value
 
     return (tuple(sorted((name, clean(value)) for name, value in spec.items())),

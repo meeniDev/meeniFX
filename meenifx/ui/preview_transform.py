@@ -24,6 +24,7 @@ from PyQt6.QtGui import QBrush, QColor, QPainterPath, QPen, QPolygonF
 from .. import crashlog, tokens
 from ..model import channels as CH
 from ..model import transform as T
+from .pen_tool import PenTool
 
 HANDLE = 7.0          # half size of a scale handle, widget px
 ROTATE_OFFSET = 26.0  # distance of the rotation knob above the box, widget px
@@ -39,6 +40,17 @@ _PIN_CLIPBOARD = {"rows": [], "start": 0, "pins": 0}
 PATH_STEP = 2         # frames between motion-path samples
 
 HANDLE_NAMES = ("nw", "n", "ne", "e", "se", "s", "sw", "w")
+
+
+def _segment_distance(point, start, end):
+    """Distance from a point to a line segment, in widget pixels."""
+    dx, dy = end.x() - start.x(), end.y() - start.y()
+    if abs(dx) + abs(dy) < 1e-9:
+        return (point - start).manhattanLength()
+    t = ((point.x() - start.x()) * dx + (point.y() - start.y()) * dy) / (dx * dx + dy * dy)
+    t = max(0.0, min(1.0, t))
+    projection = QPointF(start.x() + dx * t, start.y() + dy * t)
+    return (point - projection).manhattanLength()
 
 
 def _clamp_to_rect(origin, direction, rect):
@@ -115,6 +127,20 @@ class PreviewOverlay:
         self._selected_corner = None
         self._selected_node = None
         self.on_change = None          # callable() -> re-render + refresh panels
+        self.pen = PenTool(self)
+        self.session.changed.connect(self._sync_pen_edit)
+        self.session.playhead_changed.connect(self._sync_pen_edit)
+        self.snap_enabled = True
+        self.snap_threshold = SNAP_PX
+        self.snap_show_guides = True
+        self.snap_edges = True
+        self.snap_center = True
+        self.snap_objects = True
+
+    def _sync_pen_edit(self, *_args):
+        """Undo, redo and scrubbing must update an open mask edit, not stale points."""
+        if getattr(self, "pen", None) is not None and self.mode == "pen":
+            self.pen.sync_from_session()
 
     # A single pin is still the common case, so the old attribute keeps working: reading
     # gives the primary selection and writing replaces the whole selection.
@@ -357,6 +383,28 @@ class PreviewOverlay:
                 if x0 <= source[0] < x0 + content_w and y0 <= source[1] < y0 + content_h:
                     return clip
         return None
+
+    def _mask_at(self, clip, pos):
+        """The visible mask outline under the cursor, if any."""
+        from ..model import mask as MASK
+        from ..model import path as PATHS
+        if clip is None:
+            return None
+        frame = self.local_frame(clip)
+        best = None
+        for mask in MASK.at(clip, frame):
+            if not mask.get("show_outline", True):
+                continue
+            values = PATHS.sampled(mask.get("path") or {}, steps=18)
+            previous = None
+            for x, y in values:
+                current = self.to_widget(x, y)
+                if previous is not None:
+                    distance = _segment_distance(pos, previous, current)
+                    if distance <= HIT * 1.5 and (best is None or distance < best[0]):
+                        best = (distance, int(mask.get("id", 0)))
+                previous = current
+        return None if best is None else best[1]
 
     def _pin_at(self, clip):
         """(effect_entry, pin) under the pointer, for puppet warp."""
@@ -734,8 +782,13 @@ class PreviewOverlay:
             self._paint_roto(painter)
             self._paint_guides(painter)
             return
+        if self.mode == "pen":
+            self.pen.paint(painter)
+            self._paint_guides(painter)
+            return
         for clip in self.video_clips():
             self._paint_clip(painter, clip)
+        self.pen.paint_masks(painter)
         if self._shape_draft is not None:
             self._paint_shape_draft(painter)
         clip = self.primary()
@@ -859,7 +912,7 @@ class PreviewOverlay:
         return min(x0, x1), min(y0, y1), width, height, 0.0
 
     def _paint_guides(self, painter):
-        if not self._guides:
+        if not self._guides or not getattr(self, "snap_show_guides", True):
             return
         rect = self.widget.frame_rect()
         painter.save()
@@ -1025,6 +1078,8 @@ class PreviewOverlay:
                                  "modifiers": event.modifiers()}
             self.widget.update()
             return True
+        if self.mode == "pen":
+            return self.pen.press(event)
         if self.mode == "roto":
             clip, entry = self.roto_clip_and_entry()
             point = self.roto_picture_point(pos)
@@ -1064,6 +1119,15 @@ class PreviewOverlay:
             self.widget.update()
             return True
         clip = self.primary()
+        if clip is not None and self.mode in ("select", "transform"):
+            mask_id = self._mask_at(clip, pos)
+            if mask_id is not None:
+                self.session.select_clip_mask(clip.id, mask_id)
+                if self.pen.edit_mask(clip.id, mask_id):
+                    if callable(self.on_mode_change):
+                        self.on_mode_change("pen")
+                    self.widget.update()
+                    return True
         # Warp handles win over the transform handles: corner-pin corners and mesh
         # nodes sit exactly on the box corners and centre, where the box handles would
         # otherwise swallow every click on them.
@@ -1258,6 +1322,8 @@ class PreviewOverlay:
                     event.modifiers() & Qt.KeyboardModifier.AltModifier)
             self.widget.update()
             return True
+        if self.mode == "pen":
+            return self.pen.move(event)
         drag = self._drag
         if drag is not None and drag.get("kind") == "roto":
             clip = drag.get("clip")
@@ -1629,42 +1695,69 @@ class PreviewOverlay:
                           (project[0] - center[0] - x, project[1] - center[1] - y))
 
     def _snap_delta(self, clip, state, dx, dy, skip):
-        """Snap the moving clip to the frame centre and edges; returns the delta and guides."""
+        """Snap to composition edges/centre and every other visible clip's box."""
         self._guides = []
-        if skip:
+        if skip or not getattr(self, "snap_enabled", True):
             return dx, dy
         pw, ph = self.project_size()
         rect = self.widget.frame_rect()
         if rect.isEmpty():
             return dx, dy
-        project_per_px = pw / max(1e-9, rect.width())
-        tolerance = SNAP_PX * project_per_px
+        tolerance = max(1.0, float(getattr(self, "snap_threshold", SNAP_PX))) * pw / max(1e-9, rect.width())
         corners = T.content_corners(state, self.project_size(), self.image_size(clip))
         left = min(c[0] for c in corners) + dx
         right = max(c[0] for c in corners) + dx
         top = min(c[1] for c in corners) + dy
         bottom = max(c[1] for c in corners) + dy
-        for target, kind in ((0.0, "left"), (pw - 1, "right")):
-            distance = (left - target) if kind == "left" else (right - target)
-            if abs(distance) <= tolerance:
-                dx -= distance
-                self._guides.append(("x", target))
-                left, right = left + dx - (left - min(c[0] for c in corners)), 0
-                break
-        for edge, target in ((left, 0.0), (right, pw - 1), ((left + right) / 2.0, (pw - 1) / 2.0)):
-            if abs(edge - target) <= tolerance:
-                dx += target - edge
-                self._guides.append(("x", target))
-                break
-        for edge, target in ((top, 0.0), (bottom, ph - 1), ((top + bottom) / 2.0, (ph - 1) / 2.0)):
-            if abs(edge - target) <= tolerance:
-                dy += target - edge
-                self._guides.append(("y", target))
-                break
+        x_targets = []
+        y_targets = []
+        if getattr(self, "snap_edges", True):
+            x_targets.extend([(0.0, 0), (pw - 1.0, 0)])
+            y_targets.extend([(0.0, 0), (ph - 1.0, 0)])
+        if getattr(self, "snap_center", True):
+            x_targets.append(((pw - 1.0) / 2.0, 1))
+            y_targets.append(((ph - 1.0) / 2.0, 1))
+        for other in (self.video_clips() if getattr(self, "snap_objects", True) else ()):
+            if other is clip:
+                continue
+            try:
+                other_state = self.state(other)
+                other_corners = T.content_corners(other_state, self.project_size(),
+                                                  self.image_size(other))
+            except Exception:
+                continue
+            ox0, ox1 = min(c[0] for c in other_corners), max(c[0] for c in other_corners)
+            oy0, oy1 = min(c[1] for c in other_corners), max(c[1] for c in other_corners)
+            x_targets.extend([(ox0, 2), ((ox0 + ox1) / 2.0, 2), (ox1, 2)])
+            y_targets.extend([(oy0, 2), ((oy0 + oy1) / 2.0, 2), (oy1, 2)])
+        best_x = None
+        for edge in (left, (left + right) / 2.0, right):
+            for target, priority in x_targets:
+                distance = target - edge
+                if abs(distance) <= tolerance:
+                    key = (abs(distance), priority, target)
+                    if best_x is None or key < best_x[0]:
+                        best_x = (key, distance, target)
+        best_y = None
+        for edge in (top, (top + bottom) / 2.0, bottom):
+            for target, priority in y_targets:
+                distance = target - edge
+                if abs(distance) <= tolerance:
+                    key = (abs(distance), priority, target)
+                    if best_y is None or key < best_y[0]:
+                        best_y = (key, distance, target)
+        if best_x is not None:
+            dx += best_x[1]
+            self._guides.append(("x", best_x[2]))
+        if best_y is not None:
+            dy += best_y[1]
+            self._guides.append(("y", best_y[2]))
         return dx, dy
 
     @crashlog.guard("preview overlay", fallback=False)
     def mouse_release(self, event):
+        if self.mode == "pen":
+            return self.pen.release(event)
         if self._shape_draft is not None:
             draft = self._shape_draft
             self._shape_draft = None
@@ -1699,6 +1792,8 @@ class PreviewOverlay:
 
     def cancel_shape(self):
         """Escape while drawing: drop the draft and leave the shape tool."""
+        if self.mode == "pen":
+            return self.pen.cancel(finish=True)
         if self._shape_draft is None and self.mode != "shape":
             return False
         self._shape_draft = None
@@ -1715,6 +1810,8 @@ class PreviewOverlay:
 
     def delete_selection(self):
         """Delete the selected pins, corner or motion-path point (not the clip)."""
+        if self.mode == "pen" and self.pen.delete_selected():
+            return True
         clip = self.primary()
         if clip is None:
             return False

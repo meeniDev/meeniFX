@@ -24,6 +24,7 @@ import math
 
 import numpy as np
 
+from . import motion as MOTION
 from .easing import segment_progress
 from .keyframes import AnimatedValue, Keyframe
 
@@ -175,8 +176,8 @@ def _axis_at(value, frame):
     return _number(value, 0.0)
 
 
-def position_at(clip, frame):
-    """Evaluated (x, y) of the clip position, curved through the motion path handles."""
+def _authored_position_at(clip, frame):
+    """The position the clip would have without a motion path."""
     transform = ensure_transform(clip)
     x_value = transform.get("position_x")
     y_value = transform.get("position_y")
@@ -216,6 +217,25 @@ def position_at(clip, frame):
     return _number(x_value.value_at(frame)), _axis_at(y_value, frame)
 
 
+def position_at(clip, frame):
+    """Authored position plus a motion path displacement, or path replacement.
+
+    Offset mode deliberately starts from the authored position at this frame, so a
+    motion path can be attached without moving the clip and existing position
+    keyframes keep animating underneath it. A path without a mode is an old project
+    and keeps the previous absolute behaviour.
+    """
+    motion = MOTION.current(clip)
+    base_x, base_y = _authored_position_at(clip, frame)
+    if motion and motion.get("enabled"):
+        position, _angle = MOTION.position_at(clip, frame, (0.0, 0.0))
+        if position is not None:
+            if motion.get("mode") == "offset":
+                return base_x + position[0], base_y + position[1]
+            return position
+    return base_x, base_y
+
+
 def evaluate(clip, frame):
     """The clip's transform at a clip-local frame."""
     transform = ensure_transform(clip)
@@ -226,6 +246,11 @@ def evaluate(clip, frame):
         value = stored.value_at(frame) if isinstance(stored, AnimatedValue) else stored
         values[name] = _number(value, DEFAULTS[name])
     values["position_x"], values["position_y"] = position_x, position_y
+    motion = MOTION.current(clip)
+    if motion and motion.get("enabled") and motion.get("orient"):
+        # Orient Along Path adds the tangent to the authored rotation; the original
+        # rotation keyframes remain untouched and are used again when motion is disabled.
+        values["rotation"] += MOTION.angle_at(clip, frame, (0.0, 0.0))
     values["flip_h"] = bool(transform.get("flip_h"))
     values["flip_v"] = bool(transform.get("flip_v"))
     return TransformState(**values)

@@ -361,13 +361,20 @@ class TimelineCanvas(QWidget):
         return None
 
     def frame_at(self, x):
-        return max(0, int(round((x - self.HEADER_W + self.scroll_x) / max(self.ppf, 0.001))))
+        exact = (x - self.HEADER_W + self.scroll_x) / max(self.ppf, 0.001)
+        # Round to the nearest frame boundary, never to a pixel-dependent side.
+        return max(0, int(math.floor(exact + 0.5)))
 
     def frame_at_exact(self, x):
         return max(0.0, (x - self.HEADER_W + self.scroll_x) / max(self.ppf, 0.001))
 
     def x_at(self, frame):
+        # One integer pixel owns each frame boundary, so painting and hit testing agree.
         return self.HEADER_W + int(round(frame * self.ppf - self.scroll_x))
+
+    def x_at_exact(self, frame):
+        """Sub-pixel frame boundary used by snapping math, never by painting."""
+        return self.HEADER_W + frame * self.ppf - self.scroll_x
 
     def fit_to_window(self):
         end = max(self.timeline.duration, self.timeline.min_duration)
@@ -1243,7 +1250,7 @@ class TimelineCanvas(QWidget):
             for time in bucket["times"]:
                 proposed = clip.timeline_start + int(time) + delta
                 for candidate in candidates:
-                    gap = abs(self.x_at(candidate) - self.x_at(proposed))
+                    gap = abs(self.x_at_exact(candidate) - self.x_at_exact(proposed))
                     if gap <= self.KEYFRAME_SNAP_PX and (best is None or gap < best[0]):
                         best = (gap, candidate - proposed)
         if best is None:
@@ -1715,8 +1722,10 @@ class TimelineCanvas(QWidget):
     def _clip_full_rect(self, clip):
         """The whole clip rectangle, animation rows included."""
         track = clip.track
-        return QRectF(self.x_at(clip.timeline_start) + 1, self.header_y(track) + 3,
-                      max(2, self.x_at(clip.end) - self.x_at(clip.timeline_start) - 2),
+        left = self.x_at(clip.timeline_start)
+        right = self.x_at(clip.end)
+        # No arbitrary inset: the drawn edge is the exact frame boundary the snap uses.
+        return QRectF(left, self.header_y(track) + 3, max(2.0, right - left),
                       self.track_height(track) - 6)
 
     def _clip_rect(self, clip):
@@ -2294,14 +2303,15 @@ class TimelineCanvas(QWidget):
         if not self.snap_enabled or (modifiers is not None
                                      and modifiers & Qt.KeyboardModifier.ShiftModifier):
             return frame, None
-        x = self.x_at(frame)
+        x = self.x_at_exact(frame)
         cached = self._snap_cached
         best = None
         for value, kind, _clip_id, _edge in self._snap_candidates(exclude, include_playhead):
             if value in exclude_frames:
                 continue
-            dx = abs(self.x_at(value) - x)
-            limit = self.SNAP_OUT_PX if cached == value else self.SNAP_IN_PX
+            dx = abs(self.x_at_exact(value) - x)
+            limit = (getattr(self, "snap_out_px", self.SNAP_OUT_PX) if cached == value
+                     else getattr(self, "snap_in_px", self.SNAP_IN_PX))
             if dx > limit:
                 continue
             # Closest wins; on a tie the kind decides, then the earlier frame. Nothing

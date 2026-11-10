@@ -38,10 +38,13 @@ from .model.session import TimelineSession
 from .model.timeline import Timeline
 from .model.values import Value
 from .model import presets as preset_model
+from .model import mask as mask_model
+from .model import matte as matte_model
 from .model import shape as shape_model
 from .model import text as text_model
 from .processing import gif_export
 from .processing import layers as layer_ops
+from .processing import masks as mask_ops
 from .processing import shapes as shape_render
 from .processing import text as text_render
 from .processing import text_units as text_unit_render
@@ -519,6 +522,71 @@ class EditorEngine:
             layer, (crop[0] / detail, crop[1] / detail), detail, state,
             (pw, ph), scale, (render_w, render_h))
 
+    def _apply_matte(self, clip, layer, frame_no, scale):
+        """Multiply a finished layer by another clip's alpha or luma coverage.
+
+        The source is rendered through the same compositor used for the visible stack,
+        including its transform and masks, but never through its own matte.  That stops
+        two clips pointing at each other from recursing forever while still letting a
+        matte source be a shape, text clip, image, video or pre-composition.
+        """
+        if layer is None or not matte_model.is_active(clip):
+            return layer
+        settings = matte_model.ensure(clip)
+        source = None
+        for candidate in self.timeline.all_clips():
+            if int(getattr(candidate, "id", 0) or 0) == int(settings.get("source_id", 0)):
+                source = candidate
+                break
+        if source is None or source is clip:
+            return layer
+        local = self.held_frame(source, frame_no - source.timeline_start)
+        if local < 0 or local >= max(1, int(source.duration)):
+            return layer
+        src_layer = None
+        try:
+            state = transforms.evaluate(source, local)
+            effect = preset_model.Effect()
+            spec = None
+            if source.is_shape or source.is_text:
+                src_layer = self._render_generated(source, local, scale, state, effect)
+                if src_layer is not None and source.effects:
+                    src_layer = self.apply_effects_layer(
+                        src_layer, source.effects, local, scale,
+                        self.track_type_of(source), clip=source,
+                        rect=(0, 0, src_layer.shape[1], src_layer.shape[0]))
+            else:
+                src_layer, rect = self._layer_for(source, source.timeline_start + local, scale)
+                if src_layer is not None:
+                    if source.effects:
+                        src_layer = self.apply_effects_layer(
+                            src_layer, source.effects, local, scale,
+                            self.track_type_of(source), clip=source, rect=rect)
+                    src_layer = layer_ops.apply_transform(
+                        src_layer, rect, state, self.project_size(), scale)
+            if src_layer is None:
+                return layer
+            src_layer = mask_ops.apply(src_layer, mask_model.at(source, local), scale)
+            height, width = layer.shape[:2]
+            if src_layer.shape[0] != height or src_layer.shape[1] != width:
+                src_layer = cv2.resize(src_layer, (width, height), interpolation=cv2.INTER_AREA)
+            source_alpha = src_layer[:, :, 3].astype(np.float32) / 255.0
+            mode = str(settings.get("mode") or "alpha")
+            if mode.startswith("luma"):
+                b, g, r = (src_layer[:, :, index].astype(np.float32) for index in range(3))
+                coverage = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0 * source_alpha
+            else:
+                coverage = source_alpha
+            if mode.endswith("inverted") or settings.get("invert"):
+                coverage = 1.0 - coverage
+            alpha = layer[:, :, 3].astype(np.float32) / 255.0
+            layer[:, :, 3] = np.clip(np.rint(alpha * coverage * 255.0), 0, 255).astype(np.uint8)
+        except Exception:
+            # A matte is an alpha refinement, not a reason to drop the whole clip. The
+            # ordinary clip still renders if the source is temporarily unavailable.
+            return layer
+        return layer
+
     def _render_composition_frame(self, comp, frame_no, scale=1.0):
         """Render one composition definition at its own native size.
 
@@ -740,6 +808,11 @@ class EditorEngine:
                                                   self.project_size(), scale)
             if not pose.is_identity():
                 layer = layer_ops.preset_look(layer, pose.blur * scale, pose.hue, pose.light)
+            # Masks and mattes are alpha operations in project space, after the picture
+            # has been placed. The preview and export both reach this one point.
+            if not getattr(clip, "adjustment", False):
+                layer = mask_ops.apply(layer, mask_model.at(clip, local), scale)
+                layer = self._apply_matte(clip, layer, frame_no, scale)
             opacity = transforms.opacity_at(clip, local) * clip.fade_gain_at(frame_no) * pose.opacity
             opacity *= weight
             if opacity <= 0.001:

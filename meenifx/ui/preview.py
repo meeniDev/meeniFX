@@ -415,6 +415,29 @@ class PreviewWidget(QWidget):
             if key == Qt.Key.Key_Escape and overlay.cancel_shape():
                 event.accept()
                 return
+            if getattr(overlay, "mode", "") == "pen":
+                if key == Qt.Key.Key_V and not (event.modifiers()
+                                                & (Qt.KeyboardModifier.ControlModifier
+                                                   | Qt.KeyboardModifier.AltModifier)):
+                    overlay.pen.cancel(finish=True)
+                    event.accept()
+                    return
+                if key == Qt.Key.Key_Escape:
+                    overlay.pen.cancel(finish=False)
+                    event.accept()
+                    return
+                if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+                    if overlay.pen.delete_selected():
+                        event.accept()
+                        return
+                if key == Qt.Key.Key_A and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                    if overlay.pen.select_all():
+                        event.accept()
+                        return
+                if key == Qt.Key.Key_T:
+                    if overlay.pen.toggle_smooth():
+                        event.accept()
+                        return
             step = 1.0
             if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
                 step = 10.0

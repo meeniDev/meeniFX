@@ -165,8 +165,9 @@ def test_effect_categories_cards_and_color(editor, qapp):
     cards = [f for f in panel.properties.findChildren(QFrame) if f.property("card") and not f.isHidden()]
     keys = [f.property("effect_key") for f in cards]
     assert keys.count("transform") == 1, "the transform section is its own card"
+    assert keys.count("creative") == 1, "masks, mattes and motion have their own card"
     assert keys.count("face_tracker") == 1, "one card per effect"
-    assert len(cards) == 4, "clip card + transform card + one card per effect"
+    assert len(cards) == 5, "clip + shape + transform + creative + one effect card"
     clip = editor.engine.timeline.find_clip(editor._test_clip_id)
     entry = next(e for e in clip.effects if e["effect_id"] == "face_tracker")
     names = [row["name"] for row in panel._rows if row["kind"] == "param"]
