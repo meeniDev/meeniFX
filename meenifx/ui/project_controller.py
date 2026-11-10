@@ -96,7 +96,9 @@ class ProjectController(QObject):
         if not self.is_open:
             window.setWindowTitle(APP_TITLE)
             return
-        window.setWindowTitle(f"{self.project.name}{'*' if self.is_dirty() else ''} - {APP_TITLE}")
+        composition = getattr(window, "editing_composition", None)
+        context = composition.name if composition is not None else self.project.name
+        window.setWindowTitle(f"{context}{'*' if self.is_dirty() else ''} - {APP_TITLE}")
 
     def _window(self):
         """The window, or None once Qt has deleted it during shutdown.

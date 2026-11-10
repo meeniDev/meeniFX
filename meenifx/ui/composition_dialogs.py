@@ -1,7 +1,8 @@
 """Small dialogs for pre-composing clips and editing a composition's settings."""
 
-from PyQt6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
-                             QFormLayout, QLabel, QLineEdit, QSpinBox, QVBoxLayout)
+from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+                             QDoubleSpinBox, QFormLayout, QLabel, QLineEdit, QSpinBox,
+                             QVBoxLayout)
 
 from .. import tokens
 
@@ -31,6 +32,11 @@ class PrecomposeDialog(QDialog):
         if range_text:
             detail += f" · {range_text}"
         form.addRow("Selected", QLabel(detail))
+        self.transparent = QCheckBox("Transparent background")
+        self.transparent.setChecked(True)
+        self.transparent.setToolTip(
+            "Keep the composition's alpha so a cutout can show tracks below it")
+        form.addRow("Background", self.transparent)
         layout.addLayout(form)
         note = QLabel(
             "The clips move into the new composition with their timing, effects, "
@@ -53,7 +59,8 @@ class PrecomposeDialog(QDialog):
         self._buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(ok)
 
     def values(self):
-        return {"name": self.name_edit.text().strip() or "Composition"}
+        return {"name": self.name_edit.text().strip() or "Composition",
+                "transparent": self.transparent.isChecked()}
 
 
 class CompositionSettingsDialog(QDialog):
@@ -95,6 +102,12 @@ class CompositionSettingsDialog(QDialog):
         form.addRow("Height", self.height_spin)
         form.addRow("Frame rate", self.fps_spin)
         form.addRow("Duration", self.duration_spin)
+        self.transparent = QCheckBox("Transparent background")
+        self.transparent.setChecked(bool(getattr(comp, "transparent", False)))
+        self.transparent.setToolTip(
+            "Transparent keeps alpha for Smart Key, Roto Brush, shapes and text; "
+            "off keeps the legacy opaque composition background")
+        form.addRow("Background", self.transparent)
         layout.addLayout(form)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
                                    | QDialogButtonBox.StandardButton.Cancel)
@@ -116,4 +129,5 @@ class CompositionSettingsDialog(QDialog):
             "height": self.height_spin.value(),
             "fps": self.fps_spin.value(),
             "declared_duration": self.duration_spin.value(),
+            "transparent": self.transparent.isChecked(),
         }

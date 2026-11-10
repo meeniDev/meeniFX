@@ -9,12 +9,13 @@ different key than the effect reads. Only numeric parameters get keyframe contro
 """
 
 import copy
+import math
 
-from PyQt6.QtCore import QMimeData, QPoint, QTimer, Qt, pyqtSignal
+from PyQt6.QtCore import QMimeData, QPoint, QSize, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QCursor, QDrag, QFont
-from PyQt6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, QFrame,
-                             QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMenu,
-                             QPlainTextEdit, QScrollArea, QToolButton, QTreeWidget,
+from PyQt6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QColorDialog, QComboBox,
+                             QFrame, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
+                             QMenu, QPlainTextEdit, QScrollArea, QToolButton, QTreeWidget,
                              QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from .. import tokens
@@ -33,9 +34,11 @@ from ..model import shape as SHAPE
 from ..model import text as TXT
 from ..model import transform as T
 from ..model.keyframes import AnimatedValue, parameter_value_at
+from ..processing import fonts as FONTS
 from ..processing.blend import BLEND_LABELS, normalise_mode
 from .browser import BrowserView
 from .components import EmptyState
+from .font_picker import FontPickerButton
 from .widgets import ScrubField
 
 CARD_MIME = "application/x-meenifx-card"
@@ -601,17 +604,21 @@ class EffectsPanel(QWidget):
                          tuple(sorted((name, isinstance(value, AnimatedValue))
                                       for name, value in settings.items())))
         text_animation = ()
+        text_font = ""
         if clip.is_text:
             animation = (clip.text or {}).get("animation") or {}
             text_animation = tuple(sorted((slot, meta.get("preset"), meta.get("duration"))
                                           for slot, meta in animation.items()
                                           if isinstance(meta, dict)))
+            # A font change must rebuild the card so its installed/missing warning follows
+            # the selected family instead of staying on the previous face.
+            text_font = str((clip.text or {}).get("font") or "")
         # The preset card is rebuilt when an instance appears, goes or changes kind.
         preset_rows = tuple((row.get("preset"), row.get("category"), int(row.get("duration", 0)),
                              (row.get("knobs") or {}).get("unit"))
                             for row in PM.instances(clip)) if hasattr(clip, "presets") else ()
         return (tuple(sorted(c.id for c in clips)), clip.id, clip.name, effects, animated, flags,
-                gain, text_animation, shape_key, preset_rows)
+                gain, text_animation, text_font, shape_key, preset_rows)
 
     def refresh_properties(self):
         """Rebuild only when the structure changed; otherwise just follow the playhead."""
@@ -880,18 +887,14 @@ class EffectsPanel(QWidget):
         families = [str(TXT.ensure_text(clip).get("font") or TXT.DEFAULTS["font"])
                     for clip in text_clips]
         family, mixed = self._mixed_value(families)
-        family_combo = QComboBox()
+        family_picker = FontPickerButton("" if mixed else family)
+        self._batch_font_picker = family_picker
         if mixed:
-            family_combo.addItem("Mixed", None)
-        family_combo.addItems(TXT.FAMILIES)
-        if family not in TXT.FAMILIES:
-            family_combo.addItem(family, family)
-        family_combo.setCurrentIndex(0 if mixed else max(0, family_combo.findText(family)))
-        family_combo.setToolTip("Font family for every selected text clip")
-        family_combo.activated.connect(
-            lambda index, box=family_combo, cs=list(text_clips):
-            self._batch_commit_text_choice(cs, box, index, "font", "Text font"))
-        form.addWidget(self._labelled("Font", family_combo, "Font family for every text clip"))
+            family_picker.setText("Mixed")
+        family_picker.setToolTip("Font family for every selected text clip")
+        family_picker.familyChanged.connect(
+            lambda name, cs=list(text_clips): self._batch_set_font(cs, name))
+        form.addWidget(self._labelled("Font", family_picker, "Font family for every text clip"))
 
         aligns = [str(TXT.ensure_text(clip).get("align") or "center") for clip in text_clips]
         align, mixed = self._mixed_value(aligns)
@@ -915,6 +918,14 @@ class EffectsPanel(QWidget):
         self._batch_channel_row(form, text_clips, CH.text_channel("shadow_blur"))
         outer.addWidget(body)
         self.properties_layout.addWidget(frame)
+
+    def _batch_set_font(self, clips, name):
+        """Set one installed font on every selected text clip (one undo step)."""
+        def write(clip):
+            if clip.is_text:
+                TXT.ensure_text(clip)["font"] = str(name)
+
+        self._batch_apply(clips, "Text font", write, rebuild=True)
 
     def _batch_commit_text_choice(self, clips, combo, index, name, label):
         value = combo.itemData(index)
@@ -1666,59 +1677,190 @@ class EffectsPanel(QWidget):
         font_row = QWidget()
         font_layout = QHBoxLayout(font_row)
         font_layout.setContentsMargins(0, 0, 0, 0)
-        font_layout.setSpacing(tokens.SP2)
-        family = QComboBox()
-        family.addItems(TXT.FAMILIES)
-        family.setCurrentText(str(settings.get("font") or TXT.DEFAULTS["font"]))
-        family.currentTextChanged.connect(
-            lambda name, c=clip: self._set_text_setting(c, "font", name, "Text font"))
+        font_layout.setSpacing(tokens.SP1)
+        family = FontPickerButton(str(settings.get("font") or TXT.DEFAULTS["font"]))
+        # PyQt lets C++ own parented widgets, so the Python wrapper for this subclass can
+        # be collected while the button stays visible. Keep it on the panel: the wrapper
+        # then lives as long as the card and findChildren/type checks stay reliable.
+        self._text_font_picker = family
+        font_row._font_picker = family
+        family.familyChanged.connect(
+            lambda name, c=clip: QTimer.singleShot(
+                0, lambda: self._set_text_setting(c, "font", name, "Text font")))
         font_layout.addWidget(family, 1)
-        for name, label, tip in (("bold", "B", "Bold"), ("italic", "I", "Italic"),
-                                 ("underline", "U", "Underline")):
+        # Real vector icons, flat until hovered and tinted when active. The old buttons
+        # set 26 px-wide text labels under a stylesheet that pads both sides, so the
+        # glyph had no room left and the buttons looked blank.
+        for name, icon_name, tip in (("bold", "bold", "Bold"),
+                                     ("italic", "italic", "Italic"),
+                                     ("underline", "underline", "Underline"),
+                                     ("strikethrough", "strikethrough", "Strikethrough")):
             button = QToolButton()
-            button.setText(label)
+            button.setProperty("role", "icon")
+            button.setIcon(icon(icon_name))
+            button.setIconSize(QSize(tokens.ICON, tokens.ICON))
             button.setCheckable(True)
             button.setChecked(bool(settings.get(name)))
             button.setToolTip(tip)
-            button.setFixedWidth(26)
+            button.setFixedSize(tokens.HIT, tokens.HIT)
             button.toggled.connect(
                 lambda on, key_name=name, c=clip: self._set_text_setting(
                     c, key_name, bool(on), "Text style"))
             font_layout.addWidget(button)
         form.addWidget(self._labelled("Font", font_row))
 
-        align = QComboBox()
-        align.addItems([name.title() for name in TXT.ALIGNMENTS])
-        align.setCurrentText(str(settings.get("align") or "center").title())
-        align.currentTextChanged.connect(
-            lambda name, c=clip: self._set_text_setting(c, "align", name.lower(), "Text alignment"))
-        form.addWidget(self._labelled("Align", align))
+        if not FONTS.installed(family.family()):
+            missing_row = QWidget()
+            missing_layout = QHBoxLayout(missing_row)
+            missing_layout.setContentsMargins(0, 0, 0, 0)
+            missing_layout.setSpacing(tokens.SP1)
+            warning = QLabel()
+            warning.setPixmap(icon("warning", tokens.COLORS["warning"]).pixmap(
+                tokens.ICON_SM, tokens.ICON_SM))
+            warning.setToolTip("This font is not installed on this computer")
+            text = QLabel(f"\u201c{family.family()}\u201d is not installed. Preview and export "
+                          f"substitute another face.")
+            text.setWordWrap(True)
+            text.setProperty("quiet", True)
+            replace = QToolButton()
+            replace.setText("Replace\u2026")
+            replace.setToolTip("Choose an installed font instead")
+            replace.clicked.connect(family.open_picker)
+            missing_layout.addWidget(warning)
+            missing_layout.addWidget(text, 1)
+            missing_layout.addWidget(replace)
+            form.addWidget(missing_row)
+
+        align_row = QWidget()
+        align_layout = QHBoxLayout(align_row)
+        align_layout.setContentsMargins(0, 0, 0, 0)
+        align_layout.setSpacing(tokens.SP1)
+        align_group = QButtonGroup(align_row)
+        align_group.setExclusive(True)
+        # PyQt does not keep the Python wrapper alive just because Qt owns the C++
+        # object; storing it on the row prevents a dangling group on teardown.
+        align_row._button_group = align_group
+        current_align = str(settings.get("align") or "center")
+        for value, icon_name, tip in (("left", "align_left", "Align left"),
+                                      ("center", "align_center", "Align center"),
+                                      ("right", "align_right", "Align right"),
+                                      ("justify", "align_justify", "Justify")):
+            button = QToolButton()
+            button.setProperty("role", "icon")
+            button.setIcon(icon(icon_name))
+            button.setIconSize(QSize(tokens.ICON, tokens.ICON))
+            button.setCheckable(True)
+            button.setChecked(current_align == value)
+            button.setToolTip(tip)
+            button.setFixedSize(tokens.HIT, tokens.HIT)
+            align_group.addButton(button)
+            button.clicked.connect(
+                lambda _=False, v=value, c=clip: self._set_text_setting(
+                    c, "align", v, "Text alignment"))
+            align_layout.addWidget(button)
+        align_layout.addSpacing(tokens.SP2)
+        case = QComboBox()
+        for label, value in (("Aa", "none"), ("AA", "upper"), ("aa", "lower"),
+                             ("Aa Bb", "title")):
+            case.addItem(label, value)
+        case.setToolTip("Convert the words to upper case, lower case or title case")
+        case.setCurrentIndex(max(0, case.findData(str(settings.get("case") or "none"))))
+        case.currentIndexChanged.connect(
+            lambda _index, box=case, c=clip: self._set_text_setting(
+                c, "case", box.currentData(), "Text case"))
+        align_layout.addWidget(case)
+        align_layout.addStretch(1)
+        form.addWidget(self._labelled("Align", align_row))
 
         colours = QWidget()
         colour_row = QHBoxLayout(colours)
         colour_row.setContentsMargins(0, 0, 0, 0)
-        colour_row.setSpacing(tokens.SP2)
-        for label, name in (("Fill", "color"), ("Stroke", "stroke_color"),
-                            ("Shadow", "shadow_color"), ("Back", "bg_color")):
-            colour_row.addWidget(QLabel(label))
+        colour_row.setSpacing(tokens.SP1)
+        for label, name, icon_name in (("Fill colour", "color", "text_color"),
+                                       ("Outline colour", "stroke_color", "text_outline"),
+                                       ("Shadow colour", "shadow_color", "text_shadow"),
+                                       ("Background colour", "bg_color", "fill_frame")):
+            badge = QLabel()
+            badge.setPixmap(icon(icon_name).pixmap(tokens.ICON_SM, tokens.ICON_SM))
+            badge.setToolTip(label)
+            colour_row.addWidget(badge)
             self._text_swatch(colour_row, clip, name)
+            colour_row.addSpacing(tokens.SP1)
         colour_row.addStretch(1)
         form.addWidget(colours)
 
         # Each group is labelled so no opacity can be mistaken for the clip's own.
         self._section_label(form, "Typography")
-        for name in ("size", "stroke_width", "letter_spacing", "line_spacing", "wrap",
-                     "offset_x", "offset_y"):
-            self._channel_row(form, clip, CH.text_channel(name))
+        for name in ("size", "letter_spacing", "word_spacing", "line_spacing"):
+            icon_name = {"letter_spacing": "letter_spacing",
+                         "line_spacing": "line_spacing"}.get(name)
+            self._channel_row(form, clip, CH.text_channel(name), icon_name)
+        self._section_label(form, "Fill and outline")
+        gradient_row = QWidget()
+        gradient_layout = QHBoxLayout(gradient_row)
+        gradient_layout.setContentsMargins(0, 0, 0, 0)
+        gradient_layout.setSpacing(tokens.SP2)
+        gradient = QCheckBox("Gradient fill")
+        gradient.setChecked(bool(settings.get("gradient")))
+        gradient.setToolTip("Blend two colours across the whole text block")
+        gradient.toggled.connect(
+            lambda on, c=clip: QTimer.singleShot(
+                0, lambda: self._set_text_setting(c, "gradient", bool(on), "Gradient fill")))
+        gradient_layout.addWidget(gradient)
+        gradient_layout.addWidget(QLabel("to"))
+        self._text_swatch(gradient_layout, clip, "gradient_color")
+        gradient_layout.addStretch(1)
+        form.addWidget(gradient_row)
+        self._channel_row(form, clip, CH.text_channel("gradient_angle"))
+        self._channel_row(form, clip, CH.text_channel("stroke_width"))
+        self._channel_row(form, clip, CH.text_channel("stroke_opacity"))
         self._section_label(form, "Shadow (this opacity affects the shadow only)")
         for name in ("shadow_opacity", "shadow_offset_x", "shadow_offset_y", "shadow_blur"):
             self._channel_row(form, clip, CH.text_channel(name))
         self._section_label(form, "Background plate")
-        for name in ("bg_opacity", "bg_padding"):
+        for name in ("bg_opacity", "bg_padding", "bg_radius"):
             self._channel_row(form, clip, CH.text_channel(name))
         self._section_label(form, "Glyphs (fill opacity, blur, per-character reveal)")
         for name in ("fill_opacity", "blur", "reveal"):
             self._channel_row(form, clip, CH.text_channel(name))
+
+        # Advanced options stay folded so the card does not grow by a screenful.
+        advanced_toggle = QToolButton()
+        advanced_toggle.setProperty("role", "tool")
+        advanced_toggle.setText("Advanced options")
+        advanced_toggle.setCheckable(True)
+        advanced_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        advanced_toggle.setIcon(icon("chevron_right"))
+        advanced_toggle.setToolTip("Text box, anchor, offsets and shadow direction")
+        advanced_body = QWidget()
+        advanced_form = QVBoxLayout(advanced_body)
+        advanced_form.setContentsMargins(0, 0, 0, 0)
+        advanced_form.setSpacing(tokens.SP1 + 2)
+        advanced_body.setVisible(False)
+        advanced_toggle.toggled.connect(
+            lambda on, body=advanced_body, button=advanced_toggle:
+            (body.setVisible(bool(on)),
+             button.setIcon(icon("chevron_down" if on else "chevron_right"))))
+        self._channel_row(advanced_form, clip, CH.text_channel("wrap"))
+        self._channel_row(advanced_form, clip, CH.text_channel("offset_x"))
+        self._channel_row(advanced_form, clip, CH.text_channel("offset_y"))
+        anchor = QComboBox()
+        for label, value in (("Top", "top"), ("Middle", "center"), ("Bottom", "bottom")):
+            anchor.addItem(label, value)
+        anchor.setToolTip("Where the whole text block sits on the frame")
+        anchor.setCurrentIndex(max(0, anchor.findData(str(settings.get("anchor") or "center"))))
+        anchor.currentIndexChanged.connect(
+            lambda _index, box=anchor, c=clip: self._set_text_setting(
+                c, "anchor", box.currentData(), "Text anchor"))
+        advanced_form.addWidget(self._labelled("Anchor", anchor))
+        self._text_shadow_direction(advanced_form, clip, frame)
+        hint = QLabel("Outline is drawn outside the glyph; fill, outline and background "
+                      "each keep their own opacity.")
+        hint.setWordWrap(True)
+        hint.setProperty("quiet", True)
+        advanced_form.addWidget(hint)
+        form.addWidget(advanced_toggle)
+        form.addWidget(advanced_body)
         self._text_animation_section(form, clip)
         outer.addWidget(body)
         self.properties_layout.addWidget(card)
@@ -1941,7 +2083,40 @@ class EffectsPanel(QWidget):
         self.engine.session.reset_transform([clip.id])
         self.refresh_properties()
 
-    def _channel_row(self, form, clip, channel):
+    def _text_shadow_direction(self, form, clip, frame):
+        """Distance + angle controls that write the two keyframeable shadow offsets."""
+        dx = float(TXT.value_at(clip, "shadow_offset_x", frame) or 0.0)
+        dy = float(TXT.value_at(clip, "shadow_offset_y", frame) or 0.0)
+        distance = ScrubField("Distance", math.hypot(dx, dy), 0.0, 500.0, default=0.0,
+                              step=0.5, unit="px", decimals=1, label_width=LABEL_W,
+                              tooltip="Shadow distance from the glyphs")
+        angle = ScrubField("Angle", math.degrees(math.atan2(dy, dx)), -180.0, 180.0,
+                           default=0.0, step=1.0, unit="\u00b0", decimals=0,
+                           label_width=LABEL_W, tooltip="Shadow direction in degrees")
+
+        def apply(_value, axis=None):
+            radius = float(distance.value())
+            radians = math.radians(float(angle.value()))
+            values = {"shadow_offset_x": radius * math.cos(radians),
+                      "shadow_offset_y": radius * math.sin(radians)}
+            target = self.engine.timeline.find_clip(clip.id)
+            if target is None:
+                return
+            auto = bool(self.engine.session.auto_keyframe.get())
+
+            def action():
+                for name, value in values.items():
+                    TXT.set_value(target, name, value, frame, auto)
+            self.engine.session.stack.run("Shadow direction", action)
+            self.engine.session.changed.emit()
+            QTimer.singleShot(0, self.refresh_properties)
+
+        distance.committed.connect(lambda value: apply(value, "distance"))
+        angle.committed.connect(lambda value: apply(value, "angle"))
+        form.addWidget(distance)
+        form.addWidget(angle)
+
+    def _channel_row(self, form, clip, channel, icon_name=None):
         """One numeric channel row: field, animation stopwatch and keyframe diamonds."""
         meta = CH.spec(clip, channel, self.engine.runtime_effects)
         frame = max(0, int(self.engine.session.playhead) - int(clip.timeline_start))
@@ -1966,7 +2141,19 @@ class EffectsPanel(QWidget):
         field.add_trailing(cluster)
         self._rows.append({"kind": "channel", "clip_id": clip.id, "channel": channel,
                            "field": field, "stopwatch": stopwatch, "cluster": cluster})
-        form.addWidget(field)
+        if icon_name:
+            holder = QWidget()
+            row = QHBoxLayout(holder)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(tokens.SP1)
+            badge = QLabel()
+            badge.setPixmap(icon(icon_name).pixmap(tokens.ICON_SM, tokens.ICON_SM))
+            badge.setToolTip(meta["label"])
+            row.addWidget(badge)
+            row.addWidget(field, 1)
+            form.addWidget(holder)
+        else:
+            form.addWidget(field)
 
     @staticmethod
     def _channel_cluster(clip, channel):

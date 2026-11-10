@@ -472,12 +472,19 @@ The panel lives in the **Graph Editor** dock (`G`) and edits the selected clip's
 ## 7. Checking it
 
 ```powershell
-python -m pytest tests --ignore=tests/test_project_app.py --ignore=tests/test_project_large.py `
-  --ignore=tests/test_project_panel.py --ignore=tests/test_start_window.py
+python -m pytest tests -q
+python -m pytest tests -q -m unit
+python -m pytest tests -q -m renderer
+python -m pytest tests -q -m gui
+python -m pytest tests -q -m model
+python -m pytest tests -q -m packaged
 ```
 
-Four scripts build a real window and call `os._exit`, so they are excluded from collection
-and run directly (`python tests\test_project_app.py` and friends). The new effects and compositing are pinned by
+Four scripts build a real window and call `os._exit`. They are listed in
+`tests/conftest.py` as collection ignores and run directly (`python
+tests\test_project_app.py` and friends), never during automated collection. GUI tests share
+one non-quitting `QApplication`; test-created widgets must be deleted so a later native Qt
+construction cannot touch a stale wrapper. The new effects and compositing are pinned by
 `tests/test_effect_parameters.py` (every parameter at its extremes, animated, defaults),
 `tests/test_effects_new.py` (determinism, seeds, temporal holds, quality scaling, LUT
 files), `tests/test_compositing.py` (blend modes against known pixels, alpha, adjustment

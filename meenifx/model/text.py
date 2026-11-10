@@ -29,9 +29,16 @@ DEFAULTS = {
     "bold": False,
     "italic": False,
     "underline": False,
+    "strikethrough": False,
     "color": "#FFFFFF",
     "stroke_color": "#000000",
     "stroke_width": 0.0,
+    # Outline opacity is independent of the fill and of the clip's own opacity.
+    "stroke_opacity": 100.0,
+    # Two-stop linear gradient across the whole text block (0 = solid fill).
+    "gradient": False,
+    "gradient_color": "#7DD3FC",
+    "gradient_angle": 90.0,
     "shadow_color": "#000000",
     "shadow_opacity": 0.55,
     "shadow_offset_x": 4.0,
@@ -47,23 +54,32 @@ DEFAULTS = {
     "bg_color": "#000000",
     "bg_opacity": 0.0,
     "bg_padding": 24.0,
+    "bg_radius": 0.0,
     "align": "center",
+    # Block anchor: where the whole paragraph sits vertically on the frame.
+    "anchor": "center",
     "line_spacing": 1.15,
     "letter_spacing": 0.0,
+    "word_spacing": 0.0,
+    # Uppercase/lowercase conversion happens before layout, so metrics follow the text.
+    "case": "none",
     "offset_x": 0.0,
     "offset_y": 0.0,
     "wrap": 0.0,
 }
 
 # Parameters that can carry keyframes (channel ids are "text.<name>").
-NUMERIC = ("size", "stroke_width", "shadow_offset_x", "shadow_offset_y", "shadow_blur",
-           "shadow_opacity", "fill_opacity", "blur", "reveal", "bg_opacity", "bg_padding",
-           "line_spacing", "letter_spacing", "offset_x", "offset_y", "wrap")
+NUMERIC = ("size", "stroke_width", "stroke_opacity", "shadow_offset_x", "shadow_offset_y",
+           "shadow_blur", "shadow_opacity", "fill_opacity", "blur", "reveal",
+           "bg_opacity", "bg_padding", "bg_radius", "line_spacing", "letter_spacing",
+           "word_spacing", "gradient_angle", "offset_x", "offset_y", "wrap")
 
 # label, unit, minimum, maximum, step, decimals, slider span
 SPECS = {
     "size": ("Size", "px", 4.0, 400.0, 0.5, 1, 200.0),
     "stroke_width": ("Stroke", "px", 0.0, 40.0, 0.1, 1, 20.0),
+    "stroke_opacity": ("Outline opacity", "%", 0.0, 100.0, 1.0, 0, 100.0),
+    "gradient_angle": ("Gradient angle", "\u00b0", -180.0, 180.0, 1.0, 0, 180.0),
     "shadow_offset_x": ("Shadow X", "px", -200.0, 200.0, 0.5, 1, 100.0),
     "shadow_offset_y": ("Shadow Y", "px", -200.0, 200.0, 0.5, 1, 100.0),
     # Every opacity is labelled with what it affects: this one never changes the text.
@@ -74,20 +90,24 @@ SPECS = {
     "reveal": ("Letters shown", "", -1.0, 4000.0, 1.0, 0, 200.0),
     "bg_opacity": ("Background opacity", "%", 0.0, 100.0, 1.0, 0, 100.0),
     "bg_padding": ("Padding", "px", 0.0, 200.0, 1.0, 0, 60.0),
+    "bg_radius": ("Corner radius", "px", 0.0, 200.0, 1.0, 0, 60.0),
     "line_spacing": ("Line gap", "x", 0.5, 3.0, 0.01, 2, 1.0),
     "letter_spacing": ("Tracking", "px", -40.0, 80.0, 0.5, 1, 40.0),
+    "word_spacing": ("Word spacing", "px", -40.0, 200.0, 0.5, 1, 80.0),
     "offset_x": ("Block X", "px", -2000.0, 2000.0, 1.0, 1, 800.0),
     "offset_y": ("Block Y", "px", -2000.0, 2000.0, 1.0, 1, 800.0),
     "wrap": ("Wrap", "px", 0.0, 4000.0, 4.0, 0, 1000.0),
 }
 
-# Families the renderer has a font file for; the inspector lists exactly these so the
-# preview can never show a font the export cannot draw.
+# Common fallback families, kept for old projects and for code paths without Qt. The
+# inspector and renderer use the installed-font registry, not this list.
 FAMILIES = ("Segoe UI", "Arial", "Calibri", "Verdana", "Tahoma", "Trebuchet MS", "Georgia",
             "Times New Roman", "Cambria", "Courier New", "Consolas", "Impact", "Comic Sans MS",
             "DejaVu Sans", "DejaVu Serif", "Liberation Sans")
 
-ALIGNMENTS = ("left", "center", "right")
+ALIGNMENTS = ("left", "center", "right", "justify")
+ANCHORS = ("top", "center", "bottom")
+CASES = ("none", "upper", "lower", "title")
 
 
 def blank():
@@ -319,11 +339,16 @@ def resolve(clip, frame):
         "bold": bool(data.get("bold")),
         "italic": bool(data.get("italic")),
         "underline": bool(data.get("underline")),
+        "strikethrough": bool(data.get("strikethrough")),
         "color": str(data.get("color") or "#FFFFFF"),
         "stroke_color": str(data.get("stroke_color") or "#000000"),
         "shadow_color": str(data.get("shadow_color") or "#000000"),
         "bg_color": str(data.get("bg_color") or "#000000"),
+        "gradient": bool(data.get("gradient")),
+        "gradient_color": str(data.get("gradient_color") or "#7DD3FC"),
         "align": str(data.get("align") or "center"),
+        "anchor": str(data.get("anchor") or "center"),
+        "case": str(data.get("case") or "none"),
     }
     for name in NUMERIC:
         spec[name] = float(value_at(clip, name, frame) or 0.0)
@@ -333,8 +358,13 @@ def resolve(clip, frame):
     spec["blur"] = max(0.0, spec["blur"])
     spec["reveal"] = int(round(spec["reveal"]))
     spec["line_spacing"] = max(0.5, min(3.0, spec["line_spacing"]))
+    spec["stroke_opacity"] = max(0.0, min(100.0, spec["stroke_opacity"])) / 100.0
     if spec["align"] not in ALIGNMENTS:
         spec["align"] = "center"
+    if spec["anchor"] not in ANCHORS:
+        spec["anchor"] = "center"
+    if spec["case"] not in CASES:
+        spec["case"] = "none"
     return spec
 
 

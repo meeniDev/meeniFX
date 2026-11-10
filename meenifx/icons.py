@@ -196,6 +196,91 @@ def _draw(name, p, color):
     elif name == "text":
         p.drawLine(QPointF(3.5, 4.0), QPointF(12.5, 4.0))
         p.drawLine(QPointF(8.0, 4.0), QPointF(8.0, 13.0))
+    elif name == "bold":
+        # A heavy "B": one vertical stem and two closed bowls.
+        p.setPen(QPen(color, 2.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        p.drawLine(QPointF(4.8, 3.2), QPointF(4.8, 12.8))
+        path = QPainterPath(QPointF(4.8, 3.2))
+        path.lineTo(8.6, 3.2); path.cubicTo(12.4, 3.2, 12.4, 7.8, 8.6, 7.8)
+        path.lineTo(4.8, 7.8)
+        p.drawPath(path)
+        path = QPainterPath(QPointF(4.8, 7.8))
+        path.lineTo(9.0, 7.8); path.cubicTo(13.2, 7.8, 13.2, 12.8, 9.0, 12.8)
+        path.lineTo(4.8, 12.8)
+        p.drawPath(path)
+    elif name == "italic":
+        p.drawLine(QPointF(7.0, 3.2), QPointF(13.2, 3.2))
+        p.drawLine(QPointF(2.8, 12.8), QPointF(9.0, 12.8))
+        p.drawLine(QPointF(10.0, 3.2), QPointF(6.0, 12.8))
+    elif name == "underline":
+        p.drawLine(QPointF(3.4, 3.0), QPointF(3.4, 8.4))
+        p.drawLine(QPointF(12.6, 3.0), QPointF(12.6, 8.4))
+        path = QPainterPath(QPointF(3.4, 8.4))
+        path.cubicTo(3.4, 12.8, 12.6, 12.8, 12.6, 8.4)
+        p.drawPath(path)
+        p.setPen(QPen(color, 1.8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        p.drawLine(QPointF(2.6, 14.2), QPointF(13.4, 14.2))
+    elif name == "strikethrough":
+        p.drawLine(QPointF(4.0, 2.6), QPointF(12.0, 2.6))
+        p.drawLine(QPointF(8.0, 2.6), QPointF(8.0, 9.6))
+        path = QPainterPath(QPointF(4.0, 9.6))
+        path.cubicTo(4.0, 13.0, 12.0, 13.0, 12.0, 9.6)
+        p.drawPath(path)
+        p.setPen(QPen(color, 1.8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        p.drawLine(QPointF(2.2, 8.0), QPointF(13.8, 8.0))
+    elif name in ("align_left", "align_center", "align_right", "align_justify"):
+        widths = {
+            "align_left": (11.4, 7.2, 11.4, 6.0),
+            "align_center": (8.0, 11.4, 6.4, 9.2),
+            "align_right": (11.4, 7.2, 11.4, 6.0),
+            "align_justify": (11.4, 11.4, 11.4, 11.4),
+        }[name]
+        for row, span in enumerate(widths):
+            y = 3.8 + row * 2.8
+            if name == "align_left":
+                x0 = 2.3
+            elif name == "align_center":
+                x0 = 8.0 - span / 2.0
+            elif name == "align_right":
+                x0 = 13.7 - span
+            else:
+                x0 = 2.3
+            if name == "align_justify" and row >= 2:
+                # The last line of a justified paragraph is short and left-aligned.
+                span = 7.2 if row == 2 else 5.0
+            p.drawLine(QPointF(x0, y), QPointF(x0 + span, y))
+    elif name == "text_color":
+        # A letter A over a filled swatch bar: the usual fill-colour glyph.
+        p.drawPolyline(_pts(3.2, 10.8, 8.0, 2.4, 12.8, 10.8))
+        p.drawLine(QPointF(5.0, 7.8), QPointF(11.0, 7.8))
+        p.setBrush(fill); p.setPen(Qt.PenStyle.NoPen)
+        p.drawRoundedRect(QRectF(2.2, 12.4, 11.6, 2.4), 0.8, 0.8)
+    elif name == "text_outline":
+        # A hollow letter A inside a dashed frame: outline only.
+        p.setPen(QPen(color, 1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
+                      Qt.PenJoinStyle.RoundJoin))
+        p.drawPolyline(_pts(4.0, 10.2, 8.0, 3.0, 12.0, 10.2))
+        p.drawLine(QPointF(5.4, 7.8), QPointF(10.6, 7.8))
+        p.setPen(QPen(color, 1.1, Qt.PenStyle.DashLine))
+        p.drawRoundedRect(QRectF(1.6, 1.6, 12.8, 12.8), 1.2, 1.2)
+    elif name == "text_shadow":
+        # The same letter twice, offset, with the back copy tinted: drop shadow.
+        p.setPen(QPen(color, 1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
+                      Qt.PenJoinStyle.RoundJoin))
+        p.drawPolyline(_pts(2.8, 10.0, 6.6, 2.8, 10.4, 10.0))
+        p.setPen(QPen(QColor(color.red(), color.green(), color.blue(), 110), 1.5))
+        p.drawPolyline(_pts(5.6, 13.2, 9.4, 6.0, 13.2, 13.2))
+    elif name == "letter_spacing":
+        p.drawLine(QPointF(4.0, 4.0), QPointF(4.0, 12.0))
+        p.drawLine(QPointF(12.0, 4.0), QPointF(12.0, 12.0))
+        p.setBrush(fill); p.setPen(Qt.PenStyle.NoPen)
+        p.drawPolygon(_pts(5.6, 6.6, 7.8, 8.0, 5.6, 9.4))
+        p.drawPolygon(_pts(10.4, 6.6, 8.2, 8.0, 10.4, 9.4))
+    elif name == "line_spacing":
+        for y in (4.2, 7.6, 11.0):
+            p.drawLine(QPointF(2.4, y), QPointF(13.6, y))
+        p.setPen(QPen(color, 1.4, Qt.PenStyle.DashLine))
+        p.drawLine(QPointF(15.0, 2.6), QPointF(15.0, 13.4))
     elif name == "captions":
         # A subtitle plate: two short lines inside a rounded frame ("CC").
         p.drawRoundedRect(QRectF(1.4, 3.4, 13.2, 9.2), 2.0, 2.0)

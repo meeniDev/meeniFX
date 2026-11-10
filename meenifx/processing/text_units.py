@@ -17,12 +17,17 @@ import math
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
-from .text import _colour, _line_width, _wrap, font_for
+from .text import (_colour, _cluster_positions, _gradient_image, _layout as _text_layout,
+                   _line_origin, graphemes)
 
 # A glyph bitmap depends on the font, the colours and the stroke/shadow, never on the
 # frame, so a 60-character title costs 60 bitmaps once and then 60 warps per frame.
 _STAMP_CACHE = {}
 _STAMP_LIMIT = 4096
+
+
+def clear_cache():
+    _STAMP_CACHE.clear()
 
 
 class GlyphPose:
@@ -63,69 +68,40 @@ class GlyphPose:
 def layout(spec, width, height, scale=1.0):
     """Glyph boxes, unit boxes and block placement, in device pixels.
 
-    Returns None when there is nothing to draw. The maths mirrors
-    :func:`meenifx.processing.text.render` exactly (same wrap, tracking, alignment and
-    offsets), so a unit's centre is where the static renderer puts those glyphs.
+    Returns None when there is nothing to draw. The maths uses the static renderer's own
+    :func:`meenifx.processing.text._layout`, so a unit's centre is exactly where the
+    static renderer puts those glyphs - including tracking, word spacing, justification,
+    case conversion and block anchors.
     """
     width, height = max(1, int(width)), max(1, int(height))
-    scale = max(0.05, float(scale))
-    probe = Image.new("RGBA", (1, 1), (0, 0, 0, 0))
-    scratch = ImageDraw.Draw(probe)
-    words_text = str(spec.get("text", ""))
-    reveal = int(spec.get("reveal", -1))
-    if reveal >= 0:
-        words_text = words_text[:reveal]
-    if not words_text.strip():
+    built = _text_layout(spec, width, height, scale)
+    if built is None:
         return None
-    size = max(2.0, float(spec.get("size", 96.0)) * scale)
-    font = font_for(spec.get("font"), spec.get("bold"), spec.get("italic"), size)
-    tracking = float(spec.get("letter_spacing", 0.0)) * scale
-    stroke = max(0.0, float(spec.get("stroke_width", 0.0)) * scale)
-    lines = _wrap(scratch, words_text, font, tracking, stroke,
-                  float(spec.get("wrap", 0.0)) * scale)
-    if not lines:
-        return None
-    ascent, descent = font.getmetrics()
-    line_height = float(ascent + descent)
-    gap = line_height * (max(0.5, float(spec.get("line_spacing", 1.15))) - 1.0)
-    widths = [_line_width(scratch, line, font, tracking, stroke) for line in lines]
-    block_w = max(widths) if widths else 0.0
-    block_h = line_height * len(lines) + gap * (len(lines) - 1)
-    align = spec.get("align", "center")
-    offset_x = float(spec.get("offset_x", 0.0)) * scale
-    offset_y = float(spec.get("offset_y", 0.0)) * scale
-    left = (width - block_w) / 2.0 + offset_x
-    if align == "left":
-        left = offset_x
-    elif align == "right":
-        left = width - block_w + offset_x
-    top = (height - block_h) / 2.0 + offset_y
+    font = built["font"]
+    tracking, word_spacing = built["tracking"], built["word_spacing"]
+    ascent, descent = built["ascent"], built["descent"]
+    line_height, gap = built["line_height"], built["gap"]
+    widths = built["widths"]
+    scratch = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
 
     glyphs, letters, line_units = [], [], []
-    for index, line in enumerate(lines):
-        y = top + index * (line_height + gap)
-        if align == "center":
-            x = left + (block_w - widths[index]) / 2.0
-        elif align == "right":
-            x = left + (block_w - widths[index])
-        else:
-            x = left
-        cursor = x
+    for index, line in enumerate(built["lines"]):
+        x, y, extra = _line_origin(built, index)
         word_index = -1
         inside_word = False
-        for char in line:
-            advance = scratch.textlength(char, font=font)
-            if char.strip():
+        for cluster, dx, advance in _cluster_positions(scratch, line, font, tracking,
+                                                        word_spacing, extra):
+            if cluster.strip():
                 if not inside_word:
                     word_index += 1
                     inside_word = True
                 glyphs.append({"line": index, "word": word_index, "char": len(letters),
-                               "x": cursor, "y": y, "w": advance, "text": char})
-                letters.append((cursor + advance / 2.0, y + line_height / 2.0, char))
+                               "x": x + dx, "y": y, "w": advance, "text": cluster})
+                letters.append((x + dx + advance / 2.0, y + line_height / 2.0, cluster))
             else:
                 inside_word = False
-            cursor += advance + tracking
-        line_units.append((x + widths[index] / 2.0, y + line_height / 2.0, line))
+        drawn_width = widths[index] + extra * max(0, line.count(" "))
+        line_units.append((x + drawn_width / 2.0, y + line_height / 2.0, line))
 
     word_boxes = {}
     for glyph in glyphs:
@@ -142,11 +118,13 @@ def layout(spec, width, height, scale=1.0):
         x0, y, x1, text_value = word_boxes[key]
         words.append(((x0 + x1) / 2.0, y + line_height / 2.0, text_value))
 
-    return {"font": font, "lines": lines, "widths": widths, "glyphs": glyphs,
+    return {"font": font, "lines": built["lines"], "widths": widths, "glyphs": glyphs,
             "letters": letters, "words": words, "lines_units": line_units,
-            "line_height": line_height, "gap": gap, "left": left, "top": top,
-            "align": align, "tracking": tracking, "stroke": stroke,
-            "ascent": ascent, "descent": descent, "block_w": block_w, "size": size}
+            "line_height": line_height, "gap": gap, "left": built["left"],
+            "top": built["top"], "align": built["align"], "tracking": tracking,
+            "word_spacing": word_spacing, "stroke": built["stroke"],
+            "ascent": ascent, "descent": descent, "block_w": built["block_w"],
+            "size": built["size"] if "size" in built else spec.get("size", 96.0)}
 
 
 def layout_units(spec, width, height, scale=1.0):
@@ -157,20 +135,25 @@ def layout_units(spec, width, height, scale=1.0):
     return {"letter": built["letters"], "word": built["words"], "line": built["lines_units"]}
 
 
-def _stamp_key(spec, glyph_text, scale):
-    return (str(spec.get("font")), round(float(spec.get("size", 96.0)) * scale, 2),
-            bool(spec.get("bold")), bool(spec.get("italic")), glyph_text,
-            str(spec.get("color")), str(spec.get("stroke_color")),
-            round(float(spec.get("stroke_width", 0.0)) * scale, 2),
-            str(spec.get("shadow_color")), round(float(spec.get("shadow_opacity", 0.0)), 3),
-            round(float(spec.get("shadow_offset_x", 0.0)) * scale, 2),
-            round(float(spec.get("shadow_offset_y", 0.0)) * scale, 2),
-            round(float(spec.get("shadow_blur", 0.0)) * scale, 2),
-            round(float(spec.get("fill_opacity", 1.0)), 3),
-            bool(spec.get("underline")))
+def _stamp_key(spec, glyph_text, scale, origin, gradient):
+    entry = (str(spec.get("font")), round(float(spec.get("size", 96.0)) * scale, 2),
+             bool(spec.get("bold")), bool(spec.get("italic")), glyph_text,
+             str(spec.get("color")), str(spec.get("stroke_color")),
+             round(float(spec.get("stroke_width", 0.0)) * scale, 2),
+             str(spec.get("shadow_color")), round(float(spec.get("shadow_opacity", 0.0)), 3),
+             round(float(spec.get("shadow_offset_x", 0.0)) * scale, 2),
+             round(float(spec.get("shadow_offset_y", 0.0)) * scale, 2),
+             round(float(spec.get("shadow_blur", 0.0)) * scale, 2),
+             round(float(spec.get("fill_opacity", 1.0)), 3),
+             round(float(spec.get("stroke_opacity", 1.0)), 3),
+             bool(spec.get("underline")), bool(spec.get("strikethrough")))
+    if gradient:
+        entry += (str(spec.get("gradient_color")), float(spec.get("gradient_angle", 90.0)),
+                  round(origin[0], 1), round(origin[1], 1))
+    return entry
 
 
-def stamp(spec, glyph_text, scale):
+def stamp(spec, glyph_text, scale, origin=None, canvas=None):
     """(BGRA bitmap, ox, oy) of one glyph with its stroke and shadow, cached.
 
     The caller composites into a BGRA layer, so the RGBA bitmap Pillow produces is
@@ -180,17 +163,20 @@ def stamp(spec, glyph_text, scale):
     ox/oy is where the bitmap's top-left corner sits when the glyph is drawn at (0, 0)
     with Pillow's "la" anchor - the same origin the static renderer uses.
     """
-    key = _stamp_key(spec, glyph_text, scale)
+    origin = (0.0, 0.0) if origin is None else (float(origin[0]), float(origin[1]))
+    key = _stamp_key(spec, glyph_text, scale, origin, bool(spec.get("gradient")))
     cached = _STAMP_CACHE.get(key)
     if cached is not None:
         return cached
     size = max(2.0, float(spec.get("size", 96.0)) * scale)
+    from .text import font_for
     font = font_for(spec.get("font"), spec.get("bold"), spec.get("italic"), size)
     stroke = max(0.0, float(spec.get("stroke_width", 0.0)) * scale)
     stroke_px = int(round(stroke))
     fill_alpha = int(round(255 * max(0.0, min(1.0, float(spec.get("fill_opacity", 1.0))))))
+    stroke_alpha = int(round(255 * max(0.0, min(1.0, float(spec.get("stroke_opacity", 1.0))))))
     fill = _colour(spec.get("color"), fill_alpha)
-    stroke_fill = _colour(spec.get("stroke_color"))
+    stroke_fill = _colour(spec.get("stroke_color"), stroke_alpha)
     x0, y0, x1, y1 = font.getbbox(glyph_text, anchor="la", stroke_width=stroke_px)
     shadow_alpha = max(0.0, min(1.0, float(spec.get("shadow_opacity", 0.0))))
     shadow_dx = float(spec.get("shadow_offset_x", 0.0)) * scale
@@ -216,14 +202,35 @@ def stamp(spec, glyph_text, scale):
             shadow = shadow.filter(ImageFilter.GaussianBlur(shadow_blur))
         image = Image.alpha_composite(image, shadow)
     painter = ImageDraw.Draw(image)
-    painter.text((-left, -top), glyph_text, font=font, fill=fill, anchor="la",
-                 stroke_width=stroke_px, stroke_fill=stroke_fill if stroke_px > 0 else None)
+    if spec.get("gradient"):
+        if stroke_px > 0:
+            painter.text((-left, -top), glyph_text, font=font, fill=stroke_fill, anchor="la",
+                         stroke_width=stroke_px, stroke_fill=stroke_fill)
+        mask = Image.new("L", (bitmap_w, bitmap_h), 0)
+        ImageDraw.Draw(mask).text((-left, -top), glyph_text, font=font, fill=255, anchor="la")
+        area = canvas or (max(1, int(origin[0] + bitmap_w)), max(1, int(origin[1] + bitmap_h)))
+        gradient = _gradient_image((origin[0] + left, origin[1] + top,
+                                    origin[0] + left + bitmap_w, origin[1] + top + bitmap_h),
+                                   area, _colour(spec.get("color")),
+                                   _colour(spec.get("gradient_color") or spec.get("color")),
+                                   float(spec.get("gradient_angle", 90.0)), fill_alpha)
+        gradient.putalpha(Image.eval(mask, lambda value: int(value * fill_alpha / 255)))
+        image = Image.alpha_composite(image, gradient)
+    else:
+        painter.text((-left, -top), glyph_text, font=font, fill=fill, anchor="la",
+                     stroke_width=stroke_px, stroke_fill=stroke_fill if stroke_px > 0 else None)
     if spec.get("underline"):
         ascent, descent = font.getmetrics()
         thickness = max(1.0, (ascent + descent) * 0.06)
         underline_y = -top + ascent + descent * 0.35
         painter.rectangle([-left, underline_y, -left + max(1.0, font.getlength(glyph_text)),
                            underline_y + thickness], fill=fill)
+    if spec.get("strikethrough"):
+        ascent, _descent = font.getmetrics()
+        thickness = max(1.0, (ascent + _descent) * 0.055)
+        strike_y = -top + ascent * 0.62
+        painter.rectangle([-left, strike_y, -left + max(1.0, font.getlength(glyph_text)),
+                           strike_y + thickness], fill=fill)
     rgba = np.asarray(image, dtype=np.uint8)
     result = (rgba[:, :, [2, 1, 0, 3]].copy(), left, top)
     if len(_STAMP_CACHE) > _STAMP_LIMIT:
@@ -313,7 +320,7 @@ def render(spec, width, height, scale=1.0, poses=None, crop=None):
     scale = max(0.05, float(scale))
     from .text import _view
     view_x, view_y, canvas_w, canvas_h = _view(width, height, crop)
-    built = layout(spec, width, height, scale)
+    built = _text_layout(spec, width, height, scale)
     if built is None:
         return None
     layer = np.zeros((canvas_h, canvas_w, 4), dtype=np.uint8)
@@ -326,14 +333,22 @@ def render(spec, width, height, scale=1.0, poses=None, crop=None):
                 built["left"] + built["block_w"] + pad - view_x,
                 built["top"] + block_h + pad - view_y]
         plate = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
-        ImageDraw.Draw(plate).rectangle(rect, fill=_colour(spec.get("bg_color"),
-                                                           int(255 * plate_alpha)))
+        radius = max(0.0, float(spec.get("bg_radius", 0.0)) * scale)
+        fill = _colour(spec.get("bg_color"), int(255 * plate_alpha))
+        painter = ImageDraw.Draw(plate)
+        if radius > 0.5:
+            painter.rounded_rectangle(rect, radius=radius, fill=fill)
+        else:
+            painter.rectangle(rect, fill=fill)
         layer = np.asarray(plate, dtype=np.uint8).copy()[:, :, [2, 1, 0, 3]]
+    units = layout(spec, width, height, scale)
+    if units is None:
+        return None
     line_poses = (poses or {}).get("line") or []
     word_poses = (poses or {}).get("word") or []
     letter_poses = (poses or {}).get("letter") or []
     fill_opacity = max(0.0, min(1.0, float(spec.get("fill_opacity", 1.0))))
-    for glyph in built["glyphs"]:
+    for glyph in units["glyphs"]:
         pose = GlyphPose()
         if glyph["line"] < len(line_poses):
             pose.add(line_poses[glyph["line"]])
@@ -344,14 +359,16 @@ def render(spec, width, height, scale=1.0, poses=None, crop=None):
         glyph_text = pose.text if pose.text is not None else glyph["text"]
         if not glyph_text:
             continue
-        bitmap, ox, oy = stamp(spec, glyph_text, scale)
+        bitmap, ox, oy = stamp(spec, glyph_text, scale,
+                               origin=(glyph["x"] + view_x, glyph["y"] + view_y),
+                               canvas=(width, height))
         if pose.is_identity():
             _blend(layer, bitmap, glyph["x"] + ox - view_x,
                    glyph["y"] + oy - view_y, fill_opacity)
             continue
         bitmap = _tint(bitmap, pose.hue, pose.light)
         unit_x = glyph["x"] + glyph["w"] / 2.0
-        unit_y = glyph["y"] + built["line_height"] / 2.0
+        unit_y = glyph["y"] + units["line_height"] / 2.0
         warped, wx, wy = _warp(bitmap, (glyph["x"] + ox, glyph["y"] + oy),
                                (unit_x, unit_y), pose, scale)
         _blend(layer, warped, wx - view_x, wy - view_y, pose.opacity)

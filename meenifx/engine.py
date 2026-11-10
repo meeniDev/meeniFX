@@ -399,7 +399,9 @@ class EditorEngine:
             sub = self._render_composition_frame(comp, comp_frame, scale)
             if sub is None:
                 return None, None
-            return layer_ops.fit_layer(layer_ops.to_bgra(sub), self.project_size(), scale)
+            # A transparent composition arrives BGRA; fit_layer preserves that alpha.
+            # An opaque one arrives BGR and gets the usual full-coverage alpha.
+            return layer_ops.fit_layer(sub, self.project_size(), scale)
         if clip.is_text:
             # Text lives in project space, so its layer is the whole frame: the transform
             # then moves/scales it exactly like a fitted picture.
@@ -545,9 +547,14 @@ class EditorEngine:
             self.source_fps = float(comp.fps)
             self.background_bgr = tuple(comp.background)
             self.session.project_size = (comp.width, comp.height)
-            frame = self.compose_frame(int(frame_no), scale)
+            transparent = bool(getattr(comp, "transparent", False))
+            frame = self.compose_frame(int(frame_no), scale, with_alpha=transparent)
             if frame is None:
-                frame = self.blank_frame()
+                if transparent:
+                    width, height = layer_ops.render_size((comp.width, comp.height), scale)
+                    frame = np.zeros((height, width, 4), np.uint8)
+                else:
+                    frame = self.blank_frame()
             return frame
         finally:
             (self.timeline, self.source_width, self.source_height, self.source_fps,
@@ -566,7 +573,7 @@ class EditorEngine:
                    and entry.get("effect_id") in cls.TEMPORAL_EFFECTS
                    for entry in (getattr(clip, "effects", None) or ()))
 
-    def compose_frame(self, frame_no, scale=1.0):
+    def compose_frame(self, frame_no, scale=1.0, with_alpha=False):
         """Composite the visible video layers into one frame at `frame_no`.
 
         Each clip is built as a transparent layer: the source is fitted to the frame,
@@ -586,26 +593,43 @@ class EditorEngine:
         self.current_fx = top.effects
         self.current_media_path = top.source_path
         self.current_clip_local_frame = frame_no - top.timeline_start
-        canvas, painted = self._compose_stack(stack, frame_no, scale, 0)
+        canvas, painted = self._compose_stack(stack, frame_no, scale, 0,
+                                              alpha=bool(with_alpha))
         if not painted:
             return None
+        if with_alpha:
+            rgba = np.empty((canvas.shape[0], canvas.shape[1], 4), np.uint8)
+            rgba[:, :, :3] = np.clip(canvas[:, :, :3], 0.0, 255.0).astype(np.uint8)
+            rgba[:, :, 3] = np.clip(canvas[:, :, 3] * 255.0, 0.0, 255.0).astype(np.uint8)
+            return rgba
         if canvas.dtype == np.uint8:
             # The one-clip fast path already produced the exact BGR frame; do not copy
             # it through a float buffer on every playback tick.
             return canvas
         return layer_ops.flatten(canvas)
 
-    def _compose_stack(self, stack, frame_no, scale, depth=0):
+    def _compose_stack(self, stack, frame_no, scale, depth=0, alpha=False):
         """Composite `stack` (bottom layer first) and return (float canvas, painted).
 
         Splitting this from `compose_frame` lets an adjustment layer re-render only the
-        layers below it, at an earlier sampled frame, without re-running itself.
+        layers below it, at an earlier sampled frame, without re-running itself. With
+        `alpha`, the canvas is float BGRA with straight colour and 0..1 coverage; without
+        it the historical float BGR canvas is unchanged.
         """
+        from .processing import blend as blend_ops
+
         top = stack[-1][0]
         width, height = layer_ops.render_size(self.project_size(), scale)
-        canvas = np.empty((height, width, 3), dtype=np.float32)
-        canvas[:] = self.background_bgr
+        canvas = np.empty((height, width, 4 if alpha else 3), dtype=np.float32)
+        canvas[:, :, :3] = self.background_bgr
+        if alpha:
+            canvas[:, :, 3] = 0.0
         painted = False
+
+        def composite_layer(layer, opacity=1.0, mode="normal"):
+            if alpha:
+                return blend_ops.composite_rgba(canvas, layer, opacity, mode)
+            return layer_ops.composite(canvas, layer, opacity, mode)
         group_key = None
         group = []
 
@@ -621,8 +645,8 @@ class EditorEngine:
                 group_key = None
                 return
             if len(group) == 1:
-                layer, alpha, mode = group[0]
-                layer_ops.composite(canvas, layer, alpha, mode)
+                layer, coverage, mode = group[0]
+                composite_layer(layer, coverage, mode)
                 painted = True
             else:
                 total = np.zeros((height, width), dtype=np.float32)
@@ -637,7 +661,7 @@ class EditorEngine:
                 if covered.any():
                     rgb = colour / np.maximum(total, 1e-6)[:, :, None]
                     combined = np.dstack([rgb, np.clip(total, 0.0, 1.0) * 255.0]).astype(np.uint8)
-                    layer_ops.composite(canvas, combined, 1.0, mode)
+                    composite_layer(combined, 1.0, mode)
                     painted = True
             group.clear()
             group_key = None
@@ -652,10 +676,12 @@ class EditorEngine:
                     # below it, not just its own parameters: rebuild those layers at
                     # the sampled frame before grading them.
                     sampled, _painted = self._compose_stack(
-                        stack[:index], int(clip.timeline_start + local), scale, depth + 1)
+                        stack[:index], int(clip.timeline_start + local), scale, depth + 1,
+                        alpha=alpha)
                     canvas = (sampled if sampled.dtype == np.float32
                               else sampled.astype(np.float32))
-                canvas = self.compose_adjustment(canvas, clip, frame_no, local, scale)
+                canvas = self.compose_adjustment(canvas, clip, frame_no, local, scale,
+                                                 alpha=alpha)
                 painted = True
                 continue
             # The preset layer is evaluated before the picture is built: a per-unit text
@@ -718,14 +744,14 @@ class EditorEngine:
             opacity *= weight
             if opacity <= 0.001:
                 continue
-            if (key is None and clip is top and len(stack) == 1 and opacity >= 0.999
-                    and pose.is_identity() and state.is_identity()
+            if (not alpha and key is None and clip is top and len(stack) == 1
+                    and opacity >= 0.999 and pose.is_identity() and state.is_identity()
                     and layer[:, :, 3].min() == 255 and clip.blend == "normal"
                     and not getattr(clip, "adjustment", False)):
                 return np.ascontiguousarray(layer[:, :, :3]), True
             if key is None:
                 flush_group()
-                layer_ops.composite(canvas, layer, opacity, getattr(clip, "blend", "normal"))
+                composite_layer(layer, opacity, getattr(clip, "blend", "normal"))
                 painted = True
             else:
                 if key != group_key:
@@ -735,23 +761,32 @@ class EditorEngine:
         flush_group()
         return canvas, painted
 
-    def compose_adjustment(self, canvas, clip, frame_no, local, scale):
+    def compose_adjustment(self, canvas, clip, frame_no, local, scale, alpha=False):
         """Run an adjustment layer's effects over everything composited below it.
 
-        The canvas so far (opaque float BGR) becomes the layer, so every effect sees a
-        real picture - a warp, a glow or a colour grade works exactly as it does on a
-        clip. Opacity, fades and the clip's blend mode then mix the graded result back,
-        which is what makes adjustment layers trim, fade and keyframe like any clip.
+        The canvas so far becomes the layer, so every effect sees a real picture - a
+        warp, a glow or a colour grade works exactly as it does on a clip. Opacity, fades
+        and the clip's blend mode then mix the graded result back, which is what makes
+        adjustment layers trim, fade and keyframe like any clip. On an alpha canvas the
+        existing coverage is passed through the grade instead of becoming opaque.
         """
+        from .processing import blend as blend_ops
+
         height, width = canvas.shape[:2]
         layer = np.empty((height, width, 4), dtype=np.uint8)
-        layer[:, :, :3] = np.clip(canvas, 0.0, 255.0).astype(np.uint8)
-        layer[:, :, 3] = 255
+        layer[:, :, :3] = np.clip(canvas[:, :, :3], 0.0, 255.0).astype(np.uint8)
+        if alpha:
+            layer[:, :, 3] = np.clip(canvas[:, :, 3] * 255.0, 0.0, 255.0).astype(np.uint8)
+        else:
+            layer[:, :, 3] = 255
         layer = self.apply_effects_layer(layer, clip.effects, local, scale, "video",
                                          clip=clip, rect=(0.0, 0.0, float(width), float(height)))
         opacity = transforms.opacity_at(clip, local) * clip.fade_gain_at(frame_no)
         if opacity <= 0.001:
             return canvas
+        if alpha:
+            return blend_ops.composite_rgba(canvas, layer, opacity,
+                                            getattr(clip, "blend", "normal"))
         return layer_ops.composite(canvas, layer, opacity, getattr(clip, "blend", "normal"))
 
     def held_frame(self, clip, local):

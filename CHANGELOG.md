@@ -3,7 +3,45 @@
 All notable changes to meeniFX Studios. The current public build is an **Alpha**: it is
 usable and tested, but unfinished, and some features are still experimental.
 
-## Unreleased
+## 0.1.0-alpha.9 - 10 November 2026
+
+### Added
+
+- **Text is now a complete typography system.** Every installed Windows TrueType/OpenType
+  family is discovered live, with a searchable picker, per-family samples, Favorites,
+  Recently Used and Refresh Fonts. A project whose font is missing names it explicitly and
+  offers a replacement instead of silently changing the look; family and face metadata is
+  saved so reopening a project keeps the same type.
+- **Text formatting controls** for bold, italic, underline, strikethrough, left/centre/
+  right/justify alignment, upper/lower/title case, block anchor, letter/word/line spacing,
+  gradient fill, outline opacity, shadow distance and angle, and rounded background plates.
+  Advanced anchor and background options stay collapsed by default, and preview and export
+  share the same resolution-independent layout.
+- **Text > Split Text** (also on a clip's right-click menu) splits characters, words or
+  lines while preserving the rendered positions, including kerning, spacing, alignment and
+  transforms. It offers Replace Original, Keep Original Hidden and Duplicate and Split,
+  optional stagger presets, grapheme-safe characters, and a single undo step.
+
+### Fixed
+
+- The text inspector's formatting controls no longer show blank buttons: they use the same
+  vector icon set as the rest of the editor, with hover, checked and tooltip states.
+- Changing a text clip's font now refreshes its installed/missing warning immediately.
+- Split Text no longer leaves test-only top-level panels behind, so the combined Qt suite
+  exits cleanly instead of crashing with status 127 during teardown.
+
+### Fixed before this build
+
+- **Pre-compositions preserve alpha.** A Smart Key or Roto Brush cutout, shape, text or
+  transparent image inside a newly created pre-composition now composites over tracks below
+  the nested clip on the parent timeline. Composition Settings exposes an explicit
+  **Transparent background** option; legacy projects without it keep their opaque look.
+- **The combined Qt test run no longer crashes with exit 127.** The test application no
+  longer quits when its last window closes, and an `EffectsPanel` left alive by two tests is
+  now deleted before the next MainWindow is constructed.
+- **Alpha 4's preview crash is covered by a regression test.** `content_corners_rect` exists
+  in the transform module, so selecting a text or shape layer no longer calls a missing
+  helper from the preview's transform handles.
 
 ### Changed
 
@@ -14,6 +52,16 @@ usable and tested, but unfinished, and some features are still experimental.
   Subject Auto/Choose, Quality, Edge Smoothness, Feather, Expand/Shrink and
   Composite/Isolated/Matte previews are in the effect card. Chroma Key remains the separate
   screen-colour key.
+
+### Testing
+
+- Added text coverage for installed-font discovery and Angelic War, non-blank formatting
+  icons, gradient/strikethrough/case/anchor/justify rendering, grapheme clusters,
+  left-aligned word/line splits, hidden and duplicated originals, optional stagger, one-step
+  undo, font-picker filtering, missing-font warnings and save/reopen of the new metadata.
+- Added Unit, Renderer, GUI, Model and Packaged pytest markers. Standalone app-driving
+  scripts are excluded from collection; model weights remain outside Git and are checked
+  by the opt-in model tests.
 
 ## 0.1.0-alpha.8 - 9 November 2026
 

@@ -23,7 +23,9 @@ from meenifx.ui.main_window import MainWindow
 
 @pytest.fixture(scope="module")
 def qapp():
-    return QApplication.instance() or QApplication([])
+    app = QApplication.instance() or QApplication([])
+    app.setQuitOnLastWindowClosed(False)
+    return app
 
 
 def pump(app, seconds=0.2):

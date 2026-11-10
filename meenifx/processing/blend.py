@@ -125,6 +125,45 @@ def composite(canvas, layer, opacity=1.0, mode="normal"):
     return canvas
 
 
+def composite_rgba(canvas, layer, opacity=1.0, mode="normal"):
+    """Alpha-composite a layer onto a float32 BGRA canvas whose alpha is 0..1.
+
+    The normal compositor above returns only BGR, which is right for the main timeline
+    because the project background is opaque. A transparent pre-composition needs the
+    fourth channel to survive, so this path accumulates source-over alpha and keeps the
+    colour straight (not premultiplied). The W3C blend term is used only where the
+    backdrop actually has coverage, so a blend cannot paint a dark edge into empty alpha.
+    """
+    if layer.shape[:2] != canvas.shape[:2]:
+        raise ValueError("blend.composite_rgba needs a layer the size of the canvas")
+    if canvas.ndim != 3 or canvas.shape[2] != 4:
+        raise ValueError("blend.composite_rgba needs a BGRA canvas")
+    if opacity <= 0.0:
+        return canvas
+    src_rgb = layer[:, :, :3].astype(np.float32)
+    src_a = layer[:, :, 3].astype(np.float32)
+    if layer.dtype == np.uint8:
+        src_a /= 255.0
+    src_a *= float(opacity)
+    if not np.any(src_a):
+        return canvas
+    dst_rgb = canvas[:, :, :3]
+    dst_a = canvas[:, :, 3]
+    out_a = src_a + dst_a * (1.0 - src_a)
+    if normalise_mode(mode) == "normal":
+        source_colour = src_rgb
+    else:
+        blended = np.clip(blend_rgb(dst_rgb, src_rgb, mode), 0.0, 255.0)
+        source_colour = (src_rgb * (1.0 - dst_a)[:, :, None]
+                         + blended * dst_a[:, :, None])
+    colour = (source_colour * src_a[:, :, None]
+              + dst_rgb * (dst_a * (1.0 - src_a))[:, :, None])
+    colour /= np.maximum(out_a, 1e-6)[:, :, None]
+    canvas[:, :, :3] = np.where(out_a[:, :, None] > 1e-6, colour, 0.0)
+    canvas[:, :, 3] = out_a
+    return canvas
+
+
 def mix_layers(original, result, amount):
     """Linear blend of two BGRA layers (the effect "Mix" control).
 

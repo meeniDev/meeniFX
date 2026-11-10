@@ -77,6 +77,10 @@ cost on the first analysis.
 
 Fast motion, occlusion, motion blur, crowded scenes and subjects that leave and re-enter
 the frame can still lose the matte and need a Choose Subject or Reanalyze pass. Hair, fur,
-thin straps and semi-transparent edges are approximate. Pre-compositions render their own
-background, so a cutout inside a pre-composition reveals clips inside that composition, not
-tracks below the nested clip on the parent timeline.
+thin straps and semi-transparent edges are approximate.
+
+A composition made with **Pre-compose** defaults to **Transparent background**, so a Smart
+Key cutout inside it composites over tracks below the nested clip on the parent timeline.
+The setting is per composition: turn it off in **Composition Settings** to restore the
+legacy opaque background. Existing projects without the setting keep their old opaque
+appearance.

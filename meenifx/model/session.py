@@ -428,7 +428,7 @@ class TimelineSession:
             return "This project has no composition library"
         return ""
 
-    def precompose(self, name, ids=None):
+    def precompose(self, name, ids=None, transparent=True):
         """Replace the selected clips with one editable nested composition clip."""
         problem = self.precompose_problem(ids)
         if problem:
@@ -449,7 +449,7 @@ class TimelineSession:
         def action():
             comp = self.compositions.precompose(
                 self.timeline, [clip.id for clip in clips], name, start, end,
-                width, height, background)
+                width, height, background, transparent=bool(transparent))
             holder["comp"] = comp
             self.timeline.delete_clips([clip.id for clip in clips])
             nested = self.timeline.new_clip(
@@ -539,7 +539,7 @@ class TimelineSession:
             return False
         allowed = {key: value for key, value in changes.items()
                    if key in ("name", "width", "height", "fps", "background",
-                              "declared_duration") and value is not None}
+                              "declared_duration", "transparent") and value is not None}
         if not allowed:
             return False
         name = str(allowed.get("name", comp.name) or "").strip() or comp.name
@@ -557,6 +557,8 @@ class TimelineSession:
                 comp.timeline.fps = comp.fps
             if "background" in allowed:
                 comp.background = tuple(int(part) for part in allowed["background"])[:3]
+            if "transparent" in allowed:
+                comp.transparent = bool(allowed["transparent"])
             if "declared_duration" in allowed:
                 comp.declared_duration = max(0, int(allowed["declared_duration"]))
 
@@ -2013,7 +2015,7 @@ class TimelineSession:
         self.status.emit(f"{name} baked to keyframes")
         return True
 
-    def split_text_clip(self, clip_id, pieces, mode="letter"):
+    def split_text_clip(self, clip_id, pieces, mode="letter", options=None):
         """Split a text clip into one clip per unit, at the exact same positions.
 
         `pieces` is [(text, offset_x, offset_y)] in project pixels relative to the frame
@@ -2021,7 +2023,15 @@ class TimelineSession:
         pieces inherit the picture's transform, effects and fades, and a per-unit preset
         instance becomes a whole-clip instance on each piece - which is the point of
         splitting: every letter can then be edited and animated on its own.
+
+        `options` adds the non-destructive modes (replace/hide/duplicate), an optional
+        track for the pieces, and an optional stagger + entrance animation. The whole
+        operation - tracks, hidden originals, clips and generated keyframes - is one undo
+        step.
         """
+        import random
+
+        from . import animation as ANIM
         from . import presets as PM
         from . import text as TXT
 
@@ -2030,44 +2040,136 @@ class TimelineSession:
             return []
         if clip.track is None or clip.track.locked:
             return []
+        options = dict(options or {})
+        disposition = str(options.get("action") or "replace")
+        if disposition not in ("replace", "hide", "duplicate"):
+            disposition = "replace"
+        new_track = bool(options.get("new_track"))
+        stagger = options.get("stagger") if isinstance(options.get("stagger"), dict) else None
+        kind = {"character": "letter", "characters": "letter", "letters": "letter",
+                "letter": "letter", "words": "word", "word": "word",
+                "lines": "line", "line": "line"}.get(str(mode), str(mode))
         source = {key: value for key, value in (clip.text or {}).items() if key != "keys"}
+        source_style = copy.deepcopy(source)
+        source_transform = copy.deepcopy(clip.transform)
+        source_meta = copy.deepcopy(clip.transform_meta)
+        source_gain = copy.deepcopy(clip.gain)
+        source_presets = copy.deepcopy(PM.instances(clip))
+        source_effects = clone_effects(clip.effects)
+        start, duration = clip.timeline_start, clip.duration
         created = []
+
+        def delays_for(count):
+            """One delay in frames per piece, honouring stagger direction."""
+            if not stagger or not count:
+                return [0] * count
+            step = max(0, int(stagger.get("delay") or 0))
+            unit = str(stagger.get("unit") or "off")
+            if step <= 0 or unit == "off":
+                return [0] * count
+            if unit == "letter":
+                weights, total = [], 0
+                for text_value, _x, _y in pieces:
+                    weights.append(max(1, len(str(text_value))))
+                prefix = []
+                for weight in weights:
+                    prefix.append(total)
+                    total += weight
+            else:
+                prefix = list(range(count))
+            order = {"forward": list(range(count)),
+                     "reverse": list(range(count - 1, -1, -1)),
+                     "center": sorted(range(count), key=lambda i: abs(i - (count - 1) / 2.0)),
+                     "random": None}.get(str(stagger.get("direction") or "forward"))
+            if order is None:
+                order = list(range(count))
+                random.Random(int(clip_id) * 7919 + count).shuffle(order)
+            rank = [0] * count
+            for position, index in enumerate(order):
+                rank[index] = position
+            if unit == "letter":
+                return [int(round(prefix[rank[i]] * step)) for i in range(count)]
+            return [rank[i] * step for i in range(count)]
 
         def action():
             nonlocal created
             created = []
-            track = clip.track
-            start, duration = clip.timeline_start, clip.duration
+            timeline = self.timeline
+            original_track = clip.track
+            target_track = original_track
+            if disposition == "hide":
+                # A hidden track keeps the original clip's words, keys, opacity and
+                # effects exactly as they were, while taking no picture.
+                hidden = timeline.add_track("video", name="Original (hidden)")
+                hidden.visible = False
+                if clip in original_track.clips:
+                    original_track.clips.remove(clip)
+                hidden.clips.append(clip)
+                clip.track = hidden
+            if disposition == "replace":
+                if new_track:
+                    target_track = timeline.add_track("video", name=f"Split {kind}s")
+            else:
+                # A duplicate must not sit on the original's track: both occupy the same
+                # frames, so the pieces get a lane of their own above it.
+                target_track = timeline.add_track("video", name=f"Split {kind}s")
+            made = []
             for text_value, offset_x, offset_y in pieces:
-                piece = self.timeline.new_clip(
-                    name=str(text_value)[:40] or "Text", source_path="", track=track,
+                piece = timeline.new_clip(
+                    name=str(text_value)[:40] or "Text", source_path="", track=target_track,
                     start=start, duration=duration, source_in=clip.source_in,
-                    effects=clone_effects(clip.effects), source_out=clip.source_out,
+                    effects=copy.deepcopy(source_effects), source_out=clip.source_out,
                     source_fps=clip.source_fps, speed=clip.speed, reverse=clip.reverse,
                     loop=clip.loop, freeze=clip.freeze, source_offset=clip.source_offset,
                     source_min=clip.source_min, source_max=clip.source_max,
                     volume=clip.volume, fade_in=clip.fade_in, fade_out=clip.fade_out,
                     fade_in_curve=clip.fade_in_curve, fade_out_curve=clip.fade_out_curve,
-                    stream=clip.stream, transform=copy.deepcopy(clip.transform),
-                    transform_meta=copy.deepcopy(clip.transform_meta),
-                    gain=copy.deepcopy(clip.gain))
-                settings = copy.deepcopy(source)
+                    stream=clip.stream, transform=copy.deepcopy(source_transform),
+                    transform_meta=copy.deepcopy(source_meta),
+                    gain=copy.deepcopy(source_gain))
+                settings = copy.deepcopy(source_style)
                 settings["text"] = str(text_value)
                 settings["keys"] = {}
+                # The unit centre was measured on the original block, so each piece is
+                # centred on the frame and moved by exactly that offset. Keeping 'left'
+                # or 'right' would move it to the frame edge instead.
+                settings["offset_x"] = float(offset_x)
+                settings["offset_y"] = float(offset_y)
+                settings["align"] = "center"
+                settings["anchor"] = "center"
+                settings["wrap"] = 0.0
+                settings["reveal"] = -1.0
+                # A block plate cannot be split into per-letter plates without changing
+                # the picture; the pieces therefore carry glyph-level styling only.
+                settings["bg_opacity"] = 0.0
                 piece.text = settings
                 TXT.ensure_text(piece)
-                piece.text["offset_x"] = float(TXT.DEFAULTS["offset_x"]) + float(offset_x)
-                piece.text["offset_y"] = float(TXT.DEFAULTS["offset_y"]) + float(offset_y)
-                piece.presets = copy.deepcopy(PM.instances(clip))
+                piece.presets = copy.deepcopy(source_presets)
                 for instance in PM.instances(piece):
                     instance.setdefault("knobs", {})["unit"] = "whole"
+                made.append(piece)
                 created.append(piece.id)
-            track.clips.remove(clip)
+            if disposition == "replace" and clip in original_track.clips:
+                original_track.clips.remove(clip)
+            if stagger and stagger.get("preset") not in (None, "None") and made:
+                delays = delays_for(len(made))
+                length = max(1, min(int(stagger.get("duration") or 12), max(1, duration - 1)))
+                context = {"project_size": self.project_size or (1920, 1080)}
+                for piece, delay in zip(made, delays):
+                    context["text_length"] = len(str((piece.text or {}).get("text") or ""))
+                    ANIM.apply_text_animation(
+                        piece, "in", str(stagger["preset"]), length,
+                        str(stagger.get("easing") or ANIM.DEFAULT_EASING), delay,
+                        fps=timeline.fps, context=context)
 
-        self.stack.run(f"Split text into {mode}s", action)
+        label = {"replace": "Split text", "hide": "Split text (original hidden)",
+                 "duplicate": "Duplicate and split text"}[disposition]
+        self.stack.run(f"{label} into {kind}s", action)
         if created:
             self.set_selection(set(created), expand=False)
-            self.status.emit(f"Split into {len(created)} {mode} clips")
+            suffix = {"replace": "", "hide": " (original hidden)",
+                      "duplicate": " (original kept)"}[disposition]
+            self.status.emit(f"Split into {len(created)} {kind} clips{suffix}")
         return created
 
 

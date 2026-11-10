@@ -19,7 +19,8 @@ class Composition:
     """One reusable composition definition."""
 
     def __init__(self, comp_id=None, name="Composition", width=1920, height=1080,
-                 fps=30, background=(0, 0, 0), declared_duration=0, bin_folder=""):
+                 fps=30, background=(0, 0, 0), declared_duration=0, bin_folder="",
+                 transparent=False):
         self.id = str(comp_id or f"comp-{uuid.uuid4().hex}")
         self.name = str(name or "Composition")
         self.width = max(1, int(width or 1920))
@@ -34,6 +35,10 @@ class Composition:
         # Compositions live in the same virtual project folders as media, so the Project
         # panel can organise both without a second folder model.
         self.bin_folder = str(bin_folder or "")
+        # Legacy files have no flag and keep their historical opaque background. New
+        # pre-compositions default to transparent so alpha from Smart Key/Roto Brush,
+        # shapes and text can reach the parent timeline.
+        self.transparent = bool(transparent)
         self.timeline = Timeline(self.fps)
 
     @property
@@ -42,12 +47,14 @@ class Composition:
 
     def snapshot(self):
         return (self.id, self.name, self.width, self.height, self.fps, self.background,
-                self.declared_duration, self.timeline.snapshot(), self.bin_folder)
+                self.declared_duration, self.timeline.snapshot(), self.bin_folder,
+                self.transparent)
 
     def restore(self, snap):
         (self.id, self.name, self.width, self.height, self.fps, self.background,
          self.declared_duration, timeline_snap) = snap[:8]
         self.bin_folder = str(snap[8]) if len(snap) > 8 else ""
+        self.transparent = bool(snap[9]) if len(snap) > 9 else False
         self.timeline.restore(timeline_snap)
 
     def __repr__(self):
@@ -83,10 +90,10 @@ class CompositionLibrary:
         return comp
 
     def new(self, name="Composition", width=1920, height=1080, fps=30,
-            background=(0, 0, 0), declared_duration=0, bin_folder=""):
+            background=(0, 0, 0), declared_duration=0, bin_folder="", transparent=False):
         return self.add(Composition(name=name, width=width, height=height, fps=fps,
                                     background=background, declared_duration=declared_duration,
-                                    bin_folder=bin_folder))
+                                    bin_folder=bin_folder, transparent=transparent))
 
     def remove(self, comp_id):
         return self.items.pop(str(comp_id or ""), None)
@@ -106,7 +113,7 @@ class CompositionLibrary:
         # counters (deepcopy cannot pickle those) and keeps ids unique to the clone.
         clone = Composition(None, f"{source.name} copy", source.width, source.height,
                             source.fps, source.background, source.declared_duration,
-                            source.bin_folder)
+                            source.bin_folder, source.transparent)
         clone.timeline.restore(source.timeline.snapshot())
         return self.add(clone)
 
@@ -172,7 +179,7 @@ class CompositionLibrary:
 
     # ------------------------------------------------------------- pre-compose
     def precompose(self, parent_timeline, clip_ids, name, range_start, range_end,
-                   width, height, background=(0, 0, 0)):
+                   width, height, background=(0, 0, 0), transparent=True):
         """Build a composition from selected clips, preserving tracks and timing.
 
         The caller removes the selected clips from the parent and inserts the nested
@@ -187,7 +194,7 @@ class CompositionLibrary:
         range_start = int(range_start)
         range_end = max(range_start + 1, int(range_end))
         comp = self.new(name, width, height, parent_timeline.fps, background,
-                        range_end - range_start)
+                        range_end - range_start, transparent=transparent)
         links = {}
         for parent_track in parent_timeline.tracks:
             chosen = [clip for clip in parent_track.clips if clip.id in selected]

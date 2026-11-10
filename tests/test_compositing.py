@@ -277,6 +277,9 @@ def test_the_clip_card_has_a_blend_mode_dropdown(qapp):
     combo.setCurrentIndex(2)
     combo.activated.emit(2)
     assert engine.timeline.find_clip(top.id).blend == combo.itemData(2) != "normal"
+    panel.close()
+    panel.deleteLater()
+    qapp.processEvents()
 
 
 def test_every_effect_card_gets_a_mix_slider(qapp):
@@ -292,6 +295,9 @@ def test_every_effect_card_gets_a_mix_slider(qapp):
                 if row.get("kind") == "param" and row.get("name") == "mix"]
     assert len(mix_rows) == 2, "one Mix control per effect card"
     assert mix_rows[0]["spec"].default == 100
+    panel.close()
+    panel.deleteLater()
+    qapp.processEvents()
 
 
 def test_the_add_menu_creates_an_adjustment_layer(editor):

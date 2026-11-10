@@ -208,6 +208,35 @@ def test_transparent_composite_and_export_over_a_lower_clip(monkeypatch, tmp_pat
 
 
 @requires_model
+def test_smart_key_cutout_in_a_transparent_precomposition_shows_the_parent(
+        monkeypatch, tmp_path):
+    status = _model(monkeypatch, tmp_path)
+    assert status.model_status(verify=True).available
+    picture = _image("person-indoor")
+    height, width = picture.shape[:2]
+    engine, clip = build_engine(frame=picture, duration=10)
+    clip.effects = [_entry()]
+    nested_id = engine.session.precompose("Smart Key cutout", [clip.id])
+    assert nested_id is not None
+    nested = engine.timeline.find_clip(nested_id)
+    comp = engine.compositions.get(nested.composition_id)
+    assert comp.transparent is True, "new pre-compositions keep their alpha"
+
+    lower = np.full((height, width, 3), (180, 40, 120), np.uint8)
+    media = MediaEntry("video", 10, 30.0)
+    media.frames = [lower.copy() for _ in range(10)]
+    engine.media._entries["smart-key-parent-lower.png"] = media
+    lower_track = engine.timeline.add_track("video", index=len(engine.timeline.tracks))
+    engine.timeline.new_clip("parent lower", "smart-key-parent-lower.png", lower_track,
+                             0, 10, source_out=10, source_fps=30.0)
+
+    _raw, preview = engine.render_frame(0, 1.0)
+    np.testing.assert_array_equal(preview[4, 4], lower[4, 4]), \
+        "the transparent pre-composition must show the parent's lower clip"
+    assert int(preview[height // 2, width // 2].max()) > 30
+
+
+@requires_model
 def test_video_scan_caches_a_moving_subject(qapp, monkeypatch, tmp_path):
     status = _model(monkeypatch, tmp_path)
     assert status.model_status(verify=True).available

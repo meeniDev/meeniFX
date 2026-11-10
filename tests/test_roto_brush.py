@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from conftest import build_engine
+from meenifx.media.cache import MediaEntry
 from meenifx.project.container import read_container, write_container
 from meenifx.project.io import Project, apply as apply_project, collect
 from meenifx.project.settings import ProjectSettings
@@ -218,6 +219,30 @@ def test_roto_cutout_composites_inside_a_nested_composition():
     np.testing.assert_array_equal(frame[8, 8], lower[8, 8]), \
         "the cutout reveals the lower clip inside the nested composition"
     assert int(frame[90, 160].max()) > 150, "the subject survives the nested render"
+
+
+def test_roto_cutout_in_a_transparent_precomposition_shows_the_parent_lower():
+    engine, clip = build_engine(frame=plate(), duration=30)
+    clip.effects = [roto_entry()]
+    nested_id = engine.session.precompose("Roto parent alpha", [clip.id])
+    assert nested_id is not None
+    nested = engine.timeline.find_clip(nested_id)
+    comp = engine.compositions.get(nested.composition_id)
+    assert comp.transparent is True
+
+    lower = np.full((HEIGHT, WIDTH, 3), (180, 40, 120), np.uint8)
+    media = MediaEntry("video", 30, 30.0)
+    media.frames = [lower.copy() for _ in range(30)]
+    path = "synthetic-roto-parent-lower.png"
+    engine.media._entries[path] = media
+    lower_track = engine.timeline.add_track("video", index=len(engine.timeline.tracks))
+    engine.timeline.new_clip("parent lower", path, lower_track, 0, 30,
+                             source_out=30, source_fps=30.0)
+
+    _raw, processed = engine.render_frame(0, 1.0)
+    np.testing.assert_array_equal(processed[8, 8], lower[8, 8]), \
+        "the transparent composition must reveal the parent timeline"
+    assert int(processed[90, 160].max()) > 150, "the subject survives the nested render"
 
 
 def test_refine_edge_stroke_changes_the_soft_boundary():

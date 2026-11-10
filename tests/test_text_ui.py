@@ -11,7 +11,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication, QPlainTextEdit  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QLabel, QPlainTextEdit, QToolButton  # noqa: E402
 
 from meenifx.model import channels as CH  # noqa: E402
 from meenifx.model import text as TXT  # noqa: E402
@@ -168,6 +168,16 @@ def test_text_clip_survives_a_project_save_and_reload(editor):
     clip = window.engine.timeline.find_clip(clip_id)
     clip.text["size"] = 64.0
     clip.text["font"] = "Georgia"
+    clip.text["gradient"] = True
+    clip.text["gradient_color"] = "#FF8800"
+    clip.text["gradient_angle"] = 35.0
+    clip.text["word_spacing"] = 12.0
+    clip.text["letter_spacing"] = 3.0
+    clip.text["case"] = "upper"
+    clip.text["anchor"] = "bottom"
+    clip.text["stroke_opacity"] = 40.0
+    clip.text["strikethrough"] = True
+    clip.text["bg_radius"] = 9.0
     assert window.projects.save()
     path = window.projects.project.path
     window.projects.open_path(path)
@@ -176,6 +186,16 @@ def test_text_clip_survives_a_project_save_and_reload(editor):
     assert TXT.content_at(loaded, 0) == "SAVED TITLE"
     assert loaded.text["font"] == "Georgia"
     assert loaded.text["size"] == pytest.approx(64.0)
+    assert loaded.text["gradient"] is True
+    assert loaded.text["gradient_color"] == "#FF8800"
+    assert loaded.text["gradient_angle"] == pytest.approx(35.0)
+    assert loaded.text["word_spacing"] == pytest.approx(12.0)
+    assert loaded.text["letter_spacing"] == pytest.approx(3.0)
+    assert loaded.text["case"] == "upper"
+    assert loaded.text["anchor"] == "bottom"
+    assert loaded.text["stroke_opacity"] == pytest.approx(40.0)
+    assert loaded.text["strikethrough"] is True
+    assert loaded.text["bg_radius"] == pytest.approx(9.0)
 
 
 def test_transform_handles_wrap_the_text_not_the_project(editor):
@@ -193,3 +213,38 @@ def test_transform_handles_wrap_the_text_not_the_project(editor):
     assert abs((min(xs) + max(xs)) / 2.0 - 320.0) < 2.0
     assert 170.0 < (min(ys) + max(ys)) / 2.0 < 190.0
     assert overlay.widget_rect_for(clip).width() < overlay.widget.frame_rect().width() * 0.6
+
+
+def test_text_formatting_controls_use_visible_icons(editor):
+    """The Alpha 4 panel showed blank squares: every control must carry a real icon."""
+    from meenifx import tokens
+    from meenifx.ui.font_picker import FontPickerButton
+
+    window = editor
+    window.add_text_clip()
+    pump(0.25)
+    picker = [button for button in window.findChildren(FontPickerButton)
+              if button.isVisible()]
+    assert picker, "the inspector must use the searchable installed-font picker"
+    tips = {"Bold", "Italic", "Underline", "Strikethrough", "Align left",
+            "Align center", "Align right", "Justify"}
+    buttons = [button for button in window.findChildren(QToolButton)
+               if button.toolTip() in tips and button.isVisible()]
+    assert len(buttons) == len(tips)
+    sizes = {(button.width(), button.height()) for button in buttons}
+    assert len(sizes) == 1, sizes
+    for button in buttons:
+        assert not button.icon().isNull(), button.toolTip()
+        assert button.width() >= tokens.ICON and button.height() >= tokens.ICON
+
+
+def test_a_missing_font_is_named_and_offers_a_replacement(editor):
+    window = editor
+    clip_id = window.add_text_clip()
+    pump(0.2)
+    clip = window.engine.timeline.find_clip(clip_id)
+    clip.text["font"] = "No Such Font 123"
+    window.effects_panel.refresh_properties()
+    pump(0.1)
+    labels = [label.text() for label in window.findChildren(QLabel) if label.isVisible()]
+    assert any("No Such Font 123" in text and "not installed" in text for text in labels)

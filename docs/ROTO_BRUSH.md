@@ -78,10 +78,10 @@ motion blur, crowded scenes and subjects that leave and re-enter the frame still
 correction strokes. Hair, fur, thin straps and semi-transparent edges remain approximate,
 and the Refine Edge brush is a guided filter rather than a dedicated alpha-matting network.
 
-Pre-compositions render their own background. A cutout inside a pre-composition reveals
-clips on lower tracks inside that composition, but the nested clip itself still paints its
-background, so the transparency does not pass through to tracks below it on the parent
-timeline.
+A composition made with **Pre-compose** defaults to **Transparent background**, so a Roto
+Brush cutout inside it keeps its alpha and composites over tracks below the nested clip on
+the parent timeline. Turn the setting off in **Composition Settings** for a legacy opaque
+background. Projects saved before the setting existed keep the opaque path.
 
 SAM 2 and SAM 2.1 were evaluated. They are Apache-2.0, but require PyTorch (roughly 2.5 or
 newer) and a 110 to 770 MB checkpoint; bundling that runtime would dwarf the editor and is
@@ -114,7 +114,9 @@ The `.mfxpf` project stores only small data on the effect entry:
 ```
 
 Frame-by-frame masks are 8-bit PNGs under `%APPDATA%/meeniFX/meenifx-roto/<clip>/` (or the
-directory in `MEENIFX_ROTO_CACHE`). The cache key is a digest of the base frame, every
+directory in `MEENIFX_ROTO_CACHE`). The shared ONNX weights live in
+`%APPDATA%\meeniFX\Studios\meenifx-models\u2net.onnx`; they are not inside the install
+folder, so they survive application updates. The cache key is a digest of the base frame, every
 stroke and the analysis parameters. A reopened project without its cache simply shows the
 frames that still need analysing, it never displays stale or invented masks. Cleaning the
 cache, invalidating a key or unfreezing never touches the source media.

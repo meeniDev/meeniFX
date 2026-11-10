@@ -50,8 +50,13 @@ def warning_text(widget):
 def restyle_all():
     for hook in _HOOKS:
         hook()
+    from PyQt6 import sip
     for widget, apply in list(_BOUND.items()):
         try:
+            # A wrapper can outlive its C++ widget after a dialog or test window closes.
+            # Calling into it is an access violation, so check before applying.
+            if sip.isdeleted(widget):
+                continue
             apply(widget)
         except RuntimeError:
             pass    # the C++ widget is already gone

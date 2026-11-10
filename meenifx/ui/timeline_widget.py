@@ -3703,7 +3703,10 @@ class TimelineCanvas(QWidget):
         menu.addAction("Split at Playhead", self.session.split_at_playhead)
         if clip is not None and clip.is_text:
             split_menu = menu.addMenu("Split Text")
-            for mode, label in (("letter", "Into Letters"), ("word", "Into Words"),
+            split_menu.addAction("Split Text\u2026",
+                                 lambda _checked=False, c=clip: self.split_text_dialog(c))
+            split_menu.addSeparator()
+            for mode, label in (("letter", "Into Characters"), ("word", "Into Words"),
                                 ("line", "Into Lines")):
                 action = split_menu.addAction(label)
                 action.triggered.connect(
@@ -3739,8 +3742,17 @@ class TimelineCanvas(QWidget):
         menu.addAction("Split at Playhead", self.session.split_at_playhead)
         menu.addAction("Freeze frame", lambda: self.session.freeze_selected_clip(clip.id))
         menu.addAction("Duplicate", self.session.duplicate_selected)
-        precompose = menu.addAction("Pre-compose...", self._precompose_selected)
+        precompose =        menu.addAction("Pre-compose...", self._precompose_selected)
         precompose.setEnabled(not self.session.precompose_problem())
+        if clip.is_text:
+            split_menu = menu.addMenu("Split Text")
+            split_menu.addAction("Split Text\u2026",
+                                 lambda _checked=False, c=clip: self.split_text_dialog(c))
+            split_menu.addSeparator()
+            for mode, label in (("letter", "Into Characters"), ("word", "Into Words"),
+                                ("line", "Into Lines")):
+                split_menu.addAction(
+                    label, lambda _checked=False, c=clip, m=mode: self.split_text(c, m))
         menu.addSeparator()
         if self.animation_rows(clip):
             menu.addAction("Open Keyframe Editor",
@@ -3792,17 +3804,22 @@ class TimelineCanvas(QWidget):
         if opener is not None:
             opener(clip.id)
 
-    def split_text(self, clip, mode="letter"):
+    def split_text(self, clip, mode="letter", options=None):
         """Split a text clip into one clip per unit, keeping every piece where it was.
 
         The layout lives in the renderer (font metrics), so it produces the offsets and
-        the session performs the model edit as one undo step.
+        the session performs the model edit as one undo step. `options` carries the
+        Split Text dialog's non-destructive mode, track and stagger settings.
         """
         from ..model import text as TXT
         from ..processing import text_units
 
         width, height = self.engine.project_size()
-        spec = TXT.resolve(clip, 0)
+        # The playhead frame matters when the words are keyed: the user splits what is
+        # on screen now, not the first key. Text keyframes themselves stay on the
+        # original clip (the dialog says so).
+        frame = max(0, int(self.session.playhead) - int(clip.timeline_start))
+        spec = TXT.resolve(clip, frame)
         units = text_units.layout_units(spec, width, height, 1.0).get(mode) or []
         if len(units) < 2:
             self.session.status.emit("This text has nothing to split at that unit")
@@ -3810,7 +3827,16 @@ class TimelineCanvas(QWidget):
         centre_x, centre_y = width / 2.0, height / 2.0
         pieces = [(str(unit[2]), float(unit[0]) - centre_x, float(unit[1]) - centre_y)
                   for unit in units]
-        return self.session.split_text_clip(clip.id, pieces, mode)
+        return self.session.split_text_clip(clip.id, pieces, mode, options)
+
+    def split_text_dialog(self, clip, default_mode="letter"):
+        """Ask for the split options, then split; no animation unless one was chosen."""
+        from .split_text_dialog import SplitTextDialog
+
+        dialog = SplitTextDialog(clip, self, default_mode)
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return []
+        return self.split_text(clip, dialog.mode_value(), dialog.options())
 
     def _track_menu(self, track, point):
         self._header_selected = track.id

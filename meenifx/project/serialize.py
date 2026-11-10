@@ -327,6 +327,7 @@ def compositions_to_sections(library, media_id_for):
             "height": comp.height,
             "fps": comp.fps,
             "background": list(comp.background),
+            "transparent": bool(getattr(comp, "transparent", False)),
             "duration": int(comp.declared_duration),
             "bin": getattr(comp, "bin_folder", ""),
             "timeline": timeline_to_sections(comp.timeline, media_id_for),
@@ -342,7 +343,8 @@ def sections_to_compositions(sections, path_for_media):
             comp = Composition(row["id"], row.get("name"), row.get("width", 1920),
                                row.get("height", 1080), row.get("fps", 30),
                                tuple(row.get("background") or (0, 0, 0)),
-                               row.get("duration", 0), row.get("bin", ""))
+                               row.get("duration", 0), row.get("bin", ""),
+                               bool(row.get("transparent", False)))
             if row.get("timeline"):
                 comp.timeline = sections_to_timeline(row["timeline"], comp.fps,
                                                      path_for_media)

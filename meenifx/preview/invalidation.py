@@ -115,6 +115,7 @@ def composition_digest(comp, compositions=None, seen=None):
     seen.add(comp.id)
     parts = [str(comp.id), str(comp.name), f"{comp.width}x{comp.height}",
              str(comp.fps), ",".join(str(part) for part in comp.background),
+             str(bool(getattr(comp, "transparent", False))),
              str(int(getattr(comp, "declared_duration", 0) or 0))]
     nested = timeline_digests(comp.timeline, compositions, seen)
     parts.extend(f"{clip_id}:{nested[clip_id][0]}" for clip_id in sorted(nested))

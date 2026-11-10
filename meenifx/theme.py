@@ -102,8 +102,17 @@ def configure_theme(app, name=None):
     app.setPalette(_build_palette())
     app.setStyleSheet(build_stylesheet())
     restyle_all()
-    for widget in app.topLevelWidgets():
-        widget.update()
+    from PyQt6 import sip
+    for widget in list(app.topLevelWidgets()):
+        try:
+            # A closed test window (or a dialog deleted by its parent) can still appear in
+            # the Python-side list until the event loop reaps it. Touching that wrapper is
+            # a native access violation, not a Python exception.
+            if sip.isdeleted(widget):
+                continue
+            widget.update()
+        except RuntimeError:
+            pass
     return tokens.theme_name()
 
 

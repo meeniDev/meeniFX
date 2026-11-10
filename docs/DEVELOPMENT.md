@@ -17,16 +17,38 @@ kept out of the real recent list and skips the crash/unsaved-work prompts.
 ## Tests
 
 ```powershell
-python -m pytest tests -q `
-  --ignore=tests/test_project_app.py `
-  --ignore=tests/test_project_large.py `
-  --ignore=tests/test_project_panel.py `
-  --ignore=tests/test_start_window.py
+python -m pytest tests -q
 ```
 
 `test_project_app.py`, `test_project_large.py`, `test_project_panel.py` and
-`test_start_window.py` are app-driving scripts that call `os._exit` when imported, so they
-must be run directly (`python tests\<name>.py`) rather than collected by pytest.
+`test_start_window.py` are app-driving scripts that call `os._exit` when imported. They are
+listed in `tests/conftest.py` as `collect_ignore`, so a normal pytest run never executes
+them; run one directly with `python tests\<name>.py` when you want that end-to-end check.
+
+The same suite is grouped by responsibility:
+
+```powershell
+python -m pytest tests -q -m unit
+python -m pytest tests -q -m renderer
+python -m pytest tests -q -m gui
+python -m pytest tests -q -m model
+python -m pytest tests -q -m packaged
+```
+
+GUI tests share one `QApplication` with `quitOnLastWindowClosed` off. Widgets created by a
+test must be closed and `deleteLater()`-ed; leaving a top-level panel alive can make a
+later native Qt construction crash. Tests that need to terminate their own process belong
+in the standalone scripts above, not in collected `test_*.py` files.
+
+## Optional segmentation model
+
+The U^2-Net weights are deliberately not in Git and not in the installer. The app downloads
+them on demand from the URL and SHA-256 recorded in `meenifx/roto/model.py`, stores them in
+`%APPDATA%\meeniFX\Studios\meenifx-models\u2net.onnx`, verifies the digest, shows progress,
+allows cancellation and keeps the file across updates. Offline use is explicit: Smart Key
+reports that the model is unavailable and Roto Brush offers the labelled Basic fallback.
+For a local model test, set `MEENIFX_ROTO_MODEL` to the file (or its directory); model tests
+skip when the weights are absent.
 
 The update system is covered without the network by `tests/test_updates.py` (GitHub payloads,
 channel selection, rate limits, caching, checksums, cancellation, disk limits), with the UI

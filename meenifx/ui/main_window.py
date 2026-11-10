@@ -545,6 +545,7 @@ class MainWindow(QMainWindow):
                          lambda:self.toggle_text_key(sorted(self.engine.session.selected)))
         text_menu.addSeparator()
         self._add_action(text_menu,"Edit Text in Properties",None,self._focus_text_editor)
+        self._add_action(text_menu,"Split Text\u2026",None,self.split_selected_text)
         self.snap_action=self._add_check_action(edit,"Snap to Edits","F8",True,
                                                 lambda on:self.engine.session.snap_enabled.set(on))
         playback=bar.addMenu("Playback")
@@ -2465,6 +2466,7 @@ class MainWindow(QMainWindow):
         self.graph_editor.refresh()
         session.changed.emit()
         self._sync_composition_bar()
+        self.projects.update_title()
         self._request_preview()
         self._refresh_audio()
 
@@ -2536,7 +2538,9 @@ class MainWindow(QMainWindow):
         dialog = PrecomposeDialog(self, name="Composition", clip_count=len(clips),
                                   range_text=f"frames {start}-{end}")
         if dialog.exec():
-            nested = session.precompose(dialog.values()["name"])
+            values = dialog.values()
+            nested = session.precompose(values["name"],
+                                        transparent=values.get("transparent", True))
             if nested is not None:
                 self._request_preview()
                 self._refresh_audio()
@@ -2661,6 +2665,22 @@ class MainWindow(QMainWindow):
         self._set_overlay_mode("transform")
         self._refresh_panels(); self._request_preview()
         return clip_id
+
+    def split_selected_text(self):
+        """Text > Split Text: open the options for the selected text clip."""
+        from ..model import text as TXT
+        clip = next((self.engine.timeline.find_clip(cid)
+                     for cid in sorted(self.engine.session.selected)
+                     if self.engine.timeline.find_clip(cid) is not None
+                     and self.engine.timeline.find_clip(cid).is_text), None)
+        if clip is None:
+            self.toast_message("Select a text clip to split")
+            return []
+        created = self.timeline_panel.canvas.split_text_dialog(clip)
+        if created:
+            self._refresh_panels()
+            self._request_preview()
+        return created
 
     def add_text_clip(self):
         """Add a generated text clip at the playhead and select it for editing."""
