@@ -89,6 +89,7 @@ def test_face_tracker_settings_are_split_into_groups(editor, qapp):
     panel = _add(editor, qapp, "face_tracker")
     groups = _groups(panel)
     assert set(groups) == {"Detection", "Visualization", "Labels", "Connectors",
+                           "Tracked region",
                            "Face Effects"}
 
 
