@@ -87,6 +87,16 @@ PREVIEW_ENTRIES = {
         {"frame": 0, "points": [[0.12, 0.12], [0.88, 0.12]], "radius": 0.055,
          "mode": "background"},
     ]},
+    # Tone and colour tools are shown with a deliberate grade, not an identity LUT.
+    "curves": {"params": {"curve_master": "0,0;48,24;128,140;210,232;255,255"}},
+    "hue_saturation": {"params": {"hue": -18.0, "saturation": 55.0, "lightness": 4.0}},
+    "tint": {"params": {"shadow_color": "#16284A", "highlight_color": "#FFD9A0",
+                         "strength": 75.0}},
+    "levels": {"params": {"input_black": 18.0, "input_white": 235.0, "gamma": 1.15}},
+    "color_wheels": {"params": {"lift_x": 18.0, "lift_y": -8.0,
+                                "gamma_x": -8.0, "gain_y": 15.0}},
+    # Distortion defaults are already visible; the map preview uses its self-map fallback.
+    "displacement_map": {"params": {"amount": 46.0, "scale_x": 120.0, "scale_y": 120.0}},
     # A puppet needs pins before it does anything; two pulled pins show the deformation.
     "puppet_warp": {"pins": [
         {"id": 1, "src": [0.42, 0.40], "x": 0.36, "y": 0.34, "locked": False},
@@ -100,7 +110,7 @@ PREVIEW_FRAME = {"flash": 3, "exposure_flicker": 6, "light_leak": 60}
 # Effects whose subject is the alpha edge cannot be shown on an opaque picture, so their
 # card renders the reference through a soft inset matte instead. This is a preview-only
 # composition: the shipped reference asset itself is never changed.
-ALPHA_DEMOS = {"simple_choker"}
+ALPHA_DEMOS = {"simple_choker", "matte_choker", "light_wrap"}
 
 
 def _alpha_demo_layer(layer):

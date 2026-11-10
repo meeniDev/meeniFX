@@ -14,9 +14,9 @@ import math
 from PyQt6.QtCore import QMimeData, QPoint, QSize, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QCursor, QDrag, QFont
 from PyQt6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QColorDialog, QComboBox,
-                             QFrame, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
-                             QMenu, QPlainTextEdit, QScrollArea, QToolButton, QTreeWidget,
-                             QTreeWidgetItem, QVBoxLayout, QWidget)
+                             QDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog, QLabel,
+                             QLineEdit, QMenu, QPlainTextEdit, QScrollArea, QToolButton,
+                             QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from .. import tokens
 from .filedialogs import open_file, save_file
@@ -37,6 +37,7 @@ from ..model.keyframes import AnimatedValue, parameter_value_at
 from ..processing import fonts as FONTS
 from ..processing.blend import BLEND_LABELS, normalise_mode
 from .browser import BrowserView
+from .color_editors import ColorWheelsDialog, CurvesDialog
 from .components import EmptyState
 from .font_picker import FontPickerButton
 from .widgets import ScrubField
@@ -3104,6 +3105,12 @@ class EffectsPanel(QWidget):
         """
         if effect.key == "smart_key":
             self._smart_key_row(form, clip, entry)
+        if effect.key == "curves":
+            self._curves_row(form, clip, entry)
+        elif effect.key == "color_wheels":
+            self._color_wheels_row(form, clip, entry)
+        elif effect.key == "displacement_map":
+            self._displacement_source_row(form, clip, entry)
         presets = getattr(effect, "PRESETS", None)
         if presets:
             self._effect_preset_row(form, clip, effect, entry, presets)
@@ -3201,6 +3208,27 @@ class EffectsPanel(QWidget):
             target.addWidget(box)
         elif spec.kind == "choice":
             target.addWidget(self._choice_row(clip, entry, spec, current, tip))
+        elif spec.kind == "text" and spec.name.endswith("_color"):
+            current = str(current or "")
+            holder = QWidget()
+            row = QHBoxLayout(holder)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(tokens.SP2)
+            swatch = _swatch_button(current, tip)
+
+            def pick(_=False, c=clip, e=entry, s=spec, value=current):
+                chosen = QColorDialog.getColor(QColor(value), self, s.label)
+                if chosen.isValid():
+                    self._commit_choice(c, e, s.name, chosen.name(), s)
+
+            swatch.clicked.connect(pick)
+            code = QLabel(current)
+            code.setProperty("quiet", True)
+            row.addWidget(swatch)
+            row.addWidget(code, 1)
+            target.addWidget(self._labelled(spec.label, holder, tip))
+            self._rows.append({"kind": "colour_param", "clip_id": clip.id, "entry": entry,
+                               "name": spec.name, "button": swatch, "spec": spec})
         elif spec.name == "palette_text":
             self._palette_row(target, clip, entry, spec, str(current or ""))
         else:
@@ -3226,6 +3254,117 @@ class EffectsPanel(QWidget):
             self._rows.append({"kind": "text_param", "clip_id": clip.id, "entry": entry,
                                "name": spec.name, "field": edit, "spec": spec})
             target.addWidget(self._labelled(spec.label, edit, tip))
+
+    def _stored_effect_value(self, clip, entry, name, default=None):
+        stored = (entry.get("params") or {}).get(name, default)
+        return parameter_value_at(stored, self._clip_frame(clip))
+
+    def _commit_effect_values(self, clip, entry, values, label):
+        """Write a dialog's values as one undoable edit, preserving animations."""
+        frame = self._clip_frame(clip)
+
+        def write(target):
+            target_entry = self._entry(target, entry.get("effect_id"))
+            if target_entry is None:
+                return
+            for name, value in values.items():
+                self._write_param(target, target_entry, name, value, frame)
+
+        self.engine.session.apply_to_clips([clip.id], label, write)
+        self._notify()
+        self.refresh_properties()
+
+    def _curves_row(self, form, clip, entry):
+        from ..effects.color_extra import CURVE_CHANNELS, IDENTITY_CURVE
+        curves = {name: str(self._stored_effect_value(
+            clip, entry, f"curve_{name}", IDENTITY_CURVE) or IDENTITY_CURVE)
+                  for name in CURVE_CHANNELS}
+        button = QToolButton()
+        button.setText("Edit Curves\u2026")
+        button.setToolTip("Open the interactive curve graph for master and RGB channels")
+
+        def edit(_=False, c=clip, e=entry, values=curves):
+            dialog = CurvesDialog(values, self)
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                self._commit_effect_values(
+                    c, e, {f"curve_{name}": value
+                           for name, value in dialog.values().items()}, "Edit curves")
+
+        button.clicked.connect(edit)
+        form.addWidget(self._labelled("Curve graph", button,
+                                      "Drag control points; per-channel curves are edited here"))
+        self._rows.append({"kind": "curves_button", "clip_id": clip.id, "entry": entry,
+                           "button": button})
+
+    def _color_wheels_row(self, form, clip, entry):
+        values = {f"{name}_{axis}": float(self._stored_effect_value(
+            clip, entry, f"{name}_{axis}", 0.0) or 0.0)
+                  for name in ("lift", "gamma", "gain") for axis in ("x", "y")}
+        button = QToolButton()
+        button.setText("Open Color Wheels\u2026")
+        button.setToolTip("Drag lift, gamma and gain trackballs")
+
+        def edit(_=False, c=clip, e=entry, current=values):
+            dialog = ColorWheelsDialog(current, self)
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                self._commit_effect_values(c, e, dialog.values(), "Color wheels")
+
+        button.clicked.connect(edit)
+        form.addWidget(self._labelled("Trackballs", button,
+                                      "Interactive lift, gamma and gain wheels"))
+        self._rows.append({"kind": "wheels_button", "clip_id": clip.id, "entry": entry,
+                           "button": button})
+
+    def _displacement_source_row(self, form, clip, entry):
+        """A clip/image chooser for the map, with a conventional file fallback."""
+        sources = [candidate for candidate in self.engine.timeline.all_clips()
+                   if candidate is not clip and candidate.track is not None
+                   and candidate.track.type == "video"]
+        combo = QComboBox()
+        combo.addItem("Current layer", 0)
+        for candidate in sources:
+            combo.addItem(candidate.name, candidate.id)
+        current = int(self._stored_effect_value(clip, entry, "map_source", 0) or 0)
+        combo.setCurrentIndex(max(0, combo.findData(current)))
+        combo.setToolTip("Another video layer supplies the displacement values")
+        combo.activated.connect(lambda index, box=combo, c=clip, e=entry:
+                                self._commit_effect_values(
+                                    c, e, {"map_source": box.itemData(index)},
+                                    "Displacement map source"))
+        form.addWidget(self._labelled("Map source", combo,
+                                      "Current layer uses its own luminance as the map"))
+
+        path = str(self._stored_effect_value(clip, entry, "map_path", "") or "")
+        holder = QWidget()
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(tokens.SP1)
+        label = QLabel(path or "No image selected")
+        label.setProperty("quiet", True)
+        label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        browse = QToolButton()
+        browse.setText("Browse\u2026")
+        browse.setToolTip("Choose an image to use as the displacement map")
+
+        def choose(_=False, c=clip, e=entry, current_path=path):
+            chosen = open_file(self, "Choose displacement map", current_path,
+                               "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff);;All files (*)")
+            if chosen:
+                self._commit_effect_values(c, e, {"map_path": chosen},
+                                           "Displacement map image")
+
+        clear = QToolButton()
+        clear.setText("Clear")
+        clear.setToolTip("Stop using an image map")
+        clear.clicked.connect(lambda _=False, c=clip, e=entry:
+                              self._commit_effect_values(c, e, {"map_path": ""},
+                                                        "Clear displacement map image"))
+        browse.clicked.connect(choose)
+        row.addWidget(label, 1)
+        row.addWidget(browse)
+        row.addWidget(clear)
+        form.addWidget(self._labelled("Map image", holder,
+                                      "A still image works as a map without adding a clip"))
 
     def _effect_preset_row(self, form, clip, effect, entry, presets):
         """A starting-point menu that writes real, later-editable parameter values.

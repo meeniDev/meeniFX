@@ -13,15 +13,24 @@ from .effects.builtins import AsciiEffect, BlobTrackerEffect, FaceTrackerEffect,
 from .effects.blur import (BoxBlurEffect, DirectionalBlurEffect, GaussianBlurEffect,
                            MotionBlurEffect, RadialBlurEffect, ZoomBlurEffect)
 from .effects.color import ColorCorrectEffect
+from .effects.color_extra import (ColorWheelsEffect, CurvesEffect, HueSaturationEffect,
+                                  LevelsEffect, TintEffect, TritoneEffect)
+from .effects.distort_extra import (DisplacementMapEffect, LensDistortionEffect,
+                                    TurbulentDisplaceEffect)
 from .effects.glitch import (BulgePinchEffect, ChromaticAberrationEffect, GlitchEffect,
                              KaleidoscopeEffect, TwirlEffect, WaveWarpEffect)
 from .effects.chroma import ChromaKeyEffect
 from .effects.glow import GlowEffect
+from .effects.glow_extra import (DirectionalGlowEffect, LightWrapEffect, MultiGlowEffect,
+                                 NeonGlowEffect, SoftBloomEffect)
+from .effects.generate import (CheckerboardEffect, FractalNoiseEffect, GradientRampEffect,
+                               GridEffect)
 from .effects.light import (BloomStreaksEffect, ExposureFlickerEffect, FlashEffect,
                             LightLeakEffect)
 from .effects.looks import LookEffect
 from .effects.lut import LutEffect
 from .effects.matte import SimpleChokerEffect
+from .effects.matte_extra import MatteChokerEffect
 from .effects.roto_brush import RotoBrushEffect
 from .effects.smart_key import SmartKeyEffect
 from .effects.stylize import (DuotoneEffect, EdgeOutlineEffect, FilmGrainEffect, HalftoneEffect,
@@ -65,7 +74,13 @@ class EditorEngine:
                     EdgeOutlineEffect, DuotoneEffect, InvertEffect, VignetteEffect,
                     FlashEffect, ExposureFlickerEffect, LightLeakEffect, BloomStreaksEffect,
                     PosterizeTimeEffect, StutterEffect, EchoEffect, LutEffect, LookEffect,
-                    SimpleChokerEffect, SmartKeyEffect, RotoBrushEffect) + AUDIO_EFFECTS
+                    SimpleChokerEffect, SmartKeyEffect, RotoBrushEffect,
+                    MultiGlowEffect, NeonGlowEffect, SoftBloomEffect, LightWrapEffect,
+                    DirectionalGlowEffect, CurvesEffect, HueSaturationEffect, TintEffect,
+                    TritoneEffect, LevelsEffect, ColorWheelsEffect,
+                    TurbulentDisplaceEffect, DisplacementMapEffect, LensDistortionEffect,
+                    GradientRampEffect, FractalNoiseEffect, CheckerboardEffect, GridEffect,
+                    MatteChokerEffect) + AUDIO_EFFECTS
 
     def __init__(self, fps=30):
         self.timeline = Timeline(fps=fps)

@@ -14,7 +14,7 @@ from meenifx.effects.tracking_viz import Detection
 
 # Effects whose subject is transparency: they need a source with an alpha edge, so the audit
 # feeds them a matted version of the synthetic frame instead of the fully opaque one.
-ALPHA_SOURCE_EFFECTS = {"simple_choker"}
+ALPHA_SOURCE_EFFECTS = {"simple_choker", "matte_choker", "light_wrap"}
 
 # Smart Key is an automatic learned segmenter. The synthetic audit runs with the optional
 # model disabled, so its parameters cannot change the picture there; the real model path
@@ -78,7 +78,10 @@ CHOICE_CASES = _specs("choice")
 # tests/test_effects_extended.py instead (hue turns the colour wheel, angle turns the
 # smear).
 SYMMETRIC_EXTREMES = {("color_correct", "hue"), ("directional_blur", "angle"),
-                      ("motion_blur", "angle"),
+                      ("motion_blur", "angle"), ("directional_glow", "angle"),
+                      ("hue_saturation", "hue"), ("hue_saturation", "colorize_hue"),
+                      ("turbulent_displace", "angle"), ("gradient_ramp", "angle"),
+                      ("grid", "angle"),
                       # A duotone tint at -180° and +180° is the same hue; the tint
                       # wheel is covered directionally in tests/test_effects_new.py.
                       ("duotone", "shadow_hue"), ("duotone", "highlight_hue")}
@@ -91,6 +94,7 @@ SYMMETRIC_EXTREMES = {("color_correct", "hue"), ("directional_blur", "angle"),
 # frame cannot show them, so they are tested across frames in tests/test_effects_new.py.
 TEMPORAL_CASES = {
     ("wave_warp", "speed"), ("exposure_flicker", "speed"),
+    ("turbulent_displace", "speed"), ("fractal_noise", "speed"),
     ("flash", "duration"), ("flash", "interval"), ("flash", "envelope"),
     ("posterize_time", "fps"), ("posterize_time", "offset"),
     ("stutter", "interval"), ("stutter", "hold"), ("stutter", "offset"),
@@ -159,10 +163,15 @@ CONTEXT_SWITCHES = {("gaussian_blur", "keep_edges"), ("motion_blur", "follow_mot
                     # compares the rendered labels directly.
                     ("face_tracker", "label_size"), ("hand_tracker", "label_size"),
                     ("blob_tracker", "label_background_opacity"),
-                    ("blob_tracker", "label_radius"),
-                    ("face_tracker", "id_match_distance"),
-                    ("hand_tracker", "id_match_distance"),
-                    ("blob_tracker", "id_match_distance")}
+                    ("blob_tracker", "label_radius"),    ("face_tracker", "id_match_distance"),
+    ("hand_tracker", "id_match_distance"),
+    ("blob_tracker", "id_match_distance"),
+    # These controls require a non-default context or an alpha edge.
+    ("curves", "preserve_luma"), ("curves", "strength"),
+    ("hue_saturation", "preserve_luma"),
+    ("hue_saturation", "colorize_saturation"),
+    ("matte_choker", "close_holes"), ("light_wrap", "quality"),
+    ("gradient_ramp", "center_y"), ("displacement_map", "map_source")}
 
 
 def roto_frame(width=320, height=180):
