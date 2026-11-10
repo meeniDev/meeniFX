@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from conftest import build_engine, frame_diff, render, synthetic_frame
+from meenifx.effects.tracking_viz import Detection
 
 # Effects whose subject is transparency: they need a source with an alpha edge, so the audit
 # feeds them a matted version of the synthetic frame instead of the fully opaque one.
@@ -26,6 +27,9 @@ MODEL_ONLY_EFFECTS = {"smart_key"}
 # tests/test_tracking_advanced.py.
 HAND_LANDMARK_PARAMS = {"hand_confidence", "show_skeleton", "point_size", "line_width",
                         "skeleton_color"}
+# Detection ranges need real hands; the synthetic audit frame has none.  These are
+# covered against the licensed two-hand fixture in test_hand_landmarks_real.py.
+HAND_DETECTION_PARAMS = {"max_hands", "min_area", "max_area", "hand_confidence"}
 
 
 EFFECT_KEYS = ("mosaic", "ascii", "face_tracker", "hand_tracker", "blob_tracker")
@@ -208,6 +212,32 @@ def _engine_for(effect_id, monkeypatch):
         runtime = engine.runtime_effects["face_tracker"]
         monkeypatch.setattr(runtime, "detect_faces",
                             lambda frame: [(40, 30, 60, 60), (200, 110, 90, 90)])
+    if effect_id == "hand_tracker":
+        # Synthetic frames have no hands.  Stub landmark boxes so the detection ranges
+        # still change the picture; real model inference is covered by
+        # tests/test_hand_landmarks_real.py.
+        runtime = engine.runtime_effects["hand_tracker"]
+
+        def landmarks(_frame):
+            count = 1 if int(runtime.hand_confidence.get()) >= 50 else 2
+            count = min(count, max(1, int(runtime.max_hands.get())))
+            boxes = [(40, 30, 60, 60), (200, 110, 90, 90)][:count]
+            found = []
+            for index, (x, y, width, height) in enumerate(boxes):
+                if not (int(runtime.min_area.get()) <= width * height
+                        <= int(runtime.max_area.get())):
+                    continue
+                points = [(x + width * (joint % 5) / 4, y + height * (joint // 5) / 4)
+                          for joint in range(21)]
+                found.append(Detection(box=(x, y, width, height), points=points,
+                                       track_id=index + 1,
+                                       extra={"side": "Left" if index == 0 else "Right"}))
+            return found
+
+        # Prevent the real landmarker from ever being created in this synthetic audit:
+        # MediaPipe's destructor can block if it is collected during a later allocation.
+        monkeypatch.setattr(runtime, "landmark_backend", lambda: object())
+        monkeypatch.setattr(runtime, "_detect_landmarks", landmarks)
     return engine, clip
 
 
@@ -284,6 +314,8 @@ def test_numeric_parameter_extremes_change_the_output(effect_id, spec, monkeypat
         pytest.skip("frame-rate parameter; covered by tests/test_effects_new.py")
     if (effect_id, spec.name) in GROUP_CARDS:
         pytest.skip("group card; covered by tests/test_looks.py")
+    if effect_id == "hand_tracker" and spec.name in HAND_DETECTION_PARAMS:
+        pytest.skip("needs real hand footage; covered by tests/test_hand_landmarks_real.py")
     engine, clip = _engine_for(effect_id, monkeypatch)
     reason = _missing_backend_reason(effect_id, spec.name, engine)
     if reason:

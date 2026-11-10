@@ -1,8 +1,8 @@
 """Advanced tracking: custom labels, connectors, tracked-region effects and upgrades.
 
 These drive the shared overlay directly and the real tracker effects.  The hand landmark
-test uses a fake provider: MediaPipe is not installed on this Python (3.14), so the model
-path cannot be exercised here and the skin-region fallback remains the runtime path.
+test here uses a fake provider to isolate coordinate mapping; real MediaPipe inference is
+covered separately by ``test_hand_landmarks_real.py``.
 """
 
 import os

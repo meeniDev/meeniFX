@@ -120,15 +120,16 @@ def test_quality_presets_reduce_only_the_working_resolution():
     assert sizes["fast"][1] < sizes["balanced"][1] < sizes["precise"][1]
 
 
-def test_hand_tracker_detects_skin_regions_but_not_grey():
+def test_hand_tracker_reports_unavailable_instead_of_using_skin_colour(monkeypatch):
     engine, _clip = build_engine(frame=synthetic_frame())
     effect = engine.runtime_effects["hand_tracker"]
     effect.param_scale = 1.0
+    monkeypatch.setattr(effect, "landmark_backend", lambda: None)
+    effect._landmark_error = "MediaPipe hand model not found"
     skinned = synthetic_frame()
-    found = effect._detect(skinned)
-    assert found, "the synthetic skin patches should be detected"
-    grey = np.full_like(skinned, 120)
-    assert effect._detect(grey) == []
+    assert np.array_equal(effect.apply(skinned), skinned)
+    assert "not found" in effect.landmark_status()
+    assert not hasattr(effect, "_detect"), "skin-colour fallback must stay removed"
 
 
 def test_a_face_checkbox_works_without_choosing_a_look(editor, qapp):

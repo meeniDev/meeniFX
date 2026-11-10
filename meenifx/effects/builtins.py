@@ -6,6 +6,7 @@ a lower quality the engine sets `param_scale`, and every such parameter is multi
 by it, so a 35% preview is the same picture as the export, only softer.
 """
 
+import logging
 import os
 from dataclasses import replace
 
@@ -43,6 +44,11 @@ BLOB_VIS_PARAMS = _tracker_vis_params("Blob")
 
 FACE_CASCADE_FILE = "haarcascade_frontalface_default.xml"
 FACE_MODEL_FILE = "face_detection_yunet_2023mar.onnx"
+
+# MediaPipe's ``HandLandmarker.__del__`` calls close() again and can block inside its
+# dispatcher if a wrapper is collected during a later allocation.  Closed wrappers are
+# retained here (their native handle is already freed) so that destructor never runs.
+_RETIRED_HAND_BACKENDS = []
 
 
 def face_cascade_paths():
@@ -548,31 +554,84 @@ class HandTrackerEffect(TrackerColorMixin, EffectBase):
         self._init_color_controls()
         self.show_contour = Value(True)
         self._hands = None
+        self._hands_key = None
         self._landmark_error = ""
+        self._reported_error = ""
+
+    @staticmethod
+    def model_path():
+        """Path to the official hand-landmarker ``.task`` model, or an empty string."""
+        override = os.environ.get("MEENIFX_HAND_MODEL", "").strip()
+        if override:
+            return override if os.path.isfile(override) else ""
+        candidate = os.path.join(ASSETS_DIR, "models", "hand_landmarker.task")
+        return candidate if os.path.isfile(candidate) else ""
+
+    def close(self):
+        """Release MediaPipe's native resources before Qt/pytest teardown.
+
+        ``HandLandmarker.__del__`` can block while pytest is collecting unraisable
+        exceptions, so callers close it explicitly instead of leaving it to GC.
+        """
+        hands, self._hands = self._hands, None
+        self._hands_key = None
+        if hands is not None and hasattr(hands, "close"):
+            try:
+                hands.close()
+            except Exception as exc:
+                logging.getLogger(__name__).warning("Hand Tracker close failed: %s", exc)
+            _RETIRED_HAND_BACKENDS.append(hands)
+
+    def landmark_status(self):
+        """Human-readable backend state; errors are never hidden behind a fallback."""
+        if self.landmark_backend() is not None:
+            return "MediaPipe hand landmarks ready"
+        return self._landmark_error or "MediaPipe hand landmarks unavailable"
 
     def landmark_backend(self):
-        """The optional MediaPipe Hands landmark model, or None when unavailable.
+        """The MediaPipe Tasks hand landmarker, or ``None`` with a recorded reason.
 
-        MediaPipe does not ship a wheel for every Python version; the effect therefore
-        falls back to the legacy skin-region detector instead of claiming landmark
-        accuracy it cannot deliver.  ``_landmark_error`` keeps the reason for the log.
+        MediaPipe 1.x exposes the Tasks API (``HandLandmarker``) rather than the
+        legacy ``mp.solutions.hands`` API.  It also ships no model, so a missing
+        model is an explicit unavailable state: this effect never substitutes
+        skin-colour regions for landmark detections.
         """
-        if self._hands is not None:
+        model = self.model_path()
+        key = (model, max(1, int(self.max_hands.get())),
+               max(0.05, min(0.99, int(self.hand_confidence.get()) / 100.0)))
+        if self._hands is not None and (self._hands_key == key or self._hands_key is None):
             return self._hands
-        if self._landmark_error:
+        if self._hands is not None and hasattr(self._hands, "close"):
+            try:
+                self._hands.close()
+            except Exception:
+                pass
+            self._hands = None
+        if not model:
+            self._landmark_error = (
+                "MediaPipe hand model not found. Run 'python tools/fetch_hand_model.py' "
+                "or set MEENIFX_HAND_MODEL to hand_landmarker.task.")
             return None
         try:
             import mediapipe as mp
-        except Exception as exc:  # ImportError on unsupported runtimes
-            self._landmark_error = str(exc)
+            from mediapipe.tasks import python as mp_python
+            from mediapipe.tasks.python import vision
+        except Exception as exc:  # ImportError on runtimes without the backend
+            self._landmark_error = f"MediaPipe is not installed: {exc}"
             return None
         try:
-            self._hands = mp.solutions.hands.Hands(
-                static_image_mode=True,
-                max_num_hands=max(1, int(self.max_hands.get())),
-                min_detection_confidence=max(0.05, min(0.99, int(self.hand_confidence.get()) / 100.0)))
+            options = vision.HandLandmarkerOptions(
+                base_options=mp_python.BaseOptions(model_asset_path=model),
+                running_mode=vision.RunningMode.IMAGE,
+                num_hands=key[1],
+                min_hand_detection_confidence=key[2],
+                min_hand_presence_confidence=key[2],
+                min_tracking_confidence=key[2])
+            self._hands = vision.HandLandmarker.create_from_options(options)
+            self._hands_key = key
+            self._landmark_error = ""
         except Exception as exc:
-            self._landmark_error = str(exc)
+            self._landmark_error = f"MediaPipe hand model failed to load: {exc}"
             return None
         return self._hands
 
@@ -582,24 +641,32 @@ class HandTrackerEffect(TrackerColorMixin, EffectBase):
             return None
         work, factor = self._detection_scale(output, 480, 720)
         rgb = cv2.cvtColor(work, cv2.COLOR_BGR2RGB)
-        results = backend.process(rgb)
-        hands = getattr(results, "multi_hand_landmarks", None) or []
-        handedness = getattr(results, "multi_handedness", None) or []
+        if hasattr(backend, "detect"):
+            import mediapipe as mp
+            results = backend.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
+            hands = getattr(results, "hand_landmarks", None) or []
+            handedness = getattr(results, "handedness", None) or []
+        else:  # test doubles and older callers
+            results = backend.process(rgb)
+            hands = getattr(results, "multi_hand_landmarks", None) or []
+            handedness = getattr(results, "multi_handedness", None) or []
         detections = []
         for index, landmarks in enumerate(hands[:max(1, int(self.max_hands.get()))]):
             points = [(float(point.x) * work.shape[1] / factor,
                        float(point.y) * work.shape[0] / factor)
-                      for point in getattr(landmarks, "landmark", ())]
+                      for point in getattr(landmarks, "landmark", landmarks)]
             if len(points) < 21:
                 continue
             xs = [point[0] for point in points]
             ys = [point[1] for point in points]
             side, score = "", 1.0
             if index < len(handedness):
-                classes = getattr(handedness[index], "classification", None) or []
+                classes = getattr(handedness[index], "classification", None) or handedness[index]
                 if classes:
-                    side = str(getattr(classes[0], "label", "") or "")
-                    score = float(getattr(classes[0], "score", 1.0) or 1.0)
+                    category = classes[0]
+                    side = str(getattr(category, "label", "")
+                               or getattr(category, "category_name", "") or "")
+                    score = float(getattr(category, "score", 1.0) or 1.0)
             contour = cv2.convexHull(np.round(np.asarray(points, np.float32)).astype(np.int32))
             detections.append(Detection(
                 box=(min(xs), min(ys), max(2.0, max(xs) - min(xs)),
@@ -608,45 +675,18 @@ class HandTrackerEffect(TrackerColorMixin, EffectBase):
                 extra={"side": side or ("Left" if index == 0 else "Right")}))
         return detections
 
-    def _detect(self, output):
-        work, factor = self._detection_scale(output, 480, 720)
-        ycrcb = cv2.cvtColor(work, cv2.COLOR_BGR2YCrCb)
-        mask = cv2.inRange(ycrcb, (0, 133, 77), (255, 173, 127))
-        kernel = np.ones((5, 5), np.uint8)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        contours = sorted(contours, key=cv2.contourArea, reverse=True)
-
-        min_area = max(1, self.area(self.min_area.get())) * factor * factor
-        max_area = max(min_area, self.area(self.max_area.get()) * factor * factor)
-        limit = max(1, int(self.max_hands.get()))
-        detections = []
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if area < min_area or area > max_area:
-                continue
-            hull = cv2.convexHull(contour)
-            if hull is None or len(hull) < 3:
-                continue
-            scaled = (hull.astype(np.float32) / factor).round().astype(np.int32)
-            detections.append(Detection(box=cv2.boundingRect(scaled), contour=scaled,
-                                        track_id=len(detections) + 1))
-            if len(detections) >= limit:
-                break
-        return detections
-
     def apply(self, frame):
         output = frame.copy()
         signature = (str(self.tracking_quality.get()), int(self.min_area.get()),
                      int(self.max_area.get()), int(self.max_hands.get()))
-        if self.landmark_backend() is not None:
-            detections = self._cached_detections(
-                output, signature + ("landmarks", int(self.hand_confidence.get())),
-                lambda: self._detect_landmarks(output))
-        else:
-            detections = self._cached_detections(
-                output, signature, lambda: self._detect(output))
+        if self.landmark_backend() is None:
+            if self._landmark_error != self._reported_error:
+                self._reported_error = self._landmark_error
+                logging.getLogger(__name__).warning("Hand Tracker: %s", self._landmark_error)
+            return output
+        detections = self._cached_detections(
+            output, signature + ("landmarks", int(self.hand_confidence.get())),
+            lambda: self._detect_landmarks(output))
         if not detections:
             return output
         output = self.apply_tracked_regions(output, detections)

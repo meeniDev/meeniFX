@@ -49,3 +49,6 @@ snap_glow_probe.png
 graph_editor_preview.png
 *.tmp
 *.part
+
+# MediaPipe hand-landmarker weights (fetch with tools/fetch_hand_model.py)
+assets/models/*.task
