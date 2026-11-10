@@ -2428,6 +2428,12 @@ class TimelineSession:
                 path = PATHS_set_key(path, 0, path)
                 path = PATHS_set_key(path, max(0, int(frame) - clip.timeline_start), path)
                 mask["path"] = path
+            # The session works in project pixels; a layer-space mask stores them before
+            # the clip transform, so convert once here for the base path and its keys.
+            local = (max(0, int(frame) - int(clip.timeline_start)) if frame is not None
+                     else max(0, int(self.playhead) - int(clip.timeline_start)))
+            mask["path"] = MASK.stored_path(clip, mask, mask.get("path") or {}, local,
+                                            getattr(self, "project_size", None))
             holder["mask"] = mask
 
         def PATHS_set_key(path, at, value):
@@ -2487,13 +2493,38 @@ class TimelineSession:
             mask = MASK.find(clip, mask_id) if clip is not None else None
             if mask is None:
                 return
-            MASK.set_path(mask, path, frame=frame)
+            local = (int(frame) if frame is not None
+                     else max(0, int(self.playhead) - int(getattr(clip, "timeline_start", 0))))
+            stored = MASK.stored_path(clip, mask, path, local,
+                                      getattr(self, "project_size", None))
+            MASK.set_path(mask, stored, frame=frame)
             holder["changed"] = True
 
         self.stack.run("Edit mask path", action)
         if holder["changed"]:
             self.active_mask = (int(clip_id), int(mask_id))
             self.status.emit("Mask path updated")
+        return holder["changed"]
+
+    def set_clip_mask_space(self, clip_id, mask_id, space):
+        """Switch a mask between layer and composition space, keeping its look now."""
+        from . import mask as MASK
+        holder = {"changed": False}
+
+        def action():
+            clip = self._find_clip(clip_id)
+            mask = MASK.find(clip, mask_id) if clip is not None else None
+            if mask is None:
+                return
+            local = max(0, int(self.playhead) - int(getattr(clip, "timeline_start", 0)))
+            holder["changed"] = MASK.set_space(clip, mask, space, local,
+                                               getattr(self, "project_size", None))
+
+        self.stack.run("Mask coordinate space", action)
+        if holder["changed"]:
+            self.active_mask = (int(clip_id), int(mask_id))
+            self.status.emit("Mask space changed")
+            self.changed.emit()
         return holder["changed"]
 
     def duplicate_clip_mask(self, clip_id, mask_id):

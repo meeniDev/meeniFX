@@ -1543,6 +1543,8 @@ class EffectsPanel(QWidget):
                 lambda field=stops, c=clip: self._set_shape_gradient_stops(c, field.text()))
             form.addWidget(self._labelled("Stops", stops,
                                           "Position and colour pairs, separated by semicolons"))
+            for index, _stop in enumerate(settings.get("gradient_stops") or []):
+                form.addWidget(self._gradient_stop_row(clip, index, frame))
             for name in ("gradient_angle", "gradient_scale", "gradient_offset"):
                 self._channel_row(form, clip, SHAPE.shape_channel(name))
 
@@ -1647,6 +1649,82 @@ class EffectsPanel(QWidget):
         layout.addWidget(key)
         self._rows.append({"kind": "shape_color", "clip_id": clip.id, "name": name,
                            "button": button, "key": key})
+
+    def _gradient_stop_row(self, clip, index, frame):
+        """One compact stop row: colour, its key, position, its key."""
+        holder = QWidget()
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(tokens.SP1)
+        button = _swatch_button(SHAPE.stop_value_at(clip, index, "color", frame),
+                                "Stop colour; the alpha channel is supported")
+        button.clicked.connect(lambda _=False, c=clip, i=index: self._pick_stop_color(c, i))
+        color_key = _tool("key", "Key this stop's colour at the playhead", checkable=True)
+        color_key.setChecked(SHAPE.stop_has_key(clip, index, "color", frame))
+        color_key.clicked.connect(lambda _=False, c=clip, i=index:
+                                  self._toggle_stop_key(c, i, "color"))
+        position = ScrubField("", float(SHAPE.stop_value_at(clip, index, "position", frame)),
+                              0.0, 100.0, default=0.0, step=1.0, unit="%", decimals=0,
+                              label_width=LABEL_W,
+                              tooltip="Where this stop sits along the gradient")
+        position.committed.connect(lambda value, c=clip, i=index:
+                                   self._set_stop_position(c, i, value))
+        position_key = _tool("key", "Key this stop's position at the playhead",
+                             checkable=True)
+        position_key.setChecked(SHAPE.stop_has_key(clip, index, "position", frame))
+        position_key.clicked.connect(lambda _=False, c=clip, i=index:
+                                     self._toggle_stop_key(c, i, "position"))
+        row.addWidget(button)
+        row.addWidget(color_key)
+        row.addWidget(position, 1)
+        row.addWidget(position_key)
+        self._rows.append({"kind": "shape_stop", "clip_id": clip.id, "index": index,
+                           "button": button, "color_key": color_key,
+                           "position": position, "position_key": position_key})
+        return self._labelled(f"Stop {index + 1}", holder,
+                              "Colour, position and their keyframes")
+
+    def _pick_stop_color(self, clip, index):
+        frame = self._clip_frame(clip)
+        chosen = QColorDialog.getColor(QColor(SHAPE.stop_value_at(clip, index, "color", frame)),
+                                       self,
+                                       f"Gradient stop {index + 1}",
+                                       QColorDialog.ColorDialogOption.ShowAlphaChannel)
+        if not chosen.isValid():
+            return
+        value = chosen.name(QColor.NameFormat.HexArgb)
+        auto = bool(self.engine.session.auto_keyframe.get())
+
+        def action():
+            target = self.engine.timeline.find_clip(clip.id)
+            if target is not None:
+                SHAPE.stop_set_value(target, index, "color", value, frame, auto)
+        self.engine.session.stack.run("Gradient stop colour", action)
+        self._notify()
+        self.refresh_properties()
+
+    def _set_stop_position(self, clip, index, value):
+        frame = self._clip_frame(clip)
+        auto = bool(self.engine.session.auto_keyframe.get())
+
+        def action():
+            target = self.engine.timeline.find_clip(clip.id)
+            if target is not None:
+                SHAPE.stop_set_value(target, index, "position", float(value), frame, auto)
+        self.engine.session.stack.run("Gradient stop position", action)
+        self._notify()
+        self.refresh_properties()
+
+    def _toggle_stop_key(self, clip, index, field):
+        frame = self._clip_frame(clip)
+
+        def action():
+            target = self.engine.timeline.find_clip(clip.id)
+            if target is not None:
+                SHAPE.stop_toggle_key(target, index, field, frame)
+        self.engine.session.stack.run("Gradient stop keyframe", action)
+        self._notify()
+        self.refresh_properties()
 
     def _pick_shape_color(self, clip, name):
         frame = self._clip_frame(clip)
@@ -3541,6 +3619,16 @@ class EffectsPanel(QWidget):
                 row["key"].blockSignals(True)
                 row["key"].setChecked(SHAPE.has_color_key(clip, row["name"], local))
                 row["key"].blockSignals(False)
+            elif kind == "shape_stop":
+                set_swatch(row["button"],
+                           SHAPE.stop_value_at(clip, row["index"], "color", local))
+                for field, key in (("color", row["color_key"]),
+                                   ("position", row["position_key"])):
+                    key.blockSignals(True)
+                    key.setChecked(SHAPE.stop_has_key(clip, row["index"], field, local))
+                    key.blockSignals(False)
+                row["position"].set_value(
+                    SHAPE.stop_value_at(clip, row["index"], "position", local))
             elif kind == "channel":
                 animated = CH.is_animated(clip, row["channel"])
                 row["stopwatch"].blockSignals(True)

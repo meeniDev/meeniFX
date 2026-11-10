@@ -17,6 +17,7 @@ from ..config import ASSETS_DIR
 from ..constants import DEFAULT_UNICODE_CHARSET
 from ..model.values import Value
 from ..processing.mosaic import frame_pixel, mosaic_frame
+from . import tracking_regions as REGIONS
 from .base import EffectBase, ParamSpec, TrackerColorMixin
 from .tracking_viz import Detection
 
@@ -231,6 +232,30 @@ class FaceTrackerEffect(TrackerColorMixin, EffectBase):
         ParamSpec("blur_feather", "Blur feather", "int", 0, 80, 10, unit=" px", pixels=True,
                   help="Soften the blur edge so it does not leave a hard rectangle",
                   group="Face Effects"),
+        ParamSpec("blur_mode", "Blur style", "choice",
+                  choices=("gaussian", "box", "pixelate", "mosaic"),
+                  choice_labels=("Gaussian blur", "Box blur", "Pixelate", "Mosaic"),
+                  default="gaussian", help="How the detected face is obscured",
+                  group="Face Effects"),
+        ParamSpec("face_smoothing", "Track smoothing", "int", 0, 95, 30, unit=" %",
+                  help="Average face boxes over time to reduce jitter",
+                  group="Face Effects"),
+        ParamSpec("custom_effects", "Custom effect stack", "text", default="",
+                  help="Extra effects inside each face, for example blur:60, pixelate:40",
+                  group="Face Effects"),
+        ParamSpec("sprite_path", "Sprite image", "text", default="",
+                  help="PNG or other image attached to each face (alpha is preserved)",
+                  group="Face Effects"),
+        ParamSpec("sprite_scale", "Sprite size", "int", 5, 300, 70, unit=" %",
+                  group="Face Effects"),
+        ParamSpec("sprite_offset_x", "Sprite X", "int", -600, 600, 0, unit=" px",
+                  pixels=True, group="Face Effects"),
+        ParamSpec("sprite_offset_y", "Sprite Y", "int", -600, 600, 0, unit=" px",
+                  pixels=True, group="Face Effects"),
+        ParamSpec("sprite_rotation", "Sprite rotation", "int", -180, 180, 0, unit="\u00b0",
+                  group="Face Effects"),
+        ParamSpec("sprite_opacity", "Sprite opacity", "int", 0, 100, 100, unit=" %",
+                  group="Face Effects"),
     ) + TrackerColorMixin.COLOR_PARAMS + FACE_VIS_PARAMS
 
     def __init__(self, app):
@@ -241,6 +266,17 @@ class FaceTrackerEffect(TrackerColorMixin, EffectBase):
         self.blur_faces = Value(False)
         self.blur_amount = Value(35)
         self.blur_feather = Value(10)
+        self.blur_mode = Value("gaussian")
+        self.face_smoothing = Value(30)
+        self.custom_effects = Value("")
+        self.sprite_path = Value("")
+        self.sprite_scale = Value(70)
+        self.sprite_offset_x = Value(0)
+        self.sprite_offset_y = Value(0)
+        self.sprite_rotation = Value(0)
+        self.sprite_opacity = Value(100)
+        self._face_smooth = {}
+        self._sprite_cache = {}
         self._init_color_controls()
         self._backend = "none"
         self._cascade = None
@@ -310,6 +346,25 @@ class FaceTrackerEffect(TrackerColorMixin, EffectBase):
             return [tuple(int(round(v / factor)) for v in box) for box in boxes]
         return []
 
+    def _smooth_faces(self, faces):
+        """Temporal box smoothing; 0 passes detections straight through."""
+        amount = max(0, min(95, int(self.face_smoothing.get()))) / 100.0
+        if amount <= 0.0:
+            self._face_smooth.clear()
+            return [tuple(int(round(float(value))) for value in box) for box in faces]
+        smoothed = []
+        for index, box in enumerate(faces):
+            previous = self._face_smooth.get(index)
+            value = [float(component) for component in box]
+            if previous is not None and len(previous) == 4:
+                value = [previous[axis] * amount + value[axis] * (1.0 - amount)
+                         for axis in range(4)]
+            self._face_smooth[index] = value
+            smoothed.append(tuple(int(round(component)) for component in value))
+        for key in [key for key in self._face_smooth if key >= len(smoothed)]:
+            del self._face_smooth[key]
+        return smoothed
+
     def _blur_face(self, output, box):
         x, y, w, h = [int(value) for value in box]
         x, y = max(0, x), max(0, y)
@@ -320,8 +375,20 @@ class FaceTrackerEffect(TrackerColorMixin, EffectBase):
         if not roi.size:
             return
         strength = max(5, min(100, int(self.blur_amount.get()))) / 100.0
+        mode = str(self.blur_mode.get() or "gaussian").lower()
         k = max(3, int(round(min(w, h) * strength)) | 1)
-        blurred = cv2.GaussianBlur(roi, (k, k), 0)
+        if mode == "box":
+            blurred = cv2.blur(roi, (k, k))
+        elif mode in ("pixelate", "mosaic"):
+            divisor = 7.0 if mode == "pixelate" else 4.0
+            block = max(2, int(round(min(w, h) * strength / divisor)))
+            small = cv2.resize(roi, (max(1, w // block), max(1, h // block)),
+                               interpolation=cv2.INTER_AREA)
+            blurred = cv2.resize(small, (w, h), interpolation=cv2.INTER_NEAREST)
+            if mode == "mosaic":
+                blurred = (blurred // 32 * 32).astype(np.uint8)
+        else:
+            blurred = cv2.GaussianBlur(roi, (k, k), 0)
         feather = max(0, self.px(self.blur_feather.get()))
         if feather <= 1:
             output[y:y + h, x:x + w] = blurred
@@ -332,6 +399,66 @@ class FaceTrackerEffect(TrackerColorMixin, EffectBase):
         mask = cv2.GaussianBlur(mask, (0, 0), max(0.5, feather / 2.0))
         alpha = mask.astype(np.float32)[:, :, None] / 255.0
         output[y:y + h, x:x + w] = np.clip(blurred * alpha + roi * (1.0 - alpha), 0, 255).astype(np.uint8)
+
+    def _sprite(self):
+        """The attached image, cached by path and modification time."""
+        path = str(self.sprite_path.get() or "").strip()
+        if not path or not os.path.isfile(path):
+            return None
+        try:
+            stamp = os.path.getmtime(path)
+        except OSError:
+            return None
+        cached = self._sprite_cache.get(path)
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
+        image = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+        if image is None:
+            return None
+        if image.ndim == 2:
+            image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGRA)
+        elif image.shape[2] == 3:
+            image = np.dstack([image, np.full(image.shape[:2], 255, np.uint8)])
+        self._sprite_cache[path] = (stamp, image)
+        return image
+
+    def _draw_sprite(self, output, box):
+        sprite = self._sprite()
+        if sprite is None:
+            return
+        scale = max(0.05, float(self.sprite_scale.get()) / 100.0)
+        face_w = max(1, int(round(box[2])))
+        width = max(1, int(round(face_w * scale)))
+        height = max(1, int(round(sprite.shape[0] * width / max(1, sprite.shape[1]))))
+        image = cv2.resize(sprite, (width, height), interpolation=cv2.INTER_AREA)
+        angle = float(self.sprite_rotation.get())
+        if abs(angle) > 0.1:
+            matrix = cv2.getRotationMatrix2D((width / 2.0, height / 2.0), angle, 1.0)
+            cos, sin = abs(matrix[0, 0]), abs(matrix[0, 1])
+            new_w = int(round(height * sin + width * cos))
+            new_h = int(round(height * cos + width * sin))
+            matrix[0, 2] += new_w / 2.0 - width / 2.0
+            matrix[1, 2] += new_h / 2.0 - height / 2.0
+            image = cv2.warpAffine(image, matrix, (new_w, new_h), flags=cv2.INTER_LINEAR,
+                                   borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+            width, height = new_w, new_h
+        centre_x = box[0] + box[2] / 2.0 + int(self.px(self.sprite_offset_x.get()))
+        centre_y = box[1] + box[3] / 2.0 + int(self.px(self.sprite_offset_y.get()))
+        left = int(round(centre_x - width / 2.0))
+        top = int(round(centre_y - height / 2.0))
+        x0, y0 = max(0, left), max(0, top)
+        x1 = min(output.shape[1], left + width)
+        y1 = min(output.shape[0], top + height)
+        if x1 <= x0 or y1 <= y0:
+            return
+        patch = image[y0 - top:y1 - top, x0 - left:x1 - left]
+        if patch.size == 0:
+            return
+        alpha = patch[:, :, 3].astype(np.float32)[:, :, None] / 255.0
+        alpha *= max(0.0, min(1.0, float(self.sprite_opacity.get()) / 100.0))
+        region = output[y0:y1, x0:x1]
+        output[y0:y1, x0:x1] = (patch[:, :, :3].astype(np.float32) * alpha
+                                + region.astype(np.float32) * (1.0 - alpha)).astype(np.uint8)
 
     def apply(self, frame):
         if self._backend == "none":
@@ -347,12 +474,27 @@ class FaceTrackerEffect(TrackerColorMixin, EffectBase):
         faces = [box for box in faces if box[2] >= min_size and box[3] >= min_size]
         if not faces:
             return output
+        faces = self._smooth_faces(faces)
 
         if self.blur_faces.get():
             for box in faces:
                 self._blur_face(output, box)
-        detections = [Detection(box=box, track_id=index + 1)
+        detections = [Detection(box=box, confidence=1.0, track_id=index + 1)
                       for index, box in enumerate(faces)]
+        output = self.apply_tracked_regions(output, detections)
+        stack = REGIONS.parse_stack(self.custom_effects.get())
+        if stack:
+            for detection in detections:
+                expand = self.px(self.region_expand.get())
+                if self.region_expand.get() < 0:
+                    expand = -self.px(-self.region_expand.get())
+                mask = REGIONS.region_mask(output.shape, detection.box, detection.contour,
+                                           expand=expand,
+                                           feather=self.px(self.blur_feather.get()))
+                output = REGIONS.apply_stack(output, mask, stack,
+                                             scale=max(0.2, self.param_scale))
+        for detection in detections:
+            self._draw_sprite(output, detection.box)
         return self.draw_tracking(output, detections, label="Face")
 
 
@@ -373,7 +515,24 @@ class HandTrackerEffect(TrackerColorMixin, EffectBase):
                   group="Detection"),
         ParamSpec("thickness", "Line thickness", "int", 1, 12, 2, unit=" px", pixels=True,
                   group="Visualization"),
+        ParamSpec("hand_confidence", "Hand confidence", "int", 1, 99, 50, unit=" %",
+                  help="Minimum landmark-model confidence for a hand", group="Detection"),
+        ParamSpec("show_skeleton", "Skeleton", "bool", default=True,
+                  help="Draw the 21-landmark skeletal connections", group="Visualization"),
+        ParamSpec("point_size", "Joint size", "int", 1, 20, 4, unit=" px", pixels=True,
+                  group="Visualization"),
+        ParamSpec("line_width", "Skeleton width", "int", 1, 12, 3, unit=" px", pixels=True,
+                  group="Visualization"),
+        ParamSpec("skeleton_color", "Skeleton colour", "text", default="#00FFFF",
+                  help="Skeletal connections; empty uses each hand's colour",
+                  group="Visualization"),
     ) + TrackerColorMixin.COLOR_PARAMS + HAND_VIS_PARAMS
+
+    # MediaPipe's 21-landmark hand topology (palm, thumb, index, middle, ring, pinky).
+    SKELETON_CONNECTIONS = ((0, 1), (1, 2), (2, 3), (3, 4), (0, 5), (5, 6), (6, 7),
+                            (7, 8), (5, 9), (9, 10), (10, 11), (11, 12), (9, 13),
+                            (13, 14), (14, 15), (15, 16), (13, 17), (17, 18), (18, 19),
+                            (19, 20), (0, 17))
 
     def __init__(self, app):
         super().__init__(app)
@@ -381,8 +540,73 @@ class HandTrackerEffect(TrackerColorMixin, EffectBase):
         self.min_area = Value(2500)
         self.max_area = Value(180000)
         self.thickness = Value(2)
+        self.hand_confidence = Value(50)
+        self.show_skeleton = Value(True)
+        self.point_size = Value(4)
+        self.line_width = Value(3)
+        self.skeleton_color = Value("#00FFFF")
         self._init_color_controls()
         self.show_contour = Value(True)
+        self._hands = None
+        self._landmark_error = ""
+
+    def landmark_backend(self):
+        """The optional MediaPipe Hands landmark model, or None when unavailable.
+
+        MediaPipe does not ship a wheel for every Python version; the effect therefore
+        falls back to the legacy skin-region detector instead of claiming landmark
+        accuracy it cannot deliver.  ``_landmark_error`` keeps the reason for the log.
+        """
+        if self._hands is not None:
+            return self._hands
+        if self._landmark_error:
+            return None
+        try:
+            import mediapipe as mp
+        except Exception as exc:  # ImportError on unsupported runtimes
+            self._landmark_error = str(exc)
+            return None
+        try:
+            self._hands = mp.solutions.hands.Hands(
+                static_image_mode=True,
+                max_num_hands=max(1, int(self.max_hands.get())),
+                min_detection_confidence=max(0.05, min(0.99, int(self.hand_confidence.get()) / 100.0)))
+        except Exception as exc:
+            self._landmark_error = str(exc)
+            return None
+        return self._hands
+
+    def _detect_landmarks(self, output):
+        backend = self.landmark_backend()
+        if backend is None:
+            return None
+        work, factor = self._detection_scale(output, 480, 720)
+        rgb = cv2.cvtColor(work, cv2.COLOR_BGR2RGB)
+        results = backend.process(rgb)
+        hands = getattr(results, "multi_hand_landmarks", None) or []
+        handedness = getattr(results, "multi_handedness", None) or []
+        detections = []
+        for index, landmarks in enumerate(hands[:max(1, int(self.max_hands.get()))]):
+            points = [(float(point.x) * work.shape[1] / factor,
+                       float(point.y) * work.shape[0] / factor)
+                      for point in getattr(landmarks, "landmark", ())]
+            if len(points) < 21:
+                continue
+            xs = [point[0] for point in points]
+            ys = [point[1] for point in points]
+            side, score = "", 1.0
+            if index < len(handedness):
+                classes = getattr(handedness[index], "classification", None) or []
+                if classes:
+                    side = str(getattr(classes[0], "label", "") or "")
+                    score = float(getattr(classes[0], "score", 1.0) or 1.0)
+            contour = cv2.convexHull(np.round(np.asarray(points, np.float32)).astype(np.int32))
+            detections.append(Detection(
+                box=(min(xs), min(ys), max(2.0, max(xs) - min(xs)),
+                     max(2.0, max(ys) - min(ys))),
+                contour=contour, points=points, confidence=score,
+                extra={"side": side or ("Left" if index == 0 else "Right")}))
+        return detections
 
     def _detect(self, output):
         work, factor = self._detection_scale(output, 480, 720)
@@ -416,9 +640,16 @@ class HandTrackerEffect(TrackerColorMixin, EffectBase):
         output = frame.copy()
         signature = (str(self.tracking_quality.get()), int(self.min_area.get()),
                      int(self.max_area.get()), int(self.max_hands.get()))
-        detections = self._cached_detections(output, signature, lambda: self._detect(output))
+        if self.landmark_backend() is not None:
+            detections = self._cached_detections(
+                output, signature + ("landmarks", int(self.hand_confidence.get())),
+                lambda: self._detect_landmarks(output))
+        else:
+            detections = self._cached_detections(
+                output, signature, lambda: self._detect(output))
         if not detections:
             return output
+        output = self.apply_tracked_regions(output, detections)
         return self.draw_tracking(output, detections, label="Hand")
 
 
@@ -487,4 +718,5 @@ class BlobTrackerEffect(TrackerColorMixin, EffectBase):
         detections = self._cached_detections(output, signature, lambda: self._detect(output))
         if not detections:
             return output
+        output = self.apply_tracked_regions(output, detections)
         return self.draw_tracking(output, detections, label="Blob")

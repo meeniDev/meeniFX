@@ -189,6 +189,9 @@ def stored(clip, channel):
     if kind == "shape":
         if not getattr(clip, "is_shape", False):
             return None
+        stop = SHAPE.parse_stop_channel(name)
+        if stop is not None:
+            return SHAPE.stop_value_at(clip, stop[0], stop[1], 0)
         if name in SHAPE.COLOR_FIELDS:
             return SHAPE.color_at(clip, name, 0)
         return SHAPE.stored(clip, name)
@@ -216,6 +219,9 @@ def value_at(clip, channel, frame):
     if kind == "shape":
         if not getattr(clip, "is_shape", False):
             return None
+        stop = SHAPE.parse_stop_channel(name)
+        if stop is not None:
+            return SHAPE.stop_value_at(clip, stop[0], stop[1], frame)
         if name in SHAPE.COLOR_FIELDS:
             return SHAPE.color_at(clip, name, frame)
         return SHAPE.value_at(clip, name, frame)
@@ -281,6 +287,9 @@ def is_animated(clip, channel):
     if kind == "shape":
         if not getattr(clip, "is_shape", False):
             return False
+        stop = SHAPE.parse_stop_channel(name)
+        if stop is not None:
+            return SHAPE.stop_is_animated(clip, stop[0], stop[1])
         if name in SHAPE.COLOR_FIELDS:
             return SHAPE.color_is_animated(clip, name)
         return SHAPE.is_animated(clip, name)
@@ -305,6 +314,9 @@ def set_value(clip, channel, value, frame=0, auto_key=False):
     if kind == "shape":
         if not getattr(clip, "is_shape", False):
             return False
+        stop = SHAPE.parse_stop_channel(name)
+        if stop is not None:
+            return SHAPE.stop_set_value(clip, stop[0], stop[1], value, frame, auto_key)
         if name in SHAPE.COLOR_FIELDS:
             return SHAPE.set_color(clip, name, value, frame, auto_key)
         return SHAPE.set_value(clip, name, value, frame, auto_key)
@@ -391,6 +403,11 @@ def animate(clip, channel, frame):
     if kind == "text":
         return TXT.animate(clip, name, frame)
     if kind == "shape":
+        stop = SHAPE.parse_stop_channel(name)
+        if stop is not None:
+            if not SHAPE.stop_key_times(clip, stop[0], stop[1]):
+                SHAPE.stop_toggle_key(clip, stop[0], stop[1], frame)
+            return SHAPE.stop_value_at(clip, stop[0], stop[1], frame)
         if name in SHAPE.COLOR_FIELDS:
             if SHAPE.color_is_animated(clip, name):
                 return SHAPE.color_at(clip, name, frame)
@@ -441,6 +458,10 @@ def unanimate(clip, channel, frame):
     if kind == "text":
         return TXT.unanimate(clip, name, frame)
     if kind == "shape":
+        stop = SHAPE.parse_stop_channel(name)
+        if stop is not None:
+            SHAPE.stop_clear_keys(clip, stop[0], stop[1], frame)
+            return
         if name in SHAPE.COLOR_FIELDS:
             colour = SHAPE.color_at(clip, name, frame)
             SHAPE.ensure_shape(clip)[name] = colour
@@ -470,6 +491,9 @@ def key_times(clip, channel):
             return TXT.content_keys(clip)
         return TXT.key_times(clip, name)
     if kind == "shape":
+        stop = SHAPE.parse_stop_channel(name)
+        if stop is not None:
+            return SHAPE.stop_key_times(clip, stop[0], stop[1])
         if name in SHAPE.COLOR_FIELDS:
             return SHAPE.color_keys(clip, name)
         return SHAPE.key_times(clip, name)
@@ -486,6 +510,9 @@ def has_key(clip, channel, frame):
             return TXT.has_content_key(clip, frame)
         return int(frame) in TXT.key_times(clip, name)
     if kind == "shape":
+        stop = SHAPE.parse_stop_channel(name)
+        if stop is not None:
+            return SHAPE.stop_has_key(clip, stop[0], stop[1], frame)
         if name in SHAPE.COLOR_FIELDS:
             return SHAPE.has_color_key(clip, name, frame)
         return int(frame) in SHAPE.key_times(clip, name)
@@ -507,6 +534,12 @@ def ensure_key(clip, channel, frame):
         if TXT.has_content_key(clip, frame):
             return False
         TXT.toggle_content_key(clip, frame)
+        return True
+    if kind == "shape" and SHAPE.parse_stop_channel(name) is not None:
+        index, field = SHAPE.parse_stop_channel(name)
+        if SHAPE.stop_has_key(clip, index, field, frame):
+            return False
+        SHAPE.stop_toggle_key(clip, index, field, frame)
         return True
     if kind == "shape" and name in SHAPE.COLOR_FIELDS:
         if SHAPE.has_color_key(clip, name, frame):
@@ -535,6 +568,9 @@ def remove_key(clip, channel, frame):
         return False
     if kind == "text" and name == TXT.CONTENT:
         return TXT.remove_content_key(clip, frame)
+    if kind == "shape" and SHAPE.parse_stop_channel(name) is not None:
+        index, field = SHAPE.parse_stop_channel(name)
+        return SHAPE.stop_remove_key(clip, index, field, frame)
     if kind == "shape" and name in SHAPE.COLOR_FIELDS:
         return SHAPE.remove_color_key(clip, name, frame)
     raw = stored(clip, channel)
@@ -556,6 +592,9 @@ def toggle_key(clip, channel, frame):
             return TXT.toggle_content_key(clip, frame)
         return TXT.toggle_key(clip, name, frame)
     if kind == "shape":
+        stop = SHAPE.parse_stop_channel(name)
+        if stop is not None:
+            return SHAPE.stop_toggle_key(clip, stop[0], stop[1], frame)
         if name in SHAPE.COLOR_FIELDS:
             return SHAPE.toggle_color_key(clip, name, frame)
         return SHAPE.toggle_key(clip, name, frame)
@@ -590,6 +629,9 @@ def set_key_time(clip, channel, old_time, new_time):
             return TXT.move_content_key(clip, old_time, new_time)
         return TXT.set_key_time(clip, name, old_time, new_time)
     if kind == "shape":
+        stop = SHAPE.parse_stop_channel(name)
+        if stop is not None:
+            return SHAPE.stop_move_key(clip, stop[0], stop[1], old_time, new_time)
         if name in SHAPE.COLOR_FIELDS:
             return SHAPE.move_color_key(clip, name, old_time, new_time)
         return SHAPE.set_key_time(clip, name, old_time, new_time)
@@ -651,6 +693,16 @@ def spec(clip, channel, resolver=None):
                 "step": step, "decimals": decimals, "group": "Text", "kind": "float",
                 "qty": span}
     if kind == "shape":
+        stop = SHAPE.parse_stop_channel(name)
+        if stop is not None:
+            index, field = stop
+            if field == "color":
+                return {"label": f"Gradient Stop {index + 1} Color", "unit": "",
+                        "minimum": 0, "maximum": 0, "step": 1, "decimals": 0,
+                        "group": "Shape", "kind": "color"}
+            return {"label": f"Gradient Stop {index + 1} Position", "unit": "%",
+                    "minimum": 0.0, "maximum": 100.0, "step": 1.0, "decimals": 0,
+                    "group": "Shape", "kind": "float", "qty": 100.0}
         if name in SHAPE.COLOR_FIELDS:
             label = "Fill Color" if name == "fill_color" else "Stroke Color"
             return {"label": label, "unit": "", "minimum": 0, "maximum": 0, "step": 1,
@@ -710,6 +762,17 @@ def list_channels(clip, resolver=None, include_static_effects=False):
             rows.append({**meta, "id": channel, "name": name,
                          "animated": SHAPE.is_animated(clip, name),
                          "value": SHAPE.value_at(clip, name, 0)})
+        if SHAPE.ensure_shape(clip).get("gradient_enabled"):
+            # Only animated stops get a row: a static three-stop gradient must not add
+            # six always-visible channels to the Keyframe Editor.
+            for index in SHAPE.stop_indexes(clip):
+                for field in ("position", "color"):
+                    if not SHAPE.stop_key_times(clip, index, field):
+                        continue
+                    channel = SHAPE.stop_channel(index, field)
+                    rows.append({**spec(clip, channel, resolver), "id": channel,
+                                 "name": f"stop{index}_{field}", "animated": True,
+                                 "value": SHAPE.stop_value_at(clip, index, field, 0)})
         for name in SHAPE.COLOR_FIELDS:
             if not SHAPE.color_keys(clip, name):
                 continue
@@ -798,6 +861,9 @@ def key_records(clip, channel):
     if kind == "text" and name == TXT.CONTENT:
         return [(int(time), TXT.content_at(clip, int(time)), "hold", None, None)
                 for time in TXT.content_keys(clip)]
+    if kind == "shape" and SHAPE.parse_stop_channel(name) is not None:
+        index, field = SHAPE.parse_stop_channel(name)
+        return SHAPE.stop_key_records(clip, index, field)
     if kind == "shape" and name in SHAPE.COLOR_FIELDS:
         return [(int(time), SHAPE.color_at(clip, name, int(time)), "hold", None, None)
                 for time in SHAPE.color_keys(clip, name)]
@@ -832,6 +898,10 @@ def replace_keys(clip, channel, records, base_value=None):
     if kind == "text" and name == TXT.CONTENT:
         data = TXT.ensure_text(clip)
         data["keys"] = {int(row[0]): str(row[1]) for row in ordered}
+        return
+    if kind == "shape" and SHAPE.parse_stop_channel(name) is not None:
+        index, field = SHAPE.parse_stop_channel(name)
+        SHAPE.stop_replace_keys(clip, index, field, ordered)
         return
     if kind == "shape" and name in SHAPE.COLOR_FIELDS:
         SHAPE.ensure_shape(clip)[name] = {"keys": {int(row[0]): str(row[1])

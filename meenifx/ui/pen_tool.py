@@ -57,8 +57,13 @@ class PenTool:
         frame = self.overlay.local_frame(clip)
         self.mode = "mask"
         self._editing = (int(clip_id), int(mask_id))
-        self.path = copy.deepcopy(PATHS.at(mask.get("path") or {}, frame))
-        self.selected = set(range(len(self.path.get("points") or ())))
+        # Edit in project pixels for both coordinate spaces: project_path() applies the
+        # clip transform for a layer-space mask, so a rotated/scaled clip stays intuitive.
+        self.path = copy.deepcopy(MASK.project_path(clip, mask, frame,
+                                                    self.overlay.project_size()))
+        # Start with no point selected: clicking one selects it (Shift adds), and a
+        # pre-selected set made the first click appear to do nothing.
+        self.selected = set()
         self._drag = None
         self.overlay.session.active_mask = (int(clip_id), int(mask_id))
         self.overlay.session.status.emit(
@@ -164,7 +169,9 @@ class PenTool:
                     self.selected.discard(index)
                 else:
                     self.selected.add(index)
-            else:
+            elif index not in self.selected:
+                # Pressing a point that is already part of a multi-selection keeps that
+                # selection, so several points can be dragged together with the mouse.
                 self.selected = {index}
             starts = {item: (points[item]["x"], points[item]["y"])
                       for item in self.selected}
@@ -290,7 +297,8 @@ class PenTool:
         if mask is None:
             return False
         frame = self.overlay.local_frame(clip)
-        self.path = copy.deepcopy(PATHS.at(mask.get("path") or {}, frame))
+        self.path = copy.deepcopy(MASK.project_path(clip, mask, frame,
+                                                    self.overlay.project_size()))
         self.selected = {index for index in self.selected
                          if index < len(self.path.get("points") or ())}
         self.overlay.widget.update()
@@ -451,7 +459,7 @@ class PenTool:
         frame = self.overlay.local_frame(clip)
         palette = (tokens.COLORS["accent"], tokens.COLORS["warning"],
                    tokens.COLORS["success"], tokens.COLORS["red"])
-        for index, mask in enumerate(MASK.at(clip, frame)):
+        for index, mask in enumerate(MASK.at(clip, frame, self.overlay.project_size())):
             if not mask.get("show_outline", True):
                 continue
             values = PATHS.sampled(mask.get("path") or {}, steps=20)

@@ -19,6 +19,7 @@ from PyQt6.QtCore import QEvent, QPointF, Qt  # noqa: E402
 from PyQt6.QtGui import QKeyEvent, QMouseEvent  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
+from meenifx.model import channels as CH  # noqa: E402
 from meenifx.model import shape as SHAPE  # noqa: E402
 from meenifx.project.settings import ProjectSettings  # noqa: E402
 from meenifx.ui.main_window import MainWindow  # noqa: E402
@@ -137,6 +138,27 @@ def test_alt_draws_from_the_centre(editor):
     assert abs(clip.shape["height"] - 160) < 2.0
     assert abs(clip.transform["position_x"]) < 1.0
     assert abs(clip.transform["position_y"]) < 1.0
+
+
+def test_gradient_stop_rows_key_colour_and_position(editor):
+    window = editor
+    clip = draw(window, "rectangle", (80, 60), (280, 220))[0]
+    window.effects_panel._set_shape_static(clip, "gradient_enabled", True, "Shape gradient")
+    pump(0.2)
+    rows = [row for row in window.effects_panel._rows if row.get("kind") == "shape_stop"]
+    assert len(rows) == 2, "each gradient stop gets one compact row"
+
+    rows[0]["color_key"].click()
+    pump(0.15)
+    target = window.engine.timeline.find_clip(clip.id)
+    assert SHAPE.stop_has_key(target, 0, "color", 0)
+    assert CH.is_animated(target, SHAPE.stop_channel(0, "color"))
+    rows = [row for row in window.effects_panel._rows if row.get("kind") == "shape_stop"]
+    assert rows[0]["color_key"].isChecked(), "the row shows the new colour key"
+
+    window.effects_panel._set_stop_position(target, 0, 35.0)
+    pump(0.15)
+    assert SHAPE.stop_value_at(target, 0, "position", 0) == pytest.approx(35.0)
 
 
 def test_escape_cancels_a_draft_without_creating_a_clip(editor):

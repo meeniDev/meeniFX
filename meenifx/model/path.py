@@ -293,3 +293,34 @@ def point_along(raw, ratio):
                     math.degrees(math.atan2(b[1] - a[1], b[0] - a[0])))
         walked += length_value
     return values[-1], 0.0
+
+
+def transform(raw, matrix):
+    """Map every point (and every stored key) through a 2x3 or 3x3 affine matrix.
+
+    Positions are mapped in full; handles are offsets, so only the linear part applies.
+    Used to move a layer-space mask in and out of project space without resampling the
+    Bézier geometry.
+    """
+    rows = [[float(matrix[row][column]) for column in range(3)] for row in range(2)]
+    values = normalise(raw)
+
+    def mapped(value):
+        out = normalise(value)
+
+        def move(x, y):
+            return (rows[0][0] * x + rows[0][1] * y + rows[0][2],
+                    rows[1][0] * x + rows[1][1] * y + rows[1][2])
+
+        def turn(handle):
+            return [rows[0][0] * handle[0] + rows[0][1] * handle[1],
+                    rows[1][0] * handle[0] + rows[1][1] * handle[1]]
+
+        for point_value in out["points"]:
+            point_value["x"], point_value["y"] = move(point_value["x"], point_value["y"])
+            point_value["in"] = turn(point_value["in"])
+            point_value["out"] = turn(point_value["out"])
+        out["keys"] = {frame: mapped(key) for frame, key in (out.get("keys") or {}).items()}
+        return out
+
+    return mapped(values)

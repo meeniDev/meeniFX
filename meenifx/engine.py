@@ -811,7 +811,8 @@ class EditorEngine:
             # Masks and mattes are alpha operations in project space, after the picture
             # has been placed. The preview and export both reach this one point.
             if not getattr(clip, "adjustment", False):
-                layer = mask_ops.apply(layer, mask_model.at(clip, local), scale)
+                layer = mask_ops.apply(layer,
+                                       mask_model.at(clip, local, self.project_size()), scale)
                 layer = self._apply_matte(clip, layer, frame_no, scale)
             opacity = transforms.opacity_at(clip, local) * clip.fade_gain_at(frame_no) * pose.opacity
             opacity *= weight

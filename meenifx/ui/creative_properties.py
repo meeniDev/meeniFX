@@ -76,6 +76,15 @@ def add_creative_card(panel, clip):
         mode.setCurrentIndex(max(0, mode.findData(mask.get("mode"))))
         mode.activated.connect(lambda index, box=mode, mid=mask_id:
                                mask_edit(mid, mode=box.itemData(index)))
+        space = QComboBox()
+        for key in MASK.SPACES:
+            space.addItem(MASK.SPACE_LABELS.get(key, key.title()), key)
+        space.setCurrentIndex(max(0, space.findData(mask.get("space", "composition"))))
+        space.setToolTip("Layer space follows this clip's position, scale and rotation; "
+                         "composition space stays fixed in the frame. Switching keeps the "
+                         "mask's look at the playhead")
+        space.activated.connect(lambda index, box=space, mid=mask_id:
+                                _set_mask_space(panel, clip, mid, box.itemData(index)))
         invert = QCheckBox("Invert")
         invert.setChecked(bool(mask.get("invert")))
         invert.toggled.connect(lambda on, mid=mask_id: mask_edit(mid, invert=bool(on)))
@@ -111,6 +120,7 @@ def add_creative_card(panel, clip):
         line.addWidget(remove)
         form.addWidget(panel._labelled("Name", name, "Mask name"))
         form.addWidget(panel._labelled("Operation", row, "Mask operation on this clip"))
+        form.addWidget(panel._labelled("Space", space, "Mask coordinate space"))
         for field_name, label, low, high, unit in (("feather", "Feather", 0.0, 200.0, "px"),
                                                    ("expansion", "Expansion", -200.0, 200.0, "px"),
                                                    ("opacity", "Opacity", 0.0, 100.0, "%")):
@@ -230,6 +240,12 @@ def _remove_mask(panel, clip, mask_id):
 
 def _duplicate_mask(panel, clip, mask_id):
     panel.engine.session.duplicate_clip_mask(clip.id, mask_id)
+    panel.refresh_properties()
+    panel._notify()
+
+
+def _set_mask_space(panel, clip, mask_id, space):
+    panel.engine.session.set_clip_mask_space(clip.id, mask_id, space)
     panel.refresh_properties()
     panel._notify()
 

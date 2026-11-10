@@ -91,7 +91,10 @@ def test_editing_existing_mask_adds_drag_delete_and_undo(qapp):
     overlay.mouse_press(mouse_event(QEvent.Type.MouseButtonPress, 100, 100))
     overlay.mouse_move(mouse_event(QEvent.Type.MouseMove, 125, 125))
     overlay.mouse_release(mouse_event(QEvent.Type.MouseButtonRelease, 125, 125))
-    path = MASK.find(clip, mask_id)["path"]
+    # Masks are layer space now, so the public project-space path is what the preview
+    # moved; the stored path stays in the clip's own coordinates.
+    path = MASK.project_path(clip, MASK.find(clip, mask_id), 0,
+                             engine.session.project_size)
     assert abs(PATHS.points(path)[0]["x"] - 125.0) < 1e-6
     assert len(MASK.masks(clip)) == 1
 
@@ -378,4 +381,6 @@ def test_pen_gui_edits_mask_points_instead_of_creating_a_second_mask(qapp):
     overlay.mouse_move(mouse_event(QEvent.Type.MouseMove, 130, 140))
     overlay.mouse_release(mouse_event(QEvent.Type.MouseButtonRelease, 130, 140))
     assert len(MASK.masks(clip)) == 1
-    assert PATHS.points(MASK.find(clip, mask_id)["path"])[0]["x"] == pytest.approx(130.0)
+    moved = MASK.project_path(clip, MASK.find(clip, mask_id), 0,
+                              engine.session.project_size)
+    assert PATHS.points(moved)[0]["x"] == pytest.approx(130.0)

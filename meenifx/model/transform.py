@@ -308,6 +308,23 @@ def matrix(state, project_size, image_size):
     return transform @ layer
 
 
+def layer_delta(state, project_size):
+    """3x3 affine from layer space (identity transform) to project space.
+
+    A layer-space point is a project pixel *as it sat before the clip transform*: the
+    fitted picture exactly where an untransformed clip would place it. Compensating by
+    the identity transform cancels the fit, so the result depends only on position,
+    scale, rotation, anchor and flip - not on the source's pixel size. Masks use it so
+    they follow the clip without needing to know which media produced it.
+    """
+    base = matrix(TransformState(), project_size, (1, 1))
+    current = matrix(state, project_size, (1, 1))
+    try:
+        return current @ np.linalg.inv(base)
+    except np.linalg.LinAlgError:
+        return np.identity(3, dtype=np.float64)
+
+
 def render_matrix(state, project_size, image_size, scale=1.0):
     """matrix() scaled for a preview render scale (single source for preview and export)."""
     full = matrix(state, project_size, image_size)

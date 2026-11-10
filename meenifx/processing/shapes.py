@@ -48,18 +48,48 @@ def _bgr(colour):
     return float(rgb[2]), float(rgb[1]), float(rgb[0])
 
 
+def _rgba(colour):
+    """(b, g, r, alpha 0..1) from #RGB, #RRGGBB or #AARRGGBB (Qt's HexArgb order)."""
+    text = str(colour or "#000000").strip()
+    if text.startswith("#"):
+        digits = text[1:]
+        if len(digits) == 3:
+            digits = "".join(ch * 2 for ch in digits)
+        alpha = 1.0
+        if len(digits) == 8:
+            try:
+                alpha = int(digits[0:2], 16) / 255.0
+            except ValueError:
+                alpha = 1.0
+            digits = digits[2:]
+        if len(digits) == 6:
+            try:
+                red, green, blue = (int(digits[0:2], 16), int(digits[2:4], 16),
+                                    int(digits[4:6], 16))
+                return float(blue), float(green), float(red), alpha
+            except ValueError:
+                pass
+    blue, green, red = _bgr(text)
+    return blue, green, red, 1.0
+
+
 def _gradient_planes(spec, width, height):
-    """(b, g, r) float planes for a linear or radial multi-stop gradient."""
+    """(b, g, r, alpha) float planes for a linear or radial multi-stop gradient.
+
+    The alpha plane carries per-stop transparency (``#AARRGGBB``), so a gradient can fade
+    out without a second opacity control; stop colours themselves are interpolated by the
+    model before they reach the renderer.
+    """
     stops = []
     for stop in spec.get("gradient_stops") or ():
         try:
             position = max(0.0, min(1.0, float(stop.get("position", 0.0)) / 100.0))
         except (TypeError, ValueError):
             position = 0.0
-        stops.append((position, _bgr(stop.get("color"))))
+        stops.append((position, _rgba(stop.get("color"))))
     if len(stops) < 2:
-        stops = [(0.0, _bgr(spec.get("fill_color"))),
-                 (1.0, _bgr(spec.get("gradient_color") or spec.get("fill_color")))]
+        stops = [(0.0, _rgba(spec.get("fill_color"))),
+                 (1.0, _rgba(spec.get("gradient_color") or spec.get("fill_color")))]
     stops.sort(key=lambda item: item[0])
     yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
     nx, ny = xx / max(1.0, width - 1.0) - 0.5, yy / max(1.0, height - 1.0) - 0.5
@@ -71,8 +101,8 @@ def _gradient_planes(spec, width, height):
     else:
         t = (nx * math.cos(angle) + ny * math.sin(angle)) * scale + 0.5 + offset
     t = np.clip(t, 0.0, 1.0)
-    planes = [np.zeros((height, width), dtype=np.float32) for _ in range(3)]
-    for index in range(3):
+    planes = [np.zeros((height, width), dtype=np.float32) for _ in range(4)]
+    for index in range(4):
         values = np.zeros((height, width), dtype=np.float32)
         for (p0, c0), (p1, c1) in zip(stops, stops[1:]):
             if p1 <= p0:
@@ -98,9 +128,72 @@ def _point_on(points, distance):
     return points[-1] if points else (0.0, 0.0)
 
 
+def _qt_stroke_mask(points, closed, weight, spec, width, height, dash_scale=1.0):
+    """An antialiased vector stroke with real caps, joins, miter limit and dashes.
+
+    Qt's QPainterPath stroker is already shipped with the UI, so the outline is computed by
+    a real vector geometry engine instead of an OpenCV line approximation: round/bevel/
+    miter joins and the miter limit are geometric, and dashes follow the path's arc length.
+    QImage painting needs no QApplication and is safe off the GUI thread. Returns a 0..255
+    coverage mask, or None when Qt is unavailable so the caller can fall back.
+    """
+    if weight <= 0 or len(points) < 2 or width < 1 or height < 1:
+        return None
+    try:
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen
+
+        caps = {"butt": Qt.PenCapStyle.FlatCap, "round": Qt.PenCapStyle.RoundCap,
+                "square": Qt.PenCapStyle.SquareCap}
+        joins = {"miter": Qt.PenJoinStyle.MiterJoin, "round": Qt.PenJoinStyle.RoundJoin,
+                 "bevel": Qt.PenJoinStyle.BevelJoin}
+        image = QImage(int(width), int(height), QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(0)
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        pen = QPen(QColor(255, 255, 255, 255))
+        pen.setWidthF(float(weight))
+        pen.setCapStyle(caps.get(str(spec.get("cap") or "butt"), Qt.PenCapStyle.FlatCap))
+        pen.setJoinStyle(joins.get(str(spec.get("stroke_join") or "miter"),
+                                   Qt.PenJoinStyle.MiterJoin))
+        try:
+            pen.setMiterLimit(max(1.0, float(spec.get("stroke_miter_limit", 4.0) or 4.0)))
+        except (TypeError, ValueError):
+            pen.setMiterLimit(4.0)
+        dash = max(0.0, float(spec.get("stroke_dash", 0.0) or 0.0)) * float(dash_scale)
+        gap = max(0.0, float(spec.get("stroke_gap", 0.0) or 0.0)) * float(dash_scale)
+        if dash > 0.05:
+            unit = max(1e-3, float(weight))
+            pen.setStyle(Qt.PenStyle.CustomDashLine)
+            pen.setDashPattern([max(0.01, dash / unit), max(0.01, gap / unit)])
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        path = QPainterPath()
+        path.moveTo(float(points[0][0]), float(points[0][1]))
+        for point in points[1:]:
+            path.lineTo(float(point[0]), float(point[1]))
+        if closed:
+            path.closeSubpath()
+        painter.drawPath(path)
+        painter.end()
+        buffer = image.constBits()
+        buffer.setsize(image.sizeInBytes())
+        rows = np.frombuffer(buffer, np.uint8).reshape(image.height(), image.bytesPerLine())
+        rows = rows[:, :image.width() * 4].reshape(image.height(), image.width(), 4)
+        return np.ascontiguousarray(rows[:, :, 3])
+    except Exception:        # Qt missing or a degenerate tile: the OpenCV path still works
+        return None
+
+
 def _stroke_polyline(mask, path, weight, closed, spec, scale=1.0):
-    """Stroke a sampled path with dashes, caps and the common join styles."""
+    """Stroke a sampled path with dashes, caps and true vector join geometry."""
     if weight <= 0 or len(path) < 2:
+        return
+    vector = _qt_stroke_mask([(float(point[0]), float(point[1])) for point in path],
+                             closed, weight, spec, mask.shape[1], mask.shape[0],
+                             dash_scale=scale)
+    if vector is not None:
+        np.maximum(mask, vector, out=mask)
         return
     points = np.round(np.array(path)).astype(np.int32)
     weight = max(1, int(round(weight)))
@@ -205,12 +298,34 @@ def _fill_path(mask, path):
                  lineType=cv2.LINE_AA)
 
 
-def _stroke_path(mask, path, weight):
-    if weight <= 0:
+def _stroke_path(mask, path, weight, spec=None):
+    """Stroke a closed outline with the exact join style and miter limit."""
+    if weight <= 0 or len(path) < 2:
+        return
+    vector = _qt_stroke_mask([(float(point[0]), float(point[1])) for point in path],
+                             True, weight, spec or {}, mask.shape[1], mask.shape[0])
+    if vector is not None:
+        np.maximum(mask, vector, out=mask)
         return
     points = np.round(np.array(path)).astype(np.int32)
     cv2.polylines(mask, [points], True, 255, max(1, int(round(weight))),
                   lineType=cv2.LINE_AA)
+
+
+def _aligned_stroke(fill, path, thickness, align, spec):
+    """An inside/outside stroke with the same geometric joins as a centred one.
+
+    A centred stroke twice the width already covers exactly `thickness` on each side of
+    the outline, so clipping it to the fill (inside) or to the outside (outside) gives
+    the aligned band without the distance-transform approximation.
+    """
+    vector = _qt_stroke_mask([(float(x), float(y)) for x, y in path], True,
+                             thickness * 2.0, spec, fill.shape[1], fill.shape[0])
+    if vector is None:
+        return _ring(fill, thickness, align)
+    if align == "inside":
+        return np.where(fill > 127, vector, 0).astype(np.uint8)
+    return np.where(fill > 127, 0, vector).astype(np.uint8)
 
 
 def _ring(fill, width, align):
@@ -270,13 +385,17 @@ def _path_tile(spec, project_w, project_h, scale):
     if thickness > 0:
         _stroke_polyline(stroke_mask, [(point[0], point[1]) for point in points],
                          thickness, closed, spec, scale=(sx + sy) / 2.0)
+    gradient = _gradient_planes(spec, tile_w, tile_h) if spec.get("gradient_enabled") else None
     fill_layer = (_resize(fill, tile_w, tile_h).astype(np.float32) / 255.0
                   * float(spec.get("fill_opacity", 1.0)))
+    if gradient is not None:
+        # Per-stop alpha (#AARRGGBB) makes a gradient fade; it multiplies the fill before
+        # the source-over maths so a transparent stop really lets the clip through.
+        fill_layer = fill_layer * gradient[3]
     stroke_layer = (_resize(stroke_mask, tile_w, tile_h).astype(np.float32) / 255.0
                     * float(spec.get("stroke_opacity", 1.0)))
     alpha = stroke_layer + fill_layer * (1.0 - stroke_layer)
     safe = np.maximum(alpha, 1e-6)
-    gradient = _gradient_planes(spec, tile_w, tile_h) if spec.get("gradient_enabled") else None
     b_f, g_f, r_f = _bgr(spec.get("fill_color"))
     b_s, g_s, r_s = _bgr(spec.get("stroke_color"))
     tile = np.zeros((tile_h, tile_w, 4), dtype=np.uint8)
@@ -328,9 +447,8 @@ def _tile(spec, project_w, project_h, scale):
         cy = ly + lh / 2.0
         start_x, end_x = lx, lx + lw
         weight = max(1.0, thickness)
-        if spec.get("cap") == "square":
-            start_x -= weight / 2.0
-            end_x += weight / 2.0
+        # The cap style extends the stroke itself: pre-extending square caps here would
+        # lengthen the line twice. The OpenCV fallback handles its own square caps.
         start, end = (start_x, cy), (end_x, cy)
         _stroke_polyline(stroke_mask, [start, end], weight, False, spec,
                          scale=(px + py) / 2.0)
@@ -345,18 +463,21 @@ def _tile(spec, project_w, project_h, scale):
         _fill_path(fill, path)
         align = align or "center"
         if align in ("inside", "outside"):
-            stroke_mask = _ring(fill, thickness, align)
+            stroke_mask = _aligned_stroke(fill, path, thickness, align, spec)
         else:
             if float(spec.get("stroke_dash", 0.0) or 0.0) > 0.0:
                 _stroke_polyline(stroke_mask, path, thickness, True, spec,
                                  scale=(px + py) / 2.0)
             else:
-                _stroke_path(stroke_mask, path, thickness)
+                _stroke_path(stroke_mask, path, thickness, spec)
 
     # Masks arrive in 0..255; compositing needs them in 0..1 or the source-over maths
     # multiplies by a negative (1 - 255) and the antialiased edge vanishes.
+    gradient = _gradient_planes(spec, tile_w, tile_h) if spec.get("gradient_enabled") else None
     fill_layer = (_resize(fill, tile_w, tile_h).astype(np.float32) / 255.0
                   * float(spec.get("fill_opacity", 1.0)))
+    if gradient is not None:
+        fill_layer = fill_layer * gradient[3]
     stroke_layer = (_resize(stroke_mask, tile_w, tile_h).astype(np.float32) / 255.0
                     * float(spec.get("stroke_opacity", 1.0)))
     # The stroke is painted *over* the fill (an inside stroke lies on top of opaque fill;
@@ -365,7 +486,6 @@ def _tile(spec, project_w, project_h, scale):
     alpha = stroke_layer + fill_layer * (1.0 - stroke_layer)
     b_f, g_f, r_f = _bgr(spec.get("fill_color"))
     b_s, g_s, r_s = _bgr(spec.get("stroke_color"))
-    gradient = _gradient_planes(spec, tile_w, tile_h) if spec.get("gradient_enabled") else None
     safe = np.maximum(alpha, 1e-6)
     tile = np.zeros((tile_h, tile_w, 4), dtype=np.uint8)
     for index, (fill_c, stroke_c) in enumerate(((b_f, b_s), (g_f, g_s), (r_f, r_s))):

@@ -166,21 +166,25 @@ def parse_stops(value):
     for item in raw:
         if not isinstance(item, dict):
             continue
-        try:
-            position = max(0.0, min(100.0, float(item.get("position", 0.0))))
-        except (TypeError, ValueError):
-            position = 0.0
-        colour = str(item.get("color") or "#ffffff").strip()
+        position = item.get("position", 0.0)
+        if not isinstance(position, dict):
+            try:
+                position = max(0.0, min(100.0, float(position)))
+            except (TypeError, ValueError):
+                position = 0.0
+        colour = item.get("color")
+        if not isinstance(colour, dict):
+            colour = str(colour or "#ffffff").strip()
         out.append({"position": position, "color": colour})
     if len(out) < 2:
         return copy.deepcopy(DEFAULTS["gradient_stops"])
-    return sorted(out, key=lambda item: item["position"])
+    return sorted(out, key=lambda item: stop_position_at(item, 0))
 
 
 def stops_text(settings):
     data = ensure_shape(settings) if hasattr(settings, "shape") else settings
-    return ";".join(f"{int(round(float(stop.get('position', 0))))}:{stop.get('color')}"
-                    for stop in (data or {}).get("gradient_stops") or ())
+    return ";".join(f"{int(round(stop_position_at(stop, 0)))}:{stop_color_at(stop, 0)}"
+                    for stop in (data or {}).get("gradient_stops") or () if isinstance(stop, dict))
 
 
 # ----------------------------------------------------------------------- colours
@@ -271,6 +275,263 @@ def move_color_key(clip, name, old_time, new_time):
         return None
     keys[new_time] = keys.pop(old_time)
     return new_time
+
+
+# ------------------------------------------------------------ gradient stops
+# A stop field is either a plain value or ``{"keys": {frame: value}}``. Positions
+# interpolate numerically; colours interpolate their RGBA channels, so a gradient stop can
+# fade (alpha) and change hue smoothly instead of snapping between held colours.
+def stop_channel(index, field):
+    return SHAPE_PREFIX + f"gradient_stop.{int(index)}.{field}"
+
+
+def parse_stop_channel(name):
+    """(stop index, 'position'|'color') for a gradient-stop channel, else None."""
+    text = str(name or "")
+    if not text.startswith("gradient_stop."):
+        return None
+    index_text, _sep, field = text[len("gradient_stop."):].partition(".")
+    if field not in ("position", "color"):
+        return None
+    try:
+        return int(index_text), field
+    except (TypeError, ValueError):
+        return None
+
+
+def stop_indexes(clip):
+    return list(range(len(ensure_shape(clip).get("gradient_stops") or ())))
+
+
+def stop_value_raw(clip, index, field):
+    stops = ensure_shape(clip).get("gradient_stops") or []
+    if not 0 <= int(index) < len(stops) or not isinstance(stops[int(index)], dict):
+        return None
+    return stops[int(index)].get(field)
+
+
+def stop_field_keys(clip, index, field):
+    raw = stop_value_raw(clip, index, field)
+    if not isinstance(raw, dict):
+        return []
+    return sorted(int(frame) for frame in (raw.get("keys") or {}))
+
+
+def _stop_number(raw, frame, fallback=0.0):
+    if not isinstance(raw, dict):
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return fallback
+    keys = raw.get("keys") or {}
+    if not keys:
+        return fallback
+    times = sorted(int(time) for time in keys)
+    frame = int(frame)
+    if frame <= times[0]:
+        return float(keys[times[0]])
+    if frame >= times[-1]:
+        return float(keys[times[-1]])
+    for first, second in zip(times, times[1:]):
+        if first <= frame <= second:
+            span = float(second - first)
+            ratio = (frame - first) / span if span > 0 else 0.0
+            return float(keys[first]) + (float(keys[second]) - float(keys[first])) * ratio
+    return fallback
+
+
+def _colour_parts(colour):
+    """(r, g, b, a) 0..255 from #RGB, #RRGGBB, #AARRGGBB (Qt HexArgb) or a name."""
+    text = str(colour or "#000000").strip()
+    if text.startswith("#"):
+        digits = text[1:]
+        if len(digits) == 3:
+            digits = "".join(ch * 2 for ch in digits)
+        alpha = 255
+        if len(digits) == 8:
+            try:
+                alpha = int(digits[0:2], 16)
+            except ValueError:
+                alpha = 255
+            digits = digits[2:]
+        if len(digits) == 6:
+            try:
+                return (int(digits[0:2], 16), int(digits[2:4], 16),
+                        int(digits[4:6], 16), alpha)
+            except ValueError:
+                pass
+    try:
+        from PIL import ImageColor
+        red, green, blue = ImageColor.getrgb(text)[:3]
+        return (int(red), int(green), int(blue), 255)
+    except Exception:
+        return (0, 0, 0, 255)
+
+
+def _colour_text(parts):
+    red, green, blue, alpha = (max(0, min(255, int(round(value)))) for value in parts)
+    if alpha < 255:
+        return f"#{alpha:02X}{red:02X}{green:02X}{blue:02X}"
+    return f"#{red:02X}{green:02X}{blue:02X}"
+
+
+def mix_colours(first, second, ratio):
+    """Blend two colours in RGBA space (smooth hue and opacity interpolation)."""
+    start, end = _colour_parts(first), _colour_parts(second)
+    ratio = max(0.0, min(1.0, float(ratio)))
+    return _colour_text(start[i] + (end[i] - start[i]) * ratio for i in range(4))
+
+
+def _stop_colour(raw, frame, fallback="#FFFFFF"):
+    if not isinstance(raw, dict):
+        return str(raw or fallback)
+    keys = raw.get("keys") or {}
+    if not keys:
+        return fallback
+    times = sorted(int(time) for time in keys)
+    frame = int(frame)
+    if frame <= times[0]:
+        return str(keys[times[0]])
+    if frame >= times[-1]:
+        return str(keys[times[-1]])
+    for first, second in zip(times, times[1:]):
+        if first <= frame <= second:
+            span = float(second - first)
+            ratio = (frame - first) / span if span > 0 else 0.0
+            return mix_colours(str(keys[first]), str(keys[second]), ratio)
+    return fallback
+
+
+def stop_position_at(stop, frame=0):
+    value = _stop_number((stop or {}).get("position") if isinstance(stop, dict) else stop,
+                         frame, 0.0)
+    return max(0.0, min(100.0, value))
+
+
+def stop_color_at(stop, frame=0):
+    return _stop_colour((stop or {}).get("color") if isinstance(stop, dict) else stop,
+                        frame, "#FFFFFF")
+
+
+def resolve_stops(clip, frame=0):
+    """Every gradient stop evaluated at a frame, sorted by position."""
+    data = ensure_shape(clip)
+    out = []
+    for stop in data.get("gradient_stops") or ():
+        if not isinstance(stop, dict):
+            continue
+        out.append({"position": stop_position_at(stop, frame),
+                    "color": stop_color_at(stop, frame)})
+    if len(out) < 2:
+        return copy.deepcopy(DEFAULTS["gradient_stops"])
+    return sorted(out, key=lambda item: item["position"])
+
+
+def stop_value_at(clip, index, field, frame=0):
+    stops = ensure_shape(clip).get("gradient_stops") or []
+    if not 0 <= int(index) < len(stops) or not isinstance(stops[int(index)], dict):
+        return None
+    stop = stops[int(index)]
+    return stop_position_at(stop, frame) if field == "position" else stop_color_at(stop, frame)
+
+
+def stop_is_animated(clip, index, field):
+    return bool(stop_field_keys(clip, index, field))
+
+
+def stop_has_key(clip, index, field, frame):
+    return int(frame) in stop_field_keys(clip, index, field)
+
+
+def stop_key_times(clip, index, field):
+    return stop_field_keys(clip, index, field)
+
+
+def stop_set_value(clip, index, field, value, frame=0, auto_key=False):
+    """Write a stop field; keyed once the field is animated (or Auto-Keyframe is on)."""
+    stops = ensure_shape(clip).get("gradient_stops") or []
+    if not 0 <= int(index) < len(stops) or not isinstance(stops[int(index)], dict):
+        return False
+    stop = stops[int(index)]
+    frame = max(0, int(frame))
+    value = float(value) if field == "position" else str(value)
+    current = stop.get(field)
+    if isinstance(current, dict) or auto_key:
+        if not isinstance(current, dict):
+            keys = {}
+            if frame > 0:
+                previous = (stop_position_at({"position": current}, 0)
+                            if field == "position" else str(current or "#FFFFFF"))
+                keys[0] = previous
+            current = {"keys": keys}
+            stop[field] = current
+        current.setdefault("keys", {})[frame] = value
+        return True
+    stop[field] = value
+    return False
+
+
+def stop_toggle_key(clip, index, field, frame):
+    """Diamond for one stop field: add a key at `frame`, or remove the existing one."""
+    stops = ensure_shape(clip).get("gradient_stops") or []
+    if not 0 <= int(index) < len(stops) or not isinstance(stops[int(index)], dict):
+        return False
+    stop = stops[int(index)]
+    frame = max(0, int(frame))
+    current = stop.get(field)
+    if isinstance(current, dict):
+        keys = current.setdefault("keys", {})
+        if frame in keys:
+            removed = keys.pop(frame)
+            if not keys:
+                stop[field] = removed
+            return False
+        keys[frame] = stop_value_at(clip, index, field, frame)
+        return True
+    stop[field] = {"keys": {frame: current}}
+    return True
+
+
+def stop_remove_key(clip, index, field, frame):
+    raw = stop_value_raw(clip, index, field)
+    if not isinstance(raw, dict):
+        return False
+    keys = raw.setdefault("keys", {})
+    return keys.pop(int(frame), None) is not None
+
+
+def stop_clear_keys(clip, index, field, frame=0):
+    raw = stop_value_raw(clip, index, field)
+    if not isinstance(raw, dict):
+        return
+    stops = ensure_shape(clip).get("gradient_stops") or []
+    stops[int(index)][field] = stop_value_at(clip, index, field, frame)
+
+
+def stop_move_key(clip, index, field, old_time, new_time):
+    raw = stop_value_raw(clip, index, field)
+    if not isinstance(raw, dict):
+        return None
+    keys = raw.setdefault("keys", {})
+    old_time, new_time = int(old_time), max(0, int(new_time))
+    if old_time not in keys:
+        return None
+    keys[new_time] = keys.pop(old_time)
+    return new_time
+
+
+def stop_key_records(clip, index, field):
+    """[(time, value, 'linear', None, None)] for the clipboard and group moves."""
+    return [(int(time), stop_value_at(clip, index, field, int(time)), "linear", None, None)
+            for time in stop_field_keys(clip, index, field)]
+
+
+def stop_replace_keys(clip, index, field, records):
+    stops = ensure_shape(clip).get("gradient_stops") or []
+    if not 0 <= int(index) < len(stops) or not isinstance(stops[int(index)], dict):
+        return
+    keys = {int(row[0]): row[1] for row in records or ()}
+    stops[int(index)][field] = {"keys": keys}
 
 
 # ----------------------------------------------------------------- numeric values
@@ -384,7 +645,7 @@ def resolve(clip, frame):
         "stroke_enabled": bool(data.get("stroke_enabled")),
         "gradient_enabled": bool(data.get("gradient_enabled")),
         "gradient_type": str(data.get("gradient_type") or "linear"),
-        "gradient_stops": copy.deepcopy(data.get("gradient_stops") or []),
+        "gradient_stops": resolve_stops(clip, frame),
         "stroke_join": str(data.get("stroke_join") or "miter"),
         "path": PATHS.at(data.get("path") or {"points": [], "closed": False}, frame),
         "align": str(data.get("stroke_align") or "center"),

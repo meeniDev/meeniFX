@@ -20,6 +20,13 @@ ALPHA_SOURCE_EFFECTS = {"simple_choker"}
 # is covered by tests/test_smart_key.py.
 MODEL_ONLY_EFFECTS = {"smart_key"}
 
+# These hand controls need the optional MediaPipe landmark model.  On Pythons without a
+# MediaPipe wheel the tracker deliberately falls back to the legacy skin detector, so the
+# controls have no effect there; the landmark rendering is covered with a fake provider in
+# tests/test_tracking_advanced.py.
+HAND_LANDMARK_PARAMS = {"hand_confidence", "show_skeleton", "point_size", "line_width",
+                        "skeleton_color"}
+
 
 EFFECT_KEYS = ("mosaic", "ascii", "face_tracker", "hand_tracker", "blob_tracker")
 
@@ -85,6 +92,16 @@ TEMPORAL_CASES = {
     ("stutter", "interval"), ("stutter", "hold"), ("stutter", "offset"),
     ("echo", "count"), ("echo", "step"), ("echo", "decay"),
     ("echo", "offset_x"), ("echo", "offset_y"), ("echo", "blend"),
+    # Identity matching, box smoothing and region smoothing need a second frame to show.
+    ("face_tracker", "stable_ids"), ("hand_tracker", "stable_ids"),
+    ("blob_tracker", "stable_ids"), ("face_tracker", "face_smoothing"),
+    ("face_tracker", "region_smoothing"), ("hand_tracker", "region_smoothing"),
+    ("blob_tracker", "region_smoothing"),
+    # A pulse's speed and phase only move between frames.
+    ("face_tracker", "connector_pulse_speed"), ("hand_tracker", "connector_pulse_speed"),
+    ("blob_tracker", "connector_pulse_speed"),
+    ("face_tracker", "connector_pulses"), ("hand_tracker", "connector_pulses"),
+    ("blob_tracker", "connector_pulses"),
 }
 
 # Group cards draw nothing on their own: the Look card's Strength scales its stack, which
@@ -123,7 +140,25 @@ CONTEXT_SWITCHES = {("gaussian_blur", "keep_edges"), ("motion_blur", "follow_mot
                     # Choosing a subject only changes a multi-subject matte when the user
                     # clicks a point; the audit picture has one subject. Selection is
                     # covered by the model tests.
-                    ("roto_brush", "subject")}
+                    ("roto_brush", "subject"),
+                    # Blur style and sprite controls need a real source: the audit renders
+                    # no sprite file, and the blur modes are compared directly in
+                    # tests/test_tracking_advanced.py.
+                    ("face_tracker", "blur_mode"),
+                    ("face_tracker", "sprite_scale"),
+                    ("face_tracker", "sprite_offset_x"),
+                    ("face_tracker", "sprite_offset_y"),
+                    ("face_tracker", "sprite_rotation"),
+                    ("face_tracker", "sprite_opacity"),
+                    # Label typography is a visual style whose small ink change sits under
+                    # the audit's global threshold; tests/test_tracking_advanced.py
+                    # compares the rendered labels directly.
+                    ("face_tracker", "label_size"), ("hand_tracker", "label_size"),
+                    ("blob_tracker", "label_background_opacity"),
+                    ("blob_tracker", "label_radius"),
+                    ("face_tracker", "id_match_distance"),
+                    ("hand_tracker", "id_match_distance"),
+                    ("blob_tracker", "id_match_distance")}
 
 
 def roto_frame(width=320, height=180):
@@ -180,6 +215,14 @@ def _base_params(engine, effect_id):
     return dict(engine.runtime_effects[effect_id].capture_params())
 
 
+def _missing_backend_reason(effect_id, name, engine):
+    if effect_id == "hand_tracker" and name in HAND_LANDMARK_PARAMS:
+        runtime = engine.runtime_effects["hand_tracker"]
+        if runtime.landmark_backend() is None:
+            return "needs the optional MediaPipe hand landmark model"
+    return ""
+
+
 def _prepared_base(effect_id, name, params):
     """Parameters that must be open for a test value to be reachable."""
     base = dict(params)
@@ -191,12 +234,21 @@ def _prepared_base(effect_id, name, params):
     if effect_id == "face_tracker" and name in ("blur_amount", "blur_feather"):
         # The blur controls are intentional no-ops until "Blur faces" is enabled.
         base["blur_faces"] = True
-    if name in ("connector_mode", "connector_distance", "max_connections"):
-        # Bring the synthetic detections inside the connector radius.  Their default
-        # layout is deliberately spread out to exercise per-object drawing.
-        base["connector_distance"] = 100
-    if name == "connector_distance":
-        base["connector_mode"] = "nearest"
+    if name.startswith("connector_") or name in ("connector_mode", "custom_links",
+                                                 "max_connections"):
+        # Bring the synthetic detections inside the connector radius, and give Custom
+        # links something real to connect.
+        base.update(connector_distance=100, connector_mode="distance",
+                    custom_links="1-2; 2-3")
+    if name.startswith("label_"):
+        # Typography and placement only exist while Labels is on and has text.
+        base.update(show_labels=True, label_text="Target {id} {speed}")
+    if name in ("region_amount_1", "region_expand", "region_feather"):
+        base["region_effect_1"] = "invert"
+    elif name == "region_amount_2":
+        base["region_effect_2"] = "invert"
+    elif name == "region_amount_3":
+        base["region_effect_3"] = "invert"
     if effect_id == "motion_blur":
         # A still clip has no measured movement, so the shutter has nothing to smear:
         # give the effect an explicit manual smear to work with.
@@ -233,6 +285,9 @@ def test_numeric_parameter_extremes_change_the_output(effect_id, spec, monkeypat
     if (effect_id, spec.name) in GROUP_CARDS:
         pytest.skip("group card; covered by tests/test_looks.py")
     engine, clip = _engine_for(effect_id, monkeypatch)
+    reason = _missing_backend_reason(effect_id, spec.name, engine)
+    if reason:
+        pytest.skip(reason)
     base = _prepared_base(effect_id, spec.name, _base_params(engine, effect_id))
     low = spec.minimum
     high = spec.maximum
@@ -252,6 +307,9 @@ def test_toggle_parameter_changes_the_output(effect_id, spec, monkeypatch):
     if (effect_id, spec.name) in TEMPORAL_CASES:
         pytest.skip("frame-rate parameter; covered by tests/test_effects_new.py")
     engine, clip = _engine_for(effect_id, monkeypatch)
+    reason = _missing_backend_reason(effect_id, spec.name, engine)
+    if reason:
+        pytest.skip(reason)
     base = _prepared_base(effect_id, spec.name, _base_params(engine, effect_id))
     off = render(engine, clip, effect_id, {**base, spec.name: False})
     on = render(engine, clip, effect_id, {**base, spec.name: True})
@@ -267,6 +325,9 @@ def test_choice_parameter_changes_the_output(effect_id, spec, monkeypatch):
     if (effect_id, spec.name) in TEMPORAL_CASES:
         pytest.skip("frame-rate parameter; covered by tests/test_effects_new.py")
     engine, clip = _engine_for(effect_id, monkeypatch)
+    reason = _missing_backend_reason(effect_id, spec.name, engine)
+    if reason:
+        pytest.skip(reason)
     base = _prepared_base(effect_id, spec.name, _base_params(engine, effect_id))
     images = [render(engine, clip, effect_id, {**base, spec.name: choice}) for choice in spec.choices]
     for index in range(1, len(images)):

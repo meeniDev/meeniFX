@@ -392,7 +392,7 @@ class PreviewOverlay:
             return None
         frame = self.local_frame(clip)
         best = None
-        for mask in MASK.at(clip, frame):
+        for mask in MASK.at(clip, frame, self.project_size()):
             if not mask.get("show_outline", True):
                 continue
             values = PATHS.sampled(mask.get("path") or {}, steps=18)

@@ -15,7 +15,8 @@ import numpy as np
 
 from ..constants import parse_palette_colors as _parse_palette_colors
 from ..model.values import Value
-from .tracking_viz import STYLE_KEYS, draw_tracking, resolve_style
+from . import tracking_regions as REGIONS
+from .tracking_viz import STYLE_KEYS, TrackStabilizer, draw_tracking, resolve_style
 
 
 @dataclass(frozen=True)
@@ -289,14 +290,106 @@ class TrackerColorMixin:
         ParamSpec("show_numbers", "Numbers", "bool", default=False,
                   help="Draw a separate tracking number", group="Labels"),
         ParamSpec("label_text", "Label text", "text", default="",
-                  help="Text drawn by Labels; leave empty to draw no label. Numbers is separate",
+                  help="Text drawn by Labels. Variables: {id} {x} {y} {width} {height} "
+                       "{speed} {confidence}", group="Labels"),
+        ParamSpec("label_font", "Font", "text", default="Segoe UI",
+                  help="Installed font family, for example Segoe UI or Arial",
+                  group="Labels"),
+        ParamSpec("label_weight", "Weight", "choice", choices=("regular", "bold"),
+                  choice_labels=("Regular", "Bold"), default="regular", group="Labels"),
+        ParamSpec("label_size", "Font size", "int", 8, 96, 22, unit=" px", pixels=True,
+                  group="Labels"),
+        ParamSpec("label_color", "Text colour", "text", default="#FFFFFF",
+                  group="Labels"),
+        ParamSpec("label_outline_color", "Outline colour", "text", default="#000000",
+                  group="Labels"),
+        ParamSpec("label_outline", "Outline", "int", 0, 8, 0, unit=" px", pixels=True,
+                  group="Labels"),
+        ParamSpec("label_background", "Background", "text", default="#000000",
+                  group="Labels"),
+        ParamSpec("label_background_opacity", "Background opacity", "int", 0, 100, 70,
+                  unit=" %", group="Labels"),
+        ParamSpec("label_padding", "Padding", "int", 0, 32, 6, unit=" px", pixels=True,
+                  group="Labels"),
+        ParamSpec("label_radius", "Corner radius", "int", 0, 32, 6, unit=" px",
+                  pixels=True, group="Labels"),
+        ParamSpec("label_position", "Position", "choice",
+                  choices=("above", "below", "inside", "left", "right"),
+                  choice_labels=("Above", "Below", "Inside", "Left", "Right"),
+                  default="above", group="Labels"),
+        ParamSpec("label_anchor", "Anchor", "choice",
+                  choices=("top_left", "top_center", "top_right", "middle_left",
+                           "center", "middle_right", "bottom_left", "bottom_center",
+                           "bottom_right"),
+                  choice_labels=("Top left", "Top centre", "Top right", "Middle left",
+                                 "Centre", "Middle right", "Bottom left",
+                                 "Bottom centre", "Bottom right"),
+                  default="top_left", group="Labels"),
+        ParamSpec("label_offset_x", "Offset X", "int", -300, 300, 0, unit=" px",
+                  pixels=True, group="Labels"),
+        ParamSpec("label_offset_y", "Offset Y", "int", -300, 300, 0, unit=" px",
+                  pixels=True, group="Labels"),
+        ParamSpec("label_align", "Alignment", "choice", choices=("left", "center", "right"),
+                  choice_labels=("Left", "Centre", "Right"), default="left",
                   group="Labels"),
         ParamSpec("connector_mode", "Connectors", "choice",
-                  choices=("none", "nearest", "distance", "sequential"),
+                  choices=("none", "nearest", "distance", "sequential", "center", "custom"),
                   choice_labels=("None", "Nearest neighbour", "All within range",
-                                 "Join in track order"),
+                                 "Join in track order", "Connect to centre",
+                                 "Custom links"),
                   default="none", help="Lines between detections in the same frame",
                   group="Connectors"),
+        ParamSpec("custom_links", "Custom links", "text", default="",
+                  help="For Custom links: track pairs such as 1-2; 2-3", group="Connectors"),
+        ParamSpec("connector_color", "Line colour", "text", default="",
+                  help="Empty uses each object's colour; otherwise #RRGGBB",
+                  group="Connectors"),
+        ParamSpec("connector_thickness", "Line thickness", "int", 1, 16, 2, unit=" px",
+                  pixels=True, group="Connectors"),
+        ParamSpec("connector_opacity", "Line opacity", "int", 5, 100, 100, unit=" %",
+                  group="Connectors"),
+        ParamSpec("connector_glow", "Line glow", "bool", default=False,
+                  help="Soft halo under the connector lines", group="Connectors"),
+        ParamSpec("connector_curve", "Curve", "int", 0, 100, 0, unit=" %",
+                  help="0 draws straight lines; higher values bow them out",
+                  group="Connectors"),
+        ParamSpec("connector_pulses", "Pulses", "bool", default=False,
+                  help="Animated dots travelling along each connector",
+                  group="Connectors"),
+        ParamSpec("connector_pulse_speed", "Pulse speed", "int", 1, 20, 4,
+                  help="How fast pulses travel", group="Connectors"),
+        ParamSpec("connector_labels", "Distance labels", "bool", default=False,
+                  help="Show the pixel distance beside each connector",
+                  group="Connectors"),
+        ParamSpec("stable_ids", "Stable IDs", "bool", default=True,
+                  help="Match objects across frames so connectors do not jump",
+                  group="Detection"),
+        ParamSpec("id_match_distance", "ID match range", "int", 5, 100, 40, unit=" %",
+                  help="How far an object may move between frames and keep its ID",
+                  group="Detection"),
+        ParamSpec("region_effect_1", "Region effect 1", "choice", choices=REGIONS.REGION_EFFECTS,
+                  choice_labels=REGIONS.REGION_LABELS, default="none",
+                  help="An effect applied only inside each detected region",
+                  group="Tracked region"),
+        ParamSpec("region_amount_1", "Amount 1", "int", 1, 100, 50, unit=" %",
+                  group="Tracked region"),
+        ParamSpec("region_effect_2", "Region effect 2", "choice", choices=REGIONS.REGION_EFFECTS,
+                  choice_labels=REGIONS.REGION_LABELS, default="none",
+                  help="A second effect inside the same region", group="Tracked region"),
+        ParamSpec("region_amount_2", "Amount 2", "int", 1, 100, 50, unit=" %",
+                  group="Tracked region"),
+        ParamSpec("region_effect_3", "Region effect 3", "choice", choices=REGIONS.REGION_EFFECTS,
+                  choice_labels=REGIONS.REGION_LABELS, default="none",
+                  help="A third effect inside the same region", group="Tracked region"),
+        ParamSpec("region_amount_3", "Amount 3", "int", 1, 100, 50, unit=" %",
+                  group="Tracked region"),
+        ParamSpec("region_expand", "Expand", "int", -50, 50, 0, unit=" px", pixels=True,
+                  help="Grow or shrink the tracked region", group="Tracked region"),
+        ParamSpec("region_feather", "Feather", "int", 0, 80, 8, unit=" px", pixels=True,
+                  help="Soften the region edge", group="Tracked region"),
+        ParamSpec("region_smoothing", "Smoothing", "int", 0, 95, 0, unit=" %",
+                  help="Follow the region more slowly to reduce jitter",
+                  group="Tracked region"),
         ParamSpec("connector_distance", "Connector range", "int", 5, 100, 25, unit=" %",
                   help="Longest connector, as a percentage of the longer frame edge",
                   group="Connectors"),
@@ -335,14 +428,51 @@ class TrackerColorMixin:
         # label_text stay empty.  Empty now means "draw no text" rather than silently
         # falling back to "Face" and making the Labels control impossible to remove.
         self.label_text = Value(str(getattr(self, "TRACKING_LABEL", "") or ""))
+        self.label_font = Value("Segoe UI")
+        self.label_weight = Value("regular")
+        self.label_size = Value(22)
+        self.label_color = Value("#FFFFFF")
+        self.label_outline_color = Value("#000000")
+        self.label_outline = Value(0)
+        self.label_background = Value("#000000")
+        self.label_background_opacity = Value(70)
+        self.label_padding = Value(6)
+        self.label_radius = Value(6)
+        self.label_position = Value("above")
+        self.label_anchor = Value("top_left")
+        self.label_offset_x = Value(0)
+        self.label_offset_y = Value(0)
+        self.label_align = Value("left")
         self.connector_mode = Value("none")
         self.connector_distance = Value(25)
         self.max_connections = Value(2)
+        self.custom_links = Value("")
+        self.connector_color = Value("")
+        self.connector_thickness = Value(2)
+        self.connector_opacity = Value(100)
+        self.connector_glow = Value(False)
+        self.connector_curve = Value(0)
+        self.connector_pulses = Value(False)
+        self.connector_pulse_speed = Value(4)
+        self.connector_labels = Value(False)
+        self.stable_ids = Value(True)
+        self.id_match_distance = Value(40)
+        self.region_effect_1 = Value("none")
+        self.region_amount_1 = Value(50)
+        self.region_effect_2 = Value("none")
+        self.region_amount_2 = Value(50)
+        self.region_effect_3 = Value("none")
+        self.region_amount_3 = Value(50)
+        self.region_expand = Value(0)
+        self.region_feather = Value(8)
+        self.region_smoothing = Value(0)
         self.glow = Value(False)
         self.opacity = Value(100)
         self.tracking_quality = Value("balanced")
         self._tracking_cache = OrderedDict()
         self._tracking_cache_limit = 8
+        self._stabilizer = TrackStabilizer()
+        self._region_masks = {}
 
     def load_params(self, params):
         """Apply parameters, including the tracker controls used before this version.
@@ -399,9 +529,76 @@ class TrackerColorMixin:
             style["show_labels"] = False
         return style
 
+    def _label_style(self):
+        scale = max(0.2, float(self.param_scale or 1.0))
+        return {
+            "label_font": self.label_font.get(),
+            "label_weight": self.label_weight.get(),
+            "label_size": float(self.label_size.get()),
+            "label_scale": scale,
+            "label_color": self.label_color.get(),
+            "label_outline_color": self.label_outline_color.get(),
+            "label_outline": float(self.px(self.label_outline.get())),
+            "label_background": self.label_background.get(),
+            "label_background_opacity": int(self.label_background_opacity.get()),
+            "label_padding": float(self.px(self.label_padding.get())),
+            "label_radius": float(self.px(self.label_radius.get())),
+            "label_position": self.label_position.get(),
+            "label_anchor": self.label_anchor.get(),
+            "label_offset_x": float(self.px(self.label_offset_x.get()))
+            if self.label_offset_x.get() >= 0 else -float(self.px(-self.label_offset_x.get())),
+            "label_offset_y": float(self.px(self.label_offset_y.get()))
+            if self.label_offset_y.get() >= 0 else -float(self.px(-self.label_offset_y.get())),
+            "label_align": self.label_align.get(),
+        }
+
+    def _region_stack(self):
+        stack = []
+        for index in (1, 2, 3):
+            effect = getattr(self, f"region_effect_{index}").get()
+            if str(effect or "none").lower() != "none":
+                stack.append((effect, int(getattr(self, f"region_amount_{index}").get())))
+        return stack
+
+    def apply_tracked_regions(self, output, detections):
+        """Apply this tracker's region effects inside each real detection."""
+        stack = self._region_stack()
+        if not stack or not detections:
+            return output
+        expand = self.px(self.region_expand.get())
+        if self.region_expand.get() < 0:
+            expand = -self.px(-self.region_expand.get())
+        feather = self.px(self.region_feather.get())
+        smoothing = max(0.0, min(0.95, float(self.region_smoothing.get()) / 100.0))
+        for index, detection in enumerate(detections):
+            key = int(detection.track_id or index + 1)
+            mask = REGIONS.region_mask(output.shape, detection.box, detection.contour,
+                                       expand=expand, feather=feather)
+            if smoothing > 0.0:
+                previous = self._region_masks.get(key)
+                if previous is not None and previous.shape == mask.shape:
+                    mask = cv2.addWeighted(previous, smoothing, mask, 1.0 - smoothing, 0)
+                self._region_masks[key] = mask
+            output = REGIONS.apply_stack(output, mask, stack, scale=max(0.2, self.param_scale))
+        return output
+
+    def apply_layer(self, layer):
+        """Run the tracker on the layer's picture and keep its transparency intact."""
+        if layer.ndim == 3 and layer.shape[2] == 4:
+            picture = np.ascontiguousarray(layer[:, :, :3])
+            output = self.apply(picture)
+            return np.dstack([output, layer[:, :, 3]])
+        return self.apply(layer)
+
     def draw_tracking(self, frame, detections, label=None, thickness=None):
         """Draw detections with this tracker's shared style and colour scheme."""
         style = self._tracking_style()
+        detections = list(detections or ())
+        if bool(self.stable_ids.get()):
+            detections = self._stabilizer.update(
+                detections, frame=int(getattr(self, "local_frame", 0) or 0),
+                max_distance=float(self.id_match_distance.get()) / 100.0
+                * max(frame.shape[:2]))
         colors = [self._resolve_draw_color(index) for index in range(len(detections))]
         return draw_tracking(
             frame, detections,
@@ -424,6 +621,22 @@ class TrackerColorMixin:
             max_connections=int(self.max_connections.get()),
             glow=bool(style.get("glow", False)),
             label_scale=0.55 * max(0.4, self.param_scale),
+            label_style=self._label_style(),
+            connector_color=self.connector_color.get(),
+            connector_thickness=self.px(self.connector_thickness.get()),
+            connector_opacity=int(self.connector_opacity.get()),
+            connector_glow=bool(self.connector_glow.get()),
+            connector_curve=int(self.connector_curve.get()),
+            connector_pulses=bool(self.connector_pulses.get()),
+            connector_pulse_speed=int(self.connector_pulse_speed.get()),
+            connector_labels=bool(self.connector_labels.get()),
+            custom_links=self.custom_links.get(),
+            frame_index=int(getattr(self, "local_frame", 0) or 0),
+            skeleton=bool(getattr(self, "show_skeleton", Value(False)).get()),
+            skeleton_connections=getattr(self, "SKELETON_CONNECTIONS", ()),
+            point_size=self.px(getattr(self, "point_size", Value(3)).get()),
+            line_width=self.px(getattr(self, "line_width", Value(2)).get()),
+            skeleton_color=str(getattr(self, "skeleton_color", Value("")).get() or ""),
         )
 
     # ------------------------------------------------------------ detection support
@@ -477,3 +690,5 @@ class TrackerColorMixin:
 
     def clear_tracking_cache(self):
         self._tracking_cache.clear()
+        self._stabilizer.reset()
+        self._region_masks.clear()
