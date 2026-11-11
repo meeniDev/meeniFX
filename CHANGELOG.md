@@ -3,7 +3,7 @@
 All notable changes to meeniFX Studios. The current public build is an **Alpha**: it is
 usable and tested, but unfinished, and some features are still experimental.
 
-## 0.1.0-alpha.9 - 10 November 2026
+## 0.1.0-alpha.9 - 11 November 2026
 
 ### Added
 
@@ -21,6 +21,15 @@ usable and tested, but unfinished, and some features are still experimental.
   lines while preserving the rendered positions, including kerning, spacing, alignment and
   transforms. It offers Replace Original, Keep Original Hidden and Duplicate and Split,
   optional stagger presets, grapheme-safe characters, and a single undo step.
+- **Creative Tools Update, Part 3.** Five distinct Glow effects, a complete colour-grading
+  set with interactive Curves and Color Wheels, animated distortion with clip/image maps,
+  procedural Gradient Ramp, Fractal Noise, Checkerboard and Grid generators, and Matte
+  Choker. Every new effect supports preview/export, keyframes, masks, adjustment layers,
+  precompositions, Mix and `.mfxpf` save/load; the browser sorts them by category and gives
+  each a renderer-generated preview, Favorites and Recently Used entries.
+- **Real performance measurements.** `tools/benchmark_creative_effects.py` records average
+  frame time and peak Python memory for the heavy effects at 1280x720 and 1920x1080. The
+  results ship in `artifacts/benchmarks/creative-part3.json` and `.md`.
 
 ### Fixed
 
@@ -59,6 +68,10 @@ usable and tested, but unfinished, and some features are still experimental.
   icons, gradient/strikethrough/case/anchor/justify rendering, grapheme clusters,
   left-aligned word/line splits, hidden and duplicated originals, optional stagger, one-step
   undo, font-picker filtering, missing-font warnings and save/reopen of the new metadata.
+- Added Creative Tools Part 3 coverage for every new effect, transparency and reduced-grid
+  glow rendering, colour grading and Curves strength, animated distortion and Displacement
+  Map sources, procedural generator alpha, Matte Choker growth, adjustment layers, nested
+  compositions, project round-trip, browser metadata and renderer previews.
 - Added Unit, Renderer, GUI, Model and Packaged pytest markers. Standalone app-driving
   scripts are excluded from collection; model weights remain outside Git and are checked
   by the opt-in model tests.
