@@ -7,3 +7,5 @@ imageio-ffmpeg
 faster-whisper
 onnxruntime>=1.18
 yt-dlp
+# Optional at runtime: matched CPU fallbacks remain available without OpenGL.
+moderngl>=5.12,<6
