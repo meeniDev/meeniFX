@@ -54,7 +54,7 @@ class _Worker:
 
 
 def resource(name):
-    if name not in BUILTINS and name not in {"fullscreen", "sampling"}:
+    if name not in BUILTINS and name not in {"fullscreen", "sampling", "decode", "encode"}:
         raise ValueError("Only shipped shader resources can be loaded")
     root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[2]))
     suffix = ".vert" if name == "fullscreen" else ".glsl"
@@ -111,6 +111,9 @@ class ShaderRunner:
         self._ctx = None
         self._programs = {}
         self._textures = []
+        self._uploads = []
+        self._decode_fbos = []
+        self._encoded = self._encode_fbo = None
         self._target = self._fbo = None
         self._size = None
         self.closed = False
@@ -147,7 +150,7 @@ class ShaderRunner:
         h, w = layer.shape[:2]
         if not (0 < w <= 8192 and 0 < h <= 8192) or w * h > MAX_PIXELS:
             raise ValueError("Shader frame exceeds the pixel budget")
-        if len(extra) > 3 or (len(extra) + 2) * w * h * 16 > MAX_BYTES:
+        if len(extra) > 3 or (len(extra) + 2) * w * h * 20 > MAX_BYTES:
             raise ValueError("Shader texture budget exceeded")
         if any(item.shape != layer.shape or item.dtype != np.uint8 for item in extra):
             raise ValueError("Additional shader textures must match the input frame")
@@ -176,53 +179,80 @@ class ShaderRunner:
                 self.error = str(exc)
                 raise ShaderUnavailable("GPU shaders unavailable: " + str(exc)) from exc
 
+    def _program(self, name):
+        if name not in self._programs:
+            started = time.perf_counter()
+            fragment = resource(name).replace("// SAMPLING", resource("sampling"))
+            program = self._ctx.program(vertex_shader=resource("fullscreen"), fragment_shader=fragment)
+            vao = self._ctx.vertex_array(program, [])
+            self._programs[name] = (program, vao)
+            self.timings[name + "_compile_ms"] = (time.perf_counter() - started) * 1000
+        return self._programs[name]
+
     def _render(self, name, layer, uniforms, extra, cancelled):
         if cancelled and cancelled():
             raise InterruptedError("Shader render cancelled")
         ctx = self._context()
-        if name not in self._programs:
-            started = time.perf_counter()
-            fragment = resource(name).replace("// SAMPLING", resource("sampling"))
-            program = ctx.program(vertex_shader=resource("fullscreen"), fragment_shader=fragment)
-            vao = ctx.vertex_array(program, [])
-            self._programs[name] = (program, vao)
-            self.timings[name + "_compile_ms"] = (time.perf_counter() - started) * 1000
-        program, vao = self._programs[name]
+        program, vao = self._program(name)
+        decode, decode_vao = self._program("decode")
+        encode, encode_vao = self._program("encode")
         size = (layer.shape[1], layer.shape[0])
         if size != self._size or len(self._textures) != len(extra) + 1:
             self._release_buffers()
             self._size = size
-            self._textures = [ctx.texture(size, 4, dtype="f4") for _ in range(len(extra) + 1)]
+            for _ in range(len(extra) + 1):
+                raw = ctx.texture(size, 4, dtype="f1")
+                linear = ctx.texture(size, 4, dtype="f4")
+                self._uploads.append(raw)
+                self._textures.append(linear)
+                self._decode_fbos.append(ctx.framebuffer([linear]))
             self._target = ctx.texture(size, 4, dtype="f4")
             self._fbo = ctx.framebuffer([self._target])
+            self._encoded = ctx.texture(size, 4, dtype="f1")
+            self._encode_fbo = ctx.framebuffer([self._encoded])
+        ctx.viewport = (0, 0, *size)
+        from moderngl import BLEND
+        ctx.disable(BLEND)
+        decode["source"].value = 0
         started = time.perf_counter()
         for index, image in enumerate((layer, *extra)):
-            self._textures[index].write(prepare(image).tobytes())
-            self._textures[index].use(index)
+            self._uploads[index].write(np.ascontiguousarray(image).tobytes())
+            self._uploads[index].use(0)
+            self._decode_fbos[index].use()
+            decode_vao.render(vertices=3)
+        self.timings["upload_decode_ms"] = (time.perf_counter() - started) * 1000
+        for index, texture in enumerate(self._textures):
+            texture.use(index)
             if "iChannel" + str(index) in program:
                 program["iChannel" + str(index)].value = index
-        self.timings["upload_ms"] = (time.perf_counter() - started) * 1000
-        uniforms = {"iResolution": (*size, 1.), **uniforms}
-        for key, value in uniforms.items():
+        values = {"iResolution": (*size, 1.), **uniforms}
+        for key, value in values.items():
             if key in program:
                 program[key].value = value
         self._fbo.use()
-        ctx.viewport = (0, 0, *size)
-        from moderngl import BLEND
-        ctx.disable(BLEND)  # Shader returns a complete premultiplied layer.
         started = time.perf_counter()
         vao.render(vertices=3)
-        data = self._fbo.read(components=4, dtype="f4", alignment=1)
-        self.timings["draw_readback_ms"] = (time.perf_counter() - started) * 1000
+        self._target.use(0)
+        encode["source"].value = 0
+        self._encode_fbo.use()
+        encode_vao.render(vertices=3)
+        data = self._encode_fbo.read(components=4, dtype="f1", alignment=1)
+        self.timings["draw_encode_readback_ms"] = (time.perf_counter() - started) * 1000
+        self.timings["upload_bytes"] = (len(extra) + 1) * size[0] * size[1] * 4
+        self.timings["readback_bytes"] = size[0] * size[1] * 4
         if cancelled and cancelled():
             raise InterruptedError("Shader render cancelled")
-        return finish(np.frombuffer(data, np.float32).reshape(layer.shape))
+        return np.frombuffer(data, np.uint8).reshape(layer.shape).copy()
 
     def _release_buffers(self):
-        for item in (self._fbo, self._target, *self._textures):
+        for item in (self._fbo, self._encode_fbo, *self._decode_fbos,
+                     self._target, self._encoded, *self._textures, *self._uploads):
             if item is not None:
                 self._release_one(item)
         self._textures = []
+        self._uploads = []
+        self._decode_fbos = []
+        self._encoded = self._encode_fbo = None
         self._fbo = self._target = None
         self._size = None
 
