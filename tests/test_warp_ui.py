@@ -202,6 +202,107 @@ def test_alt_drag_frame_corner_applies_corner_pin_without_effect_setup(editor):
     assert CH.value_at(moved, CH.effect_channel("corner_pin", "corner_tl_x"), 0) > 0.01
 
 
+def test_alt_corner_quad_matches_the_rendered_picture_and_survives_reopen(editor, tmp_path):
+    """The screenshot regression: the handles must sit on the image, not a detached box."""
+    window = editor
+    clip = window.engine.timeline.all_clips()[0]
+    clip.effects = [entry for entry in clip.effects if entry.get("effect_id") != "corner_pin"]
+    # A picture that is smaller than the composition, like the reference screenshot.
+    clip.transform["scale_x"] = clip.transform["scale_y"] = 78.0
+    window.engine.session.set_playhead(0)
+    window.preview_panel.view.fit()
+    pump(0.1)
+    view = window.preview_panel.view
+    deltas = ((24, 18), (-22, 12), (-18, -16), (20, -14))
+    for index, (dx, dy) in enumerate(deltas):
+        corner = window.overlay.to_widget(*window.overlay.clip_corners(clip)[index])
+        drag(view, corner, QPointF(corner.x() + dx, corner.y() + dy), steps=3,
+             modifiers=Qt.KeyboardModifier.AltModifier)
+        pump(0.1)
+    live = window.engine.timeline.find_clip(clip.id)
+    quad = window.overlay.clip_corners(live)
+    for index, point in enumerate(quad):
+        expected = window.overlay._corner_project(live, index)
+        assert point == pytest.approx(expected, abs=1e-6)
+    # The transform handles are the quad's corners, not the old affine rectangle.
+    handles = window.overlay.handle_points(live)
+    for name, index in (("nw", 0), ("ne", 1), ("se", 2), ("sw", 3)):
+        assert handles[name] == pytest.approx(quad[index], abs=1e-6)
+
+    rgba = window.engine.compose_frame(0, 1.0, with_alpha=True)
+    mask = np.asarray(rgba)[:, :, 3] > 12
+    ys, xs = np.where(mask)
+    assert len(xs), "the warped picture rendered nothing"
+    qx = [point[0] for point in quad]
+    qy = [point[1] for point in quad]
+    assert abs(float(xs.min()) - min(qx)) <= 2.5
+    assert abs(float(xs.max()) - max(qx)) <= 2.5
+    assert abs(float(ys.min()) - min(qy)) <= 2.5
+    assert abs(float(ys.max()) - max(qy)) <= 2.5
+    # Every displayed corner has picture behind it, so the picture fills the quad.
+    centre_x = sum(qx) / 4.0
+    centre_y = sum(qy) / 4.0
+    for x, y in quad:
+        probe_x = int(round(x * 0.92 + centre_x * 0.08))
+        probe_y = int(round(y * 0.92 + centre_y * 0.08))
+        assert mask[probe_y, probe_x], (x, y, "no picture under the transform corner")
+    # The old affine corner is empty: the detached box would still have selected it.
+    old_tl = T.content_corners(window.overlay.state(live), window.overlay.project_size(),
+                               window.overlay.image_size(live))[0]
+    assert not mask[int(round(old_tl[1])), int(round(old_tl[0]))]
+    # Selection follows the picture quad too, not the old affine rectangle.
+    centre = (sum(qx) / 4.0, sum(qy) / 4.0)
+    window.overlay._last_pos = window.overlay.to_widget(*centre)
+    assert window.overlay._clip_at(window.overlay._last_pos) is live
+    window.overlay._last_pos = window.overlay.to_widget(*old_tl)
+    assert window.overlay._clip_at(window.overlay._last_pos) is not live
+    # Half-quality preview renders the same quad in scaled project coordinates.
+    half = np.asarray(window.engine.compose_frame(0, 0.5, with_alpha=True))[:, :, 3] > 12
+    half_ys, half_xs = np.where(half)
+    assert abs(float(half_xs.min()) * 2.0 - min(qx)) <= 5.0
+    assert abs(float(half_xs.max()) * 2.0 - max(qx)) <= 5.0
+    assert abs(float(half_ys.min()) * 2.0 - min(qy)) <= 5.0
+    assert abs(float(half_ys.max()) * 2.0 - max(qy)) <= 5.0
+
+    assert window.projects.save()
+    path = window.projects.project.path
+    assert window.projects.open_path(path)
+    pump(0.2)
+    reopened = window.engine.timeline.find_clip(clip.id)
+    for index, point in enumerate(quad):
+        assert window.overlay._corner_project(reopened, index) == pytest.approx(
+            point, abs=0.25)
+
+
+def test_reset_distortion_restores_identity_quad_without_touching_transform(editor):
+    window = editor
+    clip = window.engine.timeline.all_clips()[0]
+    clip.transform["rotation"] = 17.0
+    clip.transform["scale_x"] = clip.transform["scale_y"] = 83.0
+    clip.effects = [{"effect_id": "corner_pin", "enabled": True, "params": {
+        "corner_tl_x": 0.2, "corner_tl_y": 0.18, "corner_br_x": 0.88}}]
+    window._refresh_panels()
+    pump(0.1)
+    before = window.overlay.clip_corners(clip)
+    window.engine.session.reset_corner_pin([clip.id])
+    pump(0.1)
+    restored = window.engine.timeline.find_clip(clip.id)
+    identity = T.content_corners(window.overlay.state(restored),
+                                 window.overlay.project_size(),
+                                 window.overlay.image_size(restored))
+    # Corner Pin addresses pixel centres 0..w-1; the affine content box spans 0..w,
+    # so identity differs by at most one source pixel after the fit, never by a box.
+    for actual, expected in zip(window.overlay.clip_corners(restored), identity):
+        assert actual == pytest.approx(expected, abs=2.0)
+    assert restored.transform["rotation"] == pytest.approx(17.0)
+    assert restored.transform["scale_x"] == pytest.approx(83.0)
+    window.engine.session.stack.undo()
+    pump(0.1)
+    undone = window.engine.timeline.find_clip(clip.id)
+    for actual, expected in zip(window.overlay.clip_corners(undone), before):
+        assert actual == pytest.approx(expected, abs=1e-6)
+
+
 def test_perspective_tilt_accepts_full_revolutions():
     from meenifx.effects.warp import PerspectiveEffect
 

@@ -48,6 +48,11 @@ class MediaCache:
         self._proxy_folder = ""
         self._proxy_suspended = False
         self._resolved = {}
+        # Width/height can be read from the file header without decoding a video. The
+        # overlay asks for this on every paint, including immediately after reopening a
+        # project, when no frame entry exists yet. Falling back to the composition size
+        # there used to put the transform box on the full canvas instead of the picture.
+        self._sizes = {}
 
     def set_proxy(self, enabled=None, width=None, folder=None):
         if enabled is not None:
@@ -155,5 +160,43 @@ class MediaCache:
         return max(1, int(round(height * w / h)))
 
     def source_size(self, path, default=None):
-        """(width, height) of a source's first frame, or `default` when none decodes."""
-        return entry_size(self._entries.get(path), default)
+        """(width, height) of a source, without requiring its frames to be loaded.
+
+        A saved project starts with no decoded entries. This reads still dimensions with
+        `cv2.imread` and video dimensions from the capture header, then caches the result;
+        a reopened clip therefore has the same fit rectangle as it did when imported.
+        """
+        if not path:
+            return default
+        entry = self._entries.get(path)
+        if entry is not None:
+            # A loaded entry whose reader can no longer decode has no trustworthy size.
+            # Keep the historical overlay fallback instead of probing a broken source.
+            return entry_size(entry, default)
+        cached = self._sizes.get(path)
+        if cached is not None:
+            return cached
+        size = None
+        if os.path.exists(path):
+            ext = os.path.splitext(str(path).lower())[1]
+            try:
+                if ext in (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"):
+                    image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+                    if image is not None:
+                        size = (int(image.shape[1]), int(image.shape[0]))
+                else:
+                    capture = cv2.VideoCapture(str(path))
+                    try:
+                        if capture.isOpened():
+                            width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+                            height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+                            if width > 0 and height > 0:
+                                size = (width, height)
+                    finally:
+                        capture.release()
+            except Exception:
+                size = None
+        if size is not None:
+            self._sizes[path] = size
+            return size
+        return default

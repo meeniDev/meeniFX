@@ -1726,6 +1726,21 @@ class TimelineSession:
     def reset_transform(self, ids):
         self.transform_clips(ids, lambda clip: T.reset_transform(clip), "Reset transform")
 
+    def reset_corner_pin(self, ids):
+        """Clear Corner Pin back to its identity quad as one undoable edit.
+
+        The effect stays on the clip so the user can keep distorting; its identity values
+        put every handle back on the intrinsic picture corners without touching position,
+        scale or rotation.
+        """
+        def action(clip):
+            entry = next((item for item in clip.effects
+                          if item.get("effect_id") == "corner_pin"), None)
+            if entry is not None:
+                entry["params"] = {}
+                entry["enabled"] = True
+        self.transform_clips(ids, action, "Reset distortion")
+
     def center_in_frame(self, ids):
         self.transform_clips(ids, lambda clip: T.center_in_frame(clip), "Center in frame")
 

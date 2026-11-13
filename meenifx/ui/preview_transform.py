@@ -42,6 +42,8 @@ _PIN_CLIPBOARD = {"rows": [], "start": 0, "pins": 0}
 PATH_STEP = 2         # frames between motion-path samples
 
 HANDLE_NAMES = ("nw", "n", "ne", "e", "se", "s", "sw", "w")
+CORNER_NAMES = (("corner_tl_x", "corner_tl_y"), ("corner_tr_x", "corner_tr_y"),
+                ("corner_br_x", "corner_br_y"), ("corner_bl_x", "corner_bl_y"))
 
 
 def _segment_distance(point, start, end):
@@ -218,6 +220,14 @@ class PreviewOverlay:
         return T.evaluate(clip, self.local_frame(clip))
 
     def image_size(self, clip):
+        """Selection-bounds policy: intrinsic media dimensions.
+
+        Media clips use the complete decoded source rectangle, including transparent
+        padding. Handles therefore represent the real layer that Corner Pin warps; we do
+        not silently trim alpha, because that would crop transparent content and make the
+        stored normalized corners disagree with the renderer. Visible-alpha bounds are a
+        future optional selection aid, not the default geometry.
+        """
         if getattr(clip, "is_text", False) or getattr(clip, "is_shape", False):
             # Generated layers really are full-frame pictures. Their intrinsic content is
             # reported separately by content_rect(), so fit/anchor/transform semantics
@@ -255,8 +265,52 @@ class PreviewOverlay:
     def matrix(self, clip):
         return T.matrix(self.state(clip), self.project_size(), self.image_size(clip))
 
+    def corner_pin_entry(self, clip):
+        entry = self._effect_entry(clip, "corner_pin")
+        if entry is None or not entry.get("enabled", True):
+            return None
+        return entry
+
+    def corner_values(self, clip):
+        """Corner Pin's four normalized source corners, with identity defaults."""
+        frame = self.local_frame(clip)
+        identity = ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))
+        return [
+            (self.param(clip, "corner_pin", names[0], frame, default[0]),
+             self.param(clip, "corner_pin", names[1], frame, default[1]))
+            for names, default in zip(CORNER_NAMES, identity)
+        ]
+
+    def corner_project(self, clip, nx, ny):
+        """Map one normalized Corner Pin corner into project space.
+
+        Corner Pin's coordinate space is deliberately explicit because the renderer needs
+        one definition for preview and export:
+
+        * media clips: normalized pixels in the layer *before* the clip fit/transform,
+          so the warp is followed by the ordinary position/scale/rotation matrix;
+        * generated clips: the renderer has already baked the transform into the layer,
+          so the effect and its normalized corners live in output/project space.
+
+        This is the only place the overlay converts a stored corner into project pixels.
+        """
+        if getattr(clip, "is_text", False) or getattr(clip, "is_shape", False):
+            width, height = self.project_size()
+            return (float(nx) * max(0, width - 1), float(ny) * max(0, height - 1))
+        width, height = self.image_size(clip)
+        return T.forward((float(nx) * max(0, width - 1), float(ny) * max(0, height - 1)),
+                         self.state(clip), self.project_size(), (width, height))
+
     def clip_corners(self, clip):
-        """The four transformed content corners, in project pixels."""
+        """The four visual corners of the clip, in project pixels.
+
+        When Corner Pin is active the box *is* the warped quadrilateral. Keeping the
+        pre-warp rectangle here was the detached-box bug: the picture filled the pin
+        quad while the resize handles stayed on the old, larger rectangle.
+        """
+        if self.corner_pin_entry(clip) is not None:
+            return [self.corner_project(clip, nx, ny)
+                    for nx, ny in self.corner_values(clip)]
         state = self.state(clip)
         return T.content_corners_rect(state, self.project_size(), self.image_size(clip),
                                       self.content_rect(clip))
@@ -364,6 +418,20 @@ class PreviewOverlay:
             return "rotate"
         return self._handle_at(clip, pos)
 
+    @staticmethod
+    def _point_in_quad(point, quad):
+        """Even-odd containment test for the four-corner visual quadrilateral."""
+        inside = False
+        x, y = point
+        for index in range(4):
+            x0, y0 = quad[index]
+            x1, y1 = quad[(index + 1) % 4]
+            if (y0 > y) != (y1 > y):
+                crossing = x0 + (y - y0) * (x1 - x0) / max(1e-9, y1 - y0)
+                if x < crossing:
+                    inside = not inside
+        return inside
+
     def _clip_at(self, pos):
         """Topmost visible clip whose picture contains `pos` (widget coordinates)."""
         project = self.to_project(pos)
@@ -377,6 +445,13 @@ class PreviewOverlay:
                 if not (clip.timeline_start <= frame < clip.end):
                     continue
                 if not clip.source_path and not clip.is_text and not clip.is_shape:
+                    continue
+                if self.corner_pin_entry(clip) is not None:
+                    # The affine inverse cannot see a perspective warp. Hit the actual
+                    # rendered quadrilateral, otherwise clicks inside a pinched picture
+                    # miss it and clicks in the old detached rectangle select it.
+                    if self._point_in_quad(project, self.clip_corners(clip)):
+                        return clip
                     continue
                 width, height = self.image_size(clip)
                 source = T.invert(project, self.state(clip), self.project_size(), (width, height))
@@ -529,25 +604,15 @@ class PreviewOverlay:
         return None
 
     def _corner_at(self, clip):
-        """(index, project point) of the corner-pin corner under the pointer."""
-        entry = self._effect_entry(clip, "corner_pin")
-        if entry is None:
+        """(index, normalized point) of the Corner Pin handle under the pointer."""
+        if self.corner_pin_entry(clip) is None:
             return None, None
         project = self.to_project(self._last_pos)
         if project is None:
             return None, None
-        inverse = T.invert(project, self.state(clip), self.project_size(), self.image_size(clip))
-        if inverse is None:
-            return None, None
-        width, height = self.image_size(clip)
-        nx, ny = inverse[0] / max(1, width - 1), inverse[1] / max(1, height - 1)
-        frame = self.local_frame(clip)
-        for index, (corner_x, corner_y) in enumerate((
-                ("corner_tl_x", "corner_tl_y"), ("corner_tr_x", "corner_tr_y"),
-                ("corner_br_x", "corner_br_y"), ("corner_bl_x", "corner_bl_y"))):
-            cx = self.param(clip, "corner_pin", corner_x, frame)
-            cy = self.param(clip, "corner_pin", corner_y, frame)
-            if math.hypot((cx - nx), (cy - ny)) * max(width, height) <= HIT * 2.5:
+        for index, (nx, ny) in enumerate(self.corner_values(clip)):
+            corner = self.corner_project(clip, nx, ny)
+            if math.hypot(corner[0] - project[0], corner[1] - project[1]) <= HIT * 2.5:
                 return index, (nx, ny)
         return None, None
 
@@ -1063,24 +1128,9 @@ class PreviewOverlay:
                 widget_point = self.to_widget(*point)
                 painter.drawRect(QRectF(widget_point.x() - 3, widget_point.y() - 3, 6, 6))
             painter.restore()
-        corner_pin = self._effect_entry(clip, "corner_pin")
-        if corner_pin is not None:
-            names = (("corner_tl_x", "corner_tl_y"), ("corner_tr_x", "corner_tr_y"),
-                     ("corner_br_x", "corner_br_y"), ("corner_bl_x", "corner_bl_y"))
-            painter.save()
-            painter.setPen(QPen(QColor(tokens.COLORS["success"]), 1.3))
-            painter.setBrush(QBrush(QColor(tokens.COLORS["panel"])))
-            for index, (cx_name, cy_name) in enumerate(names):
-                nx = self.param(clip, "corner_pin", cx_name, frame)
-                ny = self.param(clip, "corner_pin", cy_name, frame)
-                width, height = self.image_size(clip)
-                project = T.forward((nx * max(0, width - 1), ny * max(0, height - 1)),
-                                    self.state(clip),
-                                    self.project_size(), (width, height))
-                point = self.to_widget(*project)
-                size = 6.0 if index == self._selected_corner else 4.5
-                painter.drawRect(QRectF(point.x() - size, point.y() - size, size * 2, size * 2))
-            painter.restore()
+        # Corner Pin has no second set of green squares. Its four points are the
+        # transform box's corners, drawn by _paint_clip above, so the outline and the
+        # eight resize handles always describe the same warped quadrilateral.
 
     # ------------------------------------------------------------------- gestures
     @crashlog.guard("preview overlay", fallback=False)
@@ -1211,14 +1261,18 @@ class PreviewOverlay:
                                              "params": {}})
                     self._selected_corner = corner_index
                     self._drag = {"kind": "corner", "clip": clip,
-                                  "index": corner_index}
+                                  "index": corner_index,
+                                  "origin": self.to_project(pos),
+                                  "start_corner": self._corner_project(clip, corner_index)}
                     self.widget.update()
                     return True
             index, _point = self._corner_at(clip)
             if index is not None:
                 self._selected_corner = index
                 self.session.begin_gesture()
-                self._drag = {"kind": "corner", "clip": clip, "index": index}
+                self._drag = {"kind": "corner", "clip": clip, "index": index,
+                              "origin": self.to_project(pos),
+                              "start_corner": self._corner_project(clip, index)}
                 self.widget.update()
                 return True
         if not self.show_transform_controls:
@@ -1773,14 +1827,8 @@ class PreviewOverlay:
 
     def _corner_project(self, clip, index):
         """The project-space position of one Corner Pin corner."""
-        names = (("corner_tl_x", "corner_tl_y"), ("corner_tr_x", "corner_tr_y"),
-                 ("corner_br_x", "corner_br_y"), ("corner_bl_x", "corner_bl_y"))[index]
-        frame = self.local_frame(clip)
-        width, height = self.image_size(clip)
-        nx = self.param(clip, "corner_pin", names[0], frame, 0.0 if index in (0, 3) else 1.0)
-        ny = self.param(clip, "corner_pin", names[1], frame, 0.0 if index in (0, 1) else 1.0)
-        return T.forward((nx * max(0, width - 1), ny * max(0, height - 1)),
-                         self.state(clip), self.project_size(), (width, height))
+        nx, ny = self.corner_values(clip)[index]
+        return self.corner_project(clip, nx, ny)
 
     def _scale_to_corner_drag(self, drag, pos):
         """Turn an in-progress corner scale into a no-jump Corner Pin drag."""
@@ -1815,20 +1863,28 @@ class PreviewOverlay:
             return
         target = project
         if drag.get("start_corner") is not None and drag.get("origin") is not None:
+            # Preserve the grab offset from the exact corner point. The handle therefore
+            # stays under the cursor instead of snapping its centre to the press point.
             target = (drag["start_corner"][0] + project[0] - drag["origin"][0],
                       drag["start_corner"][1] + project[1] - drag["origin"][1])
-        width, height = self.image_size(clip)
-        source = T.invert(target, self.state(clip), self.project_size(), (width, height))
-        if source is None:
-            return
-        names = (("corner_tl_x", "corner_tl_y"), ("corner_tr_x", "corner_tr_y"),
-                 ("corner_br_x", "corner_br_y"), ("corner_bl_x", "corner_bl_y"))[index]
+        names = CORNER_NAMES[index]
         frame = self.local_frame(clip)
         auto = bool(self.session.auto_keyframe.get())
-        CH.set_value(clip, CH.effect_channel("corner_pin", names[0]),
-                     source[0] / max(1, width - 1), frame, auto)
-        CH.set_value(clip, CH.effect_channel("corner_pin", names[1]),
-                     source[1] / max(1, height - 1), frame, auto)
+        if getattr(clip, "is_text", False) or getattr(clip, "is_shape", False):
+            # Generated layers already carry their transform in the rendered layer, so
+            # Corner Pin's normalized space is the output frame.
+            width, height = self.project_size()
+            nx = target[0] / max(1, width - 1)
+            ny = target[1] / max(1, height - 1)
+        else:
+            width, height = self.image_size(clip)
+            source = T.invert(target, self.state(clip), self.project_size(), (width, height))
+            if source is None:
+                return
+            nx = source[0] / max(1, width - 1)
+            ny = source[1] / max(1, height - 1)
+        CH.set_value(clip, CH.effect_channel("corner_pin", names[0]), nx, frame, auto)
+        CH.set_value(clip, CH.effect_channel("corner_pin", names[1]), ny, frame, auto)
 
     def _mesh_drag(self, drag, pos):
         clip, row, col = drag["clip"], drag["row"], drag["col"]

@@ -533,6 +533,7 @@ class MainWindow(QMainWindow):
         self._add_action(transformation_menu,"Fill Frame","Shift+F8",lambda:self.engine.session.fill_frame(sorted(self.engine.session.selected),self._clip_media_size))
         self._add_action(transformation_menu,"Center in Frame","Shift+F9",lambda:self.engine.session.center_in_frame(sorted(self.engine.session.selected)))
         self._add_action(transformation_menu,"Reset Transform","Shift+F10",lambda:self.engine.session.reset_transform(sorted(self.engine.session.selected)))
+        self._add_action(transformation_menu,"Reset Distortion",None,lambda:self.engine.session.reset_corner_pin(sorted(self.engine.session.selected)))
         self._add_action(transformation_menu,"Flip Horizontal",None,lambda:self.engine.session.flip_selected(sorted(self.engine.session.selected),"h"))
         self._add_action(transformation_menu,"Flip Vertical",None,lambda:self.engine.session.flip_selected(sorted(self.engine.session.selected),"v"))
         # The simple keyframe workflow: one command per operation, each on the shared
