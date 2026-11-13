@@ -335,7 +335,7 @@ class KaleidoscopeEffect(LayerEffect):
     """Fold the picture into mirrored wedges (or a plain kaleidoscope)."""
 
     key = "kaleidoscope"
-    name = "Mirror / Kaleidoscope"
+    name = "Kaleidoscope"
     category = "Glitch & Distortion"
 
     PARAMS = (

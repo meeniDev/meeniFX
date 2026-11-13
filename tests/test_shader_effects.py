@@ -131,6 +131,16 @@ def test_transparent_input_has_no_invented_opaque_pixels(effect_type):
     assert not effect_type(None).apply_layer(source).any()
 
 
+def test_lens_filtering_does_not_create_black_alpha_halos():
+    source = np.full((60, 100, 4), 255, np.uint8)
+    source[:, :35] = 0
+    effect = LensWarpEffect(None)
+    effect.radius.set(80)
+    out = effect.apply_layer(source)
+    visible = out[:, :, 3] > 2
+    assert visible.any() and np.all(out[:, :, :3][visible] == 255)
+
+
 def test_gpu_failure_has_matching_fallback_or_explicit_error(monkeypatch):
     class Unsupported:
         def render(self, *args, **kwargs):
@@ -148,3 +158,30 @@ def test_gpu_failure_has_matching_fallback_or_explicit_error(monkeypatch):
     assert "fallback" in effect.status.lower()
     effect.backend.set("cpu")
     assert np.array_equal(fallback, effect.apply_layer(picture()))
+
+
+@pytest.mark.parametrize("key", ["lens_warp", "page_curl"])
+@pytest.mark.parametrize("fps", [23.976, 60.])
+def test_preview_scaling_and_absolute_frame_time(key, fps, monkeypatch):
+    import cv2
+    engine, clip = build_engine(frame=synthetic_frame(320, 180), fps=fps)
+    clip.effects = [{"effect_id": key, "params": {"backend": "cpu"}}]
+    full = engine.render_frame(7, 1)[1]
+    preview = engine.render_frame(7, .5)[1]
+    expected = cv2.resize(full, (160, 90), interpolation=cv2.INTER_AREA)
+    assert np.abs(preview.astype(float) - expected.astype(float)).mean() < 8
+    seen = []
+    class Capture:
+        def render(self, name, image, uniforms, extra=()):
+            seen.append(uniforms)
+            return image.copy()
+    monkeypatch.setattr(S, "runner", lambda: Capture())
+    effect = engine.runtime_effects[key]
+    effect.backend.set("gpu")
+    effect.local_frame = 47
+    effect.apply_layer(np.dstack((synthetic_frame(), np.full((180, 320), 255, np.uint8))))
+    assert seen[0]["iFrame"] == 47 and seen[0]["iTime"] == pytest.approx(47/fps)
+    seen.clear()
+    engine.apply_effects(synthetic_frame(), [{"effect_id": key, "params": {"backend": "gpu"}}],
+                         local_frame=17)
+    assert seen[0]["iFrame"] == 17 and seen[0]["iTime"] == pytest.approx(17/fps)

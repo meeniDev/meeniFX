@@ -602,6 +602,11 @@ class EffectsPanel(QWidget):
             settings = SHAPE.ensure_shape(clip)
             shape_key = (str(settings.get("kind") or "rectangle"),
                          bool(settings.get("stroke_enabled")),
+                         bool(settings.get("gradient_enabled")),
+                         tuple(tuple((name, isinstance(stop.get(name), dict)
+                                      and bool(stop[name].get("keys")))
+                                     for name in ("position", "color"))
+                               for stop in settings.get("gradient_stops") or ()),
                          tuple(sorted((name, isinstance(value, AnimatedValue))
                                       for name, value in settings.items())))
         text_animation = ()
@@ -3274,6 +3279,16 @@ class EffectsPanel(QWidget):
             target.addWidget(self._labelled(spec.label, holder, tip))
             self._rows.append({"kind": "colour_param", "clip_id": clip.id, "entry": entry,
                                "name": spec.name, "button": swatch, "spec": spec})
+        elif effect.key == "page_curl" and spec.name == "back_source":
+            box = QComboBox()
+            box.addItem("Choose a clip", "")
+            for candidate in self.engine.timeline.all_clips():
+                if candidate is not clip and candidate.track.type == "video":
+                    box.addItem(candidate.name or "Untitled clip", str(candidate.id))
+            box.setCurrentIndex(max(0, box.findData(str(current or ""))))
+            box.currentIndexChanged.connect(lambda _i: self._commit_choice(
+                clip, entry, spec.name, box.currentData(), spec))
+            target.addWidget(self._labelled(spec.label, box, tip))
         elif effect.key == "page_curl" and spec.name == "back_path":
             edit = QLineEdit(str(current or ""))
             edit.setPlaceholderText("Choose a backside image")

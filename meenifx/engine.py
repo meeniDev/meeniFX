@@ -1031,6 +1031,8 @@ class EditorEngine:
                            for name, value in entry.get("params", {}).items()})
             runtime.param_scale = float(scale)
             runtime.load_params(params)
+            runtime.local_frame = int(local_frame)
+            runtime.clip_entry = entry
             result = runtime.apply(output)
             if mix < 0.999:
                 flat = np.full(output.shape[:2], 255, np.uint8)

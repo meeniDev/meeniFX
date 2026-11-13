@@ -115,17 +115,25 @@ class ShaderRunner:
         self._size = None
         self.closed = False
         self.error = ""
+        self._context_failure = ""
+        self._timed_out = False
         self.info = {}
         self.timings = {}
         atexit.register(self.close)
 
     def _context(self):
         if self._ctx is None:
+            if self._context_failure:
+                raise ShaderUnavailable(self._context_failure)
             if os.environ.get("MEENIFX_DISABLE_SHADERS") == "1":
                 raise ShaderUnavailable("GPU shaders disabled by configuration")
             started = time.perf_counter()
-            import moderngl
-            self._ctx = moderngl.create_standalone_context(require=330)
+            try:
+                import moderngl
+                self._ctx = moderngl.create_standalone_context(require=330)
+            except Exception as exc:
+                self._context_failure = str(exc)
+                raise
             self.info = {key: self._ctx.info.get(key) for key in
                          ("GL_VENDOR", "GL_RENDERER", "GL_VERSION")}
             self.timings["context_ms"] = (time.perf_counter() - started) * 1000
@@ -151,12 +159,15 @@ class ShaderRunner:
         with self._lock:
             if self.closed:
                 raise ShaderUnavailable("Shader runner is closed")
+            if self._timed_out:
+                raise ShaderUnavailable("GPU driver previously timed out; restart the renderer to retry")
             if cancelled and cancelled():
                 raise InterruptedError("Shader render cancelled")
             future = self._pool.submit(self._render, name, layer, values, tuple(extra), cancelled)
             try:
                 return future.result(timeout=30)
             except TimeoutError as exc:
+                self._timed_out = True
                 self.error = "GPU driver did not finish within 30 seconds"
                 raise ShaderUnavailable(self.error) from exc
             except InterruptedError:
@@ -197,7 +208,8 @@ class ShaderRunner:
                 program[key].value = value
         self._fbo.use()
         ctx.viewport = (0, 0, *size)
-        ctx.disable(0x0BE2)  # GL_BLEND: shader returns a complete premultiplied layer.
+        from moderngl import BLEND
+        ctx.disable(BLEND)  # Shader returns a complete premultiplied layer.
         started = time.perf_counter()
         vao.render(vertices=3)
         data = self._fbo.read(components=4, dtype="f4", alignment=1)
@@ -209,7 +221,7 @@ class ShaderRunner:
     def _release_buffers(self):
         for item in (self._fbo, self._target, *self._textures):
             if item is not None:
-                item.release()
+                self._release_one(item)
         self._textures = []
         self._fbo = self._target = None
         self._size = None
@@ -217,20 +229,34 @@ class ShaderRunner:
     def _release(self):
         self._release_buffers()
         for program, vao in self._programs.values():
-            vao.release()
-            program.release()
+            self._release_one(vao)
+            self._release_one(program)
         self._programs.clear()
         if self._ctx is not None:
-            self._ctx.release()
+            self._release_one(self._ctx)
             self._ctx = None
+
+    def _release_one(self, item):
+        try:
+            item.release()
+        except Exception as exc:
+            # A lost driver must not abort Qt's closeEvent or prevent other cleanup.
+            self.error = "GPU cleanup: " + str(exc)
 
     def close(self):
         with self._lock:
             if self.closed:
                 return
             self.closed = True
-            self._pool.submit(self._release).result(timeout=30)
-            self._pool.shutdown(wait=True)
+            try:
+                self._pool.submit(self._release).result(timeout=30)
+            except Exception as exc:
+                self.error = "GPU cleanup: " + str(exc)
+            finally:
+                try:
+                    self._pool.shutdown(wait=True)
+                except queue.Full:
+                    self.error = "GPU cleanup is waiting on an unresponsive driver"
 
 
 _RUNNER = None

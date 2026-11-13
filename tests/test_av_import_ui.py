@@ -33,6 +33,20 @@ SOUND = os.path.join(ROOT, "demo_audio", "music-bed.wav")
 STILL = os.path.join(ROOT, "mosaic-output.png")
 
 
+@pytest.fixture(scope="module", autouse=True)
+def video_only_fixture(tmp_path_factory):
+    """Fresh checkouts do not contain the ignored mosaic-output.mp4 artifact."""
+    import cv2
+    import numpy as np
+    global VIDEO_ONLY
+    VIDEO_ONLY = str(tmp_path_factory.mktemp("video-only") / "video.mp4")
+    writer = cv2.VideoWriter(VIDEO_ONLY, cv2.VideoWriter_fourcc(*"mp4v"), 15., (160, 100))
+    assert writer.isOpened()
+    for frame in range(30):
+        writer.write(np.full((100, 160, 3), (frame * 5, 80, 140), np.uint8))
+    writer.release()
+
+
 @pytest.fixture(scope="module")
 def app():
     application = QApplication.instance() or QApplication(sys.argv)

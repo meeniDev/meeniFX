@@ -73,10 +73,14 @@ def test_masks_nested_compositions_adjustment_and_generated_layers(key):
 
 @pytest.mark.parametrize("key", KEYS)
 @pytest.mark.parametrize("fmt", ["png", "mp4", "avi", "gif"])
-def test_actual_export_parity(key, fmt, tmp_path):
+def test_actual_export_parity(key, fmt, tmp_path, record_property):
     from PIL import Image
     engine, clip = build_engine(frame=synthetic_frame(160, 100), fps=10, duration=4, frames=4)
-    clip.effects = [{"effect_id": key, "params": {"backend": "cpu"}}]
+    animated = AnimatedValue()
+    animated.set_keyframe(0, 0)
+    animated.set_keyframe(3, 80 if key == "lens_warp" else .65)
+    parameter = "amount" if key == "lens_warp" else "progress"
+    clip.effects = [{"effect_id": key, "params": {"backend": "cpu", parameter: animated}}]
     # All format writers consume this same frame. Codec/palette errors have separate tolerances.
     reference = engine.render_frame(3)[1]
     path = tmp_path / f"{key}.{fmt}"
@@ -84,15 +88,22 @@ def test_actual_export_parity(key, fmt, tmp_path):
                    "use_source_fps": True, "use_source_size": True, "gif_colors": 256})
     if fmt == "gif":
         with Image.open(path) as gif:
+            gif.seek(gif.n_frames - 1)
             decoded = np.array(gif.convert("RGB"))[:, :, ::-1]
     elif fmt in ("mp4", "avi"):
         capture = cv2.VideoCapture(str(path))
-        ok, decoded = capture.read()
+        decoded = None
+        while True:
+            ok, current = capture.read()
+            if not ok:
+                break
+            decoded = current
         capture.release()
-        assert ok
+        assert decoded is not None
     else:
         decoded = cv2.imread(str(path))
     diff = np.abs(decoded.astype(float)-reference.astype(float)).mean()
+    record_property("mean_absolute_error", float(diff))
     assert diff < (0.01 if fmt == "png" else 10), (fmt, diff)
 
 
@@ -154,3 +165,53 @@ def test_page_curl_reveals_lower_clip_without_a_second_transition_system():
     halfway = engine.render_frame(0)[1]
     assert np.any(np.all(halfway == lower, axis=2))
     assert not np.array_equal(halfway, lower)
+
+
+def test_backside_clip_texture_and_self_reference_guard():
+    engine, clip = build_engine()
+    runtime = engine.runtime_effects["page_curl"]
+    runtime.clip = clip
+    runtime.local_frame = 7
+    with pytest.raises(ValueError, match="another"):
+        runtime.clip_texture(str(clip.id), (320, 180))
+    source = engine.timeline.new_clip("Backside", clip.source_path, clip.track, 1000, 30,
+                                      source_out=30, source_fps=30)
+    runtime.load_params({"back_texture": "clip", "back_source": str(source.id)})
+    layer = np.dstack((synthetic_frame(), np.full((180, 320), 255, np.uint8)))
+    image = runtime.apply_layer(layer)
+    assert image.shape == layer.shape and runtime.local_frame == 7
+    engine._shader_texture_stack = {id(source)}
+    with pytest.raises(ValueError, match="Circular"):
+        runtime.clip_texture(str(source.id), (320, 180))
+
+
+def test_original_names_and_stable_effect_ids():
+    import re
+    from meenifx.engine import EditorEngine
+    engine = EditorEngine()
+    assert engine.runtime_effects["page_curl"].name == "Page Curl"
+    assert engine.runtime_effects["lens_warp"].name == "Lens Warp"
+    assert engine.runtime_effects["kaleidoscope"].name == "Kaleidoscope"
+    for runtime in engine.effects:
+        assert not re.match(r"(?i)^cc(?:\s|_)", runtime.name)
+        for item in (getattr(runtime, "PRESETS", {}) or {}).values():
+            if isinstance(item, tuple) and isinstance(item[0], str):
+                assert not re.match(r"(?i)^cc(?:\s|_)", item[0])
+
+
+@pytest.mark.parametrize("key", KEYS)
+def test_shader_chain_preserves_existing_tracked_region_effects(key, monkeypatch):
+    from meenifx.effects.tracking_viz import Detection
+    engine, clip = build_engine()
+    monkeypatch.setattr(engine.runtime_effects["blob_tracker"], "_detect",
+                        lambda _frame: [Detection(box=(20, 20, 60, 50))])
+    shader = {"effect_id": key, "params": {"backend": "cpu"}}
+    clip.effects = [shader]
+    plain = engine.render_frame(0)[1]
+    clip.effects = [{"effect_id": "blob_tracker", "params": {
+        "region_effect_1": "invert", "region_amount_1": 100, "region_feather": 0,
+        "show_box": False, "show_contour": False, "show_points": False,
+        "show_labels": False, "show_numbers": False, "connector_mode": "none"}}, shader]
+    tracked = engine.render_frame(0)[1]
+    assert not np.array_equal(plain, tracked)
+    assert np.array_equal(tracked, engine.render_frame(17)[1])

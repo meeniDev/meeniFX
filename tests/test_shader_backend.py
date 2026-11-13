@@ -73,3 +73,21 @@ def test_packaged_resource_location(tmp_path, monkeypatch):
     (assets / "identity.glsl").write_text("packaged shader", encoding="utf-8")
     monkeypatch.setattr(S.sys, "_MEIPASS", str(tmp_path), raising=False)
     assert S.resource("identity") == "packaged shader"
+
+
+def test_cleanup_continues_after_a_driver_release_error():
+    calls = []
+    class Resource:
+        def __init__(self, fail=False):
+            self.fail = fail
+        def release(self):
+            calls.append(self.fail)
+            if self.fail:
+                raise RuntimeError("lost test driver")
+    runner = S.ShaderRunner()
+    runner._target = Resource(True)
+    runner._textures = [Resource()]
+    runner.close()
+    assert calls == [True, False]
+    assert runner.closed and not runner._pool.thread.is_alive()
+    assert "cleanup" in runner.error and not runner._textures

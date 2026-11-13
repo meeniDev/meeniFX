@@ -40,11 +40,12 @@ class ShaderEffect(LayerEffect):
 
     def apply_layer(self, layer):
         p = self.values()
+        frame = int(self.local_frame)
         if self.neutral(p):
             return layer.copy()
         u, extra = self.uniforms(p, layer)
         fps = max(.001, float(getattr(self.app, "project_fps", 30)))
-        u.update(iFrame=int(self.local_frame), iTime=float(self.local_frame) / fps)
+        u.update(iFrame=frame, iTime=float(frame) / fps)
         use_gpu = p["backend"] == "gpu" or (p["backend"] == "auto" and
                     threading.current_thread() is not threading.main_thread())
         if use_gpu:
@@ -66,6 +67,37 @@ class ShaderEffect(LayerEffect):
         backend = S._RUNNER
         if backend is not None and not backend.closed:
             backend.close()
+
+    def clip_texture(self, source_id, size):
+        """Resolve a clip reference without recursively applying its effect chain."""
+        try:
+            source = self.app.timeline.find_clip(int(source_id))
+        except (AttributeError, TypeError, ValueError):
+            source = None
+        if source is None or source is self.clip or source.track.type != "video":
+            raise ValueError("Choose another video, image, text, shape or composition as the texture source")
+        absolute = int(self.local_frame) + int(getattr(self.clip, "timeline_start", 0))
+        local = max(0, min(source.duration - 1, absolute - source.timeline_start))
+        stack = getattr(self.app, "_shader_texture_stack", set())
+        self.app._shader_texture_stack = stack
+        key = id(source)
+        if key in stack or len(stack) >= 8:
+            raise ValueError("Circular or excessively nested shader texture source")
+        stack.add(key)
+        values = self.capture_params()
+        state = {name: getattr(self, name) for name in
+                 ("clip", "clip_entry", "local_frame", "param_scale", "layer_rect")}
+        try:
+            layer, _rect = self.app._layer_for(source, source.timeline_start + local,
+                                             max(.02, float(self.param_scale)))
+        finally:
+            stack.remove(key)
+            self.load_params(values)
+            for name, value in state.items():
+                setattr(self, name, value)
+        if layer is None:
+            raise ValueError("The selected texture clip is unavailable")
+        return S.finish(cv2.resize(S.prepare(layer), size, interpolation=cv2.INTER_LINEAR))
 
 
 class LensWarpEffect(ShaderEffect):

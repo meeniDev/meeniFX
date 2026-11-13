@@ -11,6 +11,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import tempfile
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,15 +39,20 @@ def main():
         log, report = output / (path.stem + ".log"), output / (path.stem + ".xml")
         # A crashed rerun must never inherit counts from an older successful report.
         report.unlink(missing_ok=True)
-        command = [sys.executable, "-m", "pytest", str(path), "-q", "-p", "no:cacheprovider",
+        command = [sys.executable, str(ROOT / "tools" / "pytest_worker.py"), str(path), "-q", "-p", "no:cacheprovider",
                    "--junitxml=" + str(report)]
         if path.name in SCRIPT_CHECKS:
             # These files use top-level assertions, not pytest functions.
             command = [sys.executable, str(path)]
         started = time.monotonic()
-        with log.open("w", encoding="utf-8") as stream:
+        with tempfile.TemporaryDirectory(prefix="meenifx-tests-") as profile, log.open("w", encoding="utf-8") as stream:
+            private_env = dict(env, MEENIFX_TEST_PROFILE=profile, APPDATA=profile, XDG_CONFIG_HOME=profile)
+            # Existing optional weights remain read-only integration fixtures.
+            weights = Path(env.get("APPDATA", "")) / "meeniFX" / "Studios" / "meenifx-models" / "u2net.onnx"
+            if weights.is_file():
+                private_env.setdefault("MEENIFX_ROTO_MODEL", str(weights))
             try:
-                run = subprocess.run(command, cwd=ROOT, env=env, stdout=stream,
+                run = subprocess.run(command, cwd=ROOT, env=private_env, stdout=stream,
                                      stderr=subprocess.STDOUT, timeout=args.timeout)
                 code = run.returncode
             except subprocess.TimeoutExpired:

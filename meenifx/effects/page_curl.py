@@ -28,10 +28,12 @@ class PageCurlEffect(ShaderEffect):
         ParamSpec("back_g", "Backside green", "int", 0, 255, 230),
         ParamSpec("back_b", "Backside blue", "int", 0, 255, 220),
         ParamSpec("back_texture", "Backside", "choice", default="color",
-                  choices=("color", "source", "image"),
-                  choice_labels=("Solid color", "Mirrored page", "Image file")),
+                  choices=("color", "source", "image", "clip"),
+                  choice_labels=("Solid color", "Mirrored page", "Image file", "Timeline clip")),
         ParamSpec("back_path", "Backside image", "text", default="",
                   help="Optional image path; choose Image file above"),
+        ParamSpec("back_source", "Backside clip", "text", default="",
+                  help="Source clip sampled at timeline time, before its effect chain"),
         ParamSpec("back", "Backside brightness", "float", 0, 200, 90., unit="%"),
         ParamSpec("shadow", "Shadow intensity", "float", 0, 100, 45., unit="%"),
         ParamSpec("softness", "Shadow softness", "float", .1, 30, 6., unit="%"),
@@ -61,8 +63,10 @@ class PageCurlEffect(ShaderEffect):
         color = np.array([p["back_r"], p["back_g"], p["back_b"]], np.float32) / 255
         color = np.where(color <= .04045, color / 12.92, ((color + .055) / 1.055) ** 2.4)
         extra = ()
-        mode = ("color", "source", "image").index(p["back_texture"])
-        if mode == 2:
+        mode = {"color": 0, "source": 1, "image": 2, "clip": 2}[p["back_texture"]]
+        if p["back_texture"] == "clip":
+            extra = (self.clip_texture(p["back_source"], (w, h)),)
+        elif p["back_texture"] == "image":
             import os
             path = str(p["back_path"] or "")
             try:
@@ -80,7 +84,7 @@ class PageCurlEffect(ShaderEffect):
                 picture = cv2.cvtColor(picture, cv2.COLOR_BGR2BGRA)
             if picture.dtype == np.uint16:
                 picture = (picture / 257).astype(np.uint8)
-            picture = cv2.resize(picture, (w, h))
+            picture = S.finish(cv2.resize(S.prepare(picture), (w, h), interpolation=cv2.INTER_LINEAR))
             self._back_cache = (key, picture)
             extra = (picture,)
         return dict(normal=tuple(float(v) for v in normal), axis=axis, radius=radius,
