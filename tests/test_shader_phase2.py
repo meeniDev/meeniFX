@@ -113,3 +113,20 @@ def test_phase2_gpu_parameter_boundaries(backend, effect_type, params):
     cpu = S.finish(effect.cpu(S.prepare(source),u))
     gpu = backend.render(effect.key,source,u)
     assert np.abs(cpu.astype(float)-gpu.astype(float)).mean() < .2
+
+
+def test_legacy_kaleidoscope_project_roundtrip(tmp_path):
+    from test_keyframe_workflow import _roundtrip
+    engine, clip = build_engine()
+    params = {"segments": 8, "rotation": 12, "mode": "mirror", "zoom": 135}
+    clip.effects = [{"effect_id": "kaleidoscope", "params": params}]
+    restored, _ = _roundtrip(engine.timeline, tmp_path / "legacy-kaleidoscope.mfxpf")
+    saved = restored.all_clips()[0].effects[0]
+    assert saved["effect_id"] == "kaleidoscope"
+    assert "backend" not in saved["params"]
+    effect = KaleidoscopeEffect(None)
+    effect.load_params(params)
+    expected = effect.apply_layer(picture())
+    effect.load_params(saved["params"])
+    assert effect.backend.get() == "legacy"
+    assert np.array_equal(expected, effect.apply_layer(picture()))
