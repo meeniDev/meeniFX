@@ -185,8 +185,8 @@ def test_a_failed_probe_explains_itself_and_offers_a_local_file(qapp, monkeypatc
         assert not dialog.mode_combo.isEnabled()
         local = tmp_path / "mine.mp4"
         local.write_bytes(b"not really media")
-        monkeypatch.setattr(YI.QFileDialog, "getOpenFileName",
-                            lambda *args, **kwargs: (str(local), ""))
+        monkeypatch.setattr(YI.FD, "open_file",
+                            lambda *args, **kwargs: str(local))
         dialog._choose_local()
         assert dialog.local_path == str(local)
         assert dialog.result() == QDialog.DialogCode.Accepted

@@ -3696,6 +3696,12 @@ class MainWindow(QMainWindow):
         # the frames that are already rendered survive a reopen of this project.
         self._prefetch_timer.stop(); self._cache_timer.stop()
         self.renderer.stop()
+        # Native inference resources must close after the render worker stops,
+        # rather than waiting for Python/Qt destruction during application exit.
+        for runtime in self.engine.runtime_effects.values():
+            close = getattr(runtime, "close", None)
+            if callable(close):
+                close()
         self._on_project_saved()
         self.frame_cache.clear(disk=False)
         self.playback_settings.save()

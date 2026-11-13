@@ -184,7 +184,9 @@ def test_negative_choke_grows_the_visible_matte():
 
 @pytest.mark.parametrize("kind", SHAPE.KINDS)
 def test_choke_moves_every_shape_edge(kind):
-    layer = shape_layer(kind, width=150.0, height=90.0)
+    # A 1 px erosion can legitimately erase the default 2 px line entirely.
+    # Use a substantial stroke when asserting that some interior must survive.
+    layer = shape_layer(kind, width=150.0, height=90.0, stroke_width=8.0)
     before = painted(layer[:, :, 3])
     shrunk = choke(layer, choke=1.0)
     grown = choke(layer, choke=-4.0)

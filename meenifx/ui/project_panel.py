@@ -421,7 +421,7 @@ class ProjectPanel(QWidget):
         tools.addWidget(self.sort_box, 1)
         layout.addLayout(tools)
         self.list = _MediaList()
-        self.hint = EmptyState("Your project is empty", "Drop videos, pictures or music here, "
+        self.hint = EmptyState("No imported media", "Drop videos, pictures or music here, "
                                "or press Import.", "folder")
         self.stack = QStackedLayout()
         self.stack.setStackingMode(QStackedLayout.StackingMode.StackAll)
@@ -587,7 +587,7 @@ class ProjectPanel(QWidget):
             self.hint.hide()
             return
         if not len(library) and not library.bins:
-            self.hint.set_text("Your project is empty", "Drop videos, pictures or music here, "
+            self.hint.set_text("No imported media", "Drop videos, pictures or music here, "
                                                         "or press Import.")
         elif needle or self.kind_filter.currentData():
             self.hint.set_text("Nothing matches", "Try another name, or show all kinds of media.")

@@ -251,9 +251,14 @@ def test_the_recorder_panel_starts_with_real_audio_sources(tmp_path, qt_app):
         assert panel.system_volume.value() == settings.system_volume
         if not audiocap.pick_endpoint(True, ""):
             pytest.skip("no output device on this machine")
-        assert panel.system_combo.count() >= 1 and panel.mic_combo.count() >= 1
+        assert panel.system_combo.count() >= 1
         captures = panel.captures()
-        assert "system" in captures and "mic" in captures
+        assert "system" in captures
+        if audiocap.pick_endpoint(False, "") is not None:
+            assert panel.mic_combo.count() >= 1 and "mic" in captures
+        else:
+            # Output/loopback availability does not imply an attached microphone.
+            assert panel.mic_combo.count() == 0 and "mic" not in captures
         capture = captures["system"]
         assert capture.device is not None and capture.loopback
         assert (capture.rate, capture.channels) == (settings.audio_rate, settings.audio_channels)

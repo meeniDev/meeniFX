@@ -66,6 +66,26 @@ def _font_files():
                     continue
                 seen.add(key)
                 files.append(path)
+    # Windows also registers fonts outside its standard folders (including fonts
+    # installed by creative applications). Resolve these through the same file scan.
+    if sys.platform.startswith("win"):
+        import winreg
+        for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+            try:
+                with winreg.OpenKey(hive, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts") as registry:
+                    for i in range(winreg.QueryInfoKey(registry)[1]):
+                        _name, value, _kind = winreg.EnumValue(registry, i)
+                        if not isinstance(value, str):
+                            continue
+                        path = os.path.expandvars(value)
+                        if not os.path.isabs(path):
+                            path = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts", path)
+                        key = os.path.normcase(os.path.abspath(path))
+                        if key not in seen and os.path.isfile(path) and path.lower().endswith(_FONT_SUFFIXES):
+                            files.append(path)
+                            seen.add(key)
+            except OSError:
+                continue
     return files
 
 
@@ -160,11 +180,15 @@ def qt_families():
 
 
 def system_families():
-    """Canonical installed family names: Qt's list first, then anything Pillow found."""
+    """Installed families with a loadable face shared by preview and export.
+
+    Qt also advertises bitmap fonts and aliases which Pillow cannot load. Offering
+    those made selecting a font silently render an unrelated fallback family.
+    """
     names, seen = [], set()
     for name in qt_families():
         key = name.casefold()
-        if key not in seen:
+        if key not in seen and key in _index()["faces"]:
             seen.add(key)
             names.append(name)
     for key, family in _index()["names"].items():
@@ -182,13 +206,13 @@ def has_face(family):
 
 
 def installed(family):
-    """True when the family is installed according to Qt or the font-file scan."""
+    """True when the installed family has a face the text renderer can load."""
     if not family:
         return False
     name = str(family).casefold()
     if name in _index()["faces"]:
         return True
-    return any(str(item).casefold() == name for item in qt_families())
+    return False
 
 
 def styles(family):

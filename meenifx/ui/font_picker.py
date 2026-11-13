@@ -74,7 +74,9 @@ class _FontDelegate(QStyledItemDelegate):
         family = str(index.data(FAMILY_ROLE) or "")
         missing = bool(index.data(MISSING_ROLE))
         star = bool(index.data(FAVOURITE_ROLE))
-        font = QFont(family, 10)
+        # Keep decorative and symbol family names readable; preview the face at right.
+        font = QFont(option.font)
+        font.setPointSize(10)
         if missing:
             font.setItalic(True)
         painter.setFont(font)
@@ -152,6 +154,8 @@ class _FontPopup(QFrame):
         self.list.setItemDelegate(self._delegate)
         self.list.setUniformItemSizes(False)
         self.list.setMouseTracking(True)
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.list.currentItemChanged.connect(lambda *_: self._update_favourite())
         self.list.setFixedHeight(286)
         self.list.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
         self.list.itemClicked.connect(self._choose)
@@ -177,6 +181,8 @@ class _FontPopup(QFrame):
         footer_layout.addWidget(self.refresh)
         footer_layout.addWidget(self.count, 1)
         layout.addWidget(footer)
+        self._populate()
+        self.adjustSize()
         self.search.setFocus()
 
     # -- data ---------------------------------------------------------------
@@ -205,6 +211,8 @@ class _FontPopup(QFrame):
             matches += [name for name in missing if query in name.casefold()]
             self._section("Results" if not matches else f"Results ({len(matches)})")
             self._rows(matches, favourite_set, missing)
+            if not matches:
+                self._section("No matching fonts - try another name")
         else:
             added = set()
             if missing:
@@ -221,7 +229,8 @@ class _FontPopup(QFrame):
                 added.update(recents)
             self._section("System Fonts")
             self._rows([name for name in families if name not in added], favourite_set, [])
-        self.count.setText(f"{len(families)} installed")
+        self.count.setText(f"{len(families)} available")
+        self.count.setToolTip("Fonts available for preview and export. Refresh after installing fonts.")
         selected = None
         for row in range(self.list.count()):
             item = self.list.item(row)
@@ -249,7 +258,7 @@ class _FontPopup(QFrame):
             item.setData(MISSING_ROLE, name in missing_set)
             item.setData(Qt.ItemDataRole.ToolTipRole,
                          f"{name} - installed" if name not in missing_set
-                         else f"{name} is not installed; pick a replacement")
+                         else f"{name} is unavailable for rendering; pick a replacement")
             item.setSizeHint(QSize(0, _FontDelegate.ROW_H))
             self.list.addItem(item)
 
@@ -287,7 +296,7 @@ class _FontPopup(QFrame):
         if not family:
             return
         favourites = [name for name in _read_list(self._store, "fonts/favorites") if name != family]
-        if not self.favourite.isChecked():
+        if self.favourite.isChecked():
             favourites.append(family)
         self._store.setValue("fonts/favorites", favourites)
         self._store.sync()
@@ -325,6 +334,7 @@ class FontPickerButton(QToolButton):
     def __init__(self, family="", parent=None):
         super().__init__(parent)
         self._family = str(family or "")
+        self._popup = None
         self.setProperty("role", "tool")
         self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -347,11 +357,14 @@ class FontPickerButton(QToolButton):
         if not self._family:
             return "Choose font"
         if not fonts.installed(self._family):
-            return f"{self._family} (missing)"
+            return f"{self._family} (unavailable)"
         return self._family
 
     def open_picker(self):
-        popup = _FontPopup(self._family, self)
+        if self._popup is not None:
+            self._popup.close()
+            self._popup.deleteLater()
+        popup = self._popup = _FontPopup(self._family, self)
         popup.picked.connect(self._picked)
         popup.refreshed.connect(self._fonts_refreshed)
         point = self.mapToGlobal(self.rect().bottomLeft())

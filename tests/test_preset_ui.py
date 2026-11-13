@@ -140,8 +140,11 @@ def test_the_animation_card_lists_every_instance(engine_and_clip):
     P.add(clip, "shake", "loop", program="shake", duration=40, name="Shake")
     panel = EffectsPanel(engine)
     panel.refresh_properties()
-    cards = [frame for frame in panel.properties_layout.parentWidget().findChildren(QFrame)
-             if frame.property("effect_key") == "animation"]
+    # Only cards in the active layout count; replaced cards await Qt DeferredDelete.
+    cards = [panel.properties_layout.itemAt(i).widget()
+             for i in range(panel.properties_layout.count())]
+    cards = [frame for frame in cards
+             if frame is not None and frame.property("effect_key") == "animation"]
     assert len(cards) == 1
     # In: Duration + Intensity + Seed. Loop: Cycle + Span + Cycles + Gap + Phase +
     # Intensity + Seed. Combos: one Easing and one Mode per instance.

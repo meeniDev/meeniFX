@@ -10,6 +10,8 @@ low-threshold haze, an inside-edge light wrap, or a directional streak.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import cv2
 import numpy as np
 
@@ -192,7 +194,8 @@ class NeonGlowEffect(_GlowVariant):
 class SoftBloomEffect(_GlowVariant):
     key = "soft_bloom"
     name = "Soft Bloom"
-    PARAMS = _COMMON + (
+    PARAMS = tuple(replace(spec, default={"threshold": 32.0, "falloff": 90.0}.get(spec.name, spec.default))
+                   for spec in _COMMON) + (
         ParamSpec("haze", "Haze", "float", 0.0, 100.0, 45.0, step=1.0, unit="%",
                   help="A broad, low-contrast atmospheric lift"),
         ParamSpec("highlight_rolloff", "Highlight rolloff", "float", 0.0, 100.0, 65.0,
@@ -226,7 +229,8 @@ class SoftBloomEffect(_GlowVariant):
 class LightWrapEffect(_GlowVariant):
     key = "light_wrap"
     name = "Light Wrap"
-    PARAMS = _COMMON + (
+    PARAMS = tuple(replace(spec, default={"threshold": 20.0, "falloff": 100.0}.get(spec.name, spec.default))
+                   for spec in _COMMON) + (
         ParamSpec("wrap", "Wrap distance", "float", 1.0, 120.0, 22.0, step=1.0, unit=" px",
                   pixels=True, help="How far the surrounding light spills inside the subject"),
         ParamSpec("edge_bias", "Edge bias", "float", 0.0, 100.0, 55.0, step=1.0, unit="%",

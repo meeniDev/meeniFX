@@ -17,7 +17,8 @@ kept out of the real recent list and skips the crash/unsaved-work prompts.
 ## Tests
 
 ```powershell
-python -m pytest tests -q
+python -m pip install pytest pytest-timeout
+python tools/run_tests.py
 ```
 
 `test_project_app.py`, `test_project_large.py`, `test_project_panel.py` and
@@ -25,6 +26,17 @@ python -m pytest tests -q
 listed in `tests/conftest.py` as `collect_ignore`, so a normal pytest run never executes
 them; run one directly with `python tests\<name>.py` when you want that end-to-end check.
 
+`tools/run_tests.py` runs every collected test module in its own process, with a
+600-second module timeout, the configured per-test timeout, and durable XML/log/JSON
+results under `artifacts/test-results`. It reports failures, crashes and timeouts and
+returns a nonzero exit status for any of them. This avoids accumulating closed Qt
+windows and native inference state across unrelated modules. The release CI uses it.
+The four app-driving scripts above remain manual checks. `test_project_format.py`
+and `test_project_storage.py` are assertion scripts; the runner executes them
+directly as two additional checks, so their top-level assertions are not mistaken
+for zero-test pytest failures.
+
+For a focused check, use `python -m pytest tests/test_text_readiness.py -q`.
 The same suite is grouped by responsibility:
 
 ```powershell
@@ -110,3 +122,13 @@ saving open work and confirming no recording or export is running.
 - There is no automatic rollback: an update replaces the installed version.
 - Windows is the only supported platform. The Python application may launch elsewhere, but
   that is not a supported build.
+
+## Reproduce README typography screenshots
+
+```powershell
+python tools/capture_text_workspace.py
+```
+
+The script uses a temporary project and isolated layout/font preferences. On Windows
+it uses the native Qt platform so font previews match the application. It writes three
+PNG files under `docs/design/` and closes the test window without saving user state.

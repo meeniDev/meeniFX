@@ -13,7 +13,15 @@
 **meeniFX Studios is in Alpha.** It is usable and tested, but unfinished, and some features
 are still experimental.
 
-[**Download meeniFX Studios 0.1.0-alpha.9 →**](https://github.com/meeniDev/meeniFX/releases/tag/v0.1.0-alpha.9)
+**Latest published build: 0.1.0-alpha.9.**
+
+[**Download the Windows installer (.exe)**](https://github.com/meeniDev/meeniFX/releases/download/v0.1.0-alpha.9/meeniFX-Studios-0.1.0-alpha.9-Windows-Setup.exe)
+ · [Portable ZIP](https://github.com/meeniDev/meeniFX/releases/download/v0.1.0-alpha.9/meeniFX-Studios-0.1.0-alpha.9-Windows-Portable.zip)
+ · [Checksums](https://github.com/meeniDev/meeniFX/releases/download/v0.1.0-alpha.9/SHA256SUMS.txt)
+ · [Release notes](https://github.com/meeniDev/meeniFX/releases/tag/v0.1.0-alpha.9)
+
+**Source development version: 0.1.0-alpha.10.** The typography and animation improvements
+shown below are in development; the Alpha 9 downloads above do not include them.
 
 Each published release contains:
 
@@ -55,6 +63,25 @@ Windows 10 or 11, 64-bit. The installed application does not require Python.
   encoding when it is genuinely faster.
 
 The detailed reference lives in [docs/FEATURES.md](docs/FEATURES.md).
+
+## A look inside
+
+### Text and editable motion
+
+![Alpha 10 development workspace with a text layer and an editable diagonal motion path](docs/design/alpha10-text-workspace.png)
+
+Text animation uses ordinary keyframes. Choose Slide In or Slide Out, then an edge or
+corner; duration, delay and easing stay editable alongside the animation.
+
+| Installed-font picker | Text animation controls |
+| --- | --- |
+| ![Font picker populated immediately, with readable font names and live samples](docs/design/alpha10-font-picker.png) | ![Separate entry and exit presets with diagonal direction controls](docs/design/alpha10-text-animation.png) |
+
+These are actual Qt captures from the Alpha 10 development source, not mockups.
+
+### Dark workspace
+
+![meeniFX dark workspace with preview, effects and timeline](docs/design/window-dark-1420x880.png)
 
 ## Install
 

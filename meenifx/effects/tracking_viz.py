@@ -673,7 +673,7 @@ def draw_tracking(frame, detections, *, color=(0, 255, 255), thickness=2, opacit
                            connections=skeleton_connections,
                            connections_color=_colour(skeleton_color, colour)
                            if str(skeleton_color or "").strip() else None,
-                           show_points=True)
+                           show_points=show_points)
         elif show_points:
             for point in _detection_points(detection, box):
                 cv2.circle(overlay, point, max(3, thickness * 2 + 1), colour, -1, cv2.LINE_AA)

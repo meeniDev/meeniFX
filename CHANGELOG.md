@@ -3,6 +3,25 @@
 All notable changes to meeniFX Studios. The current public build is an **Alpha**: it is
 usable and tested, but unfinished, and some features are still experimental.
 
+## 0.1.0-alpha.10 - In development
+
+- Fixed the empty font list on first opening, Favorites toggling, and popup sizing.
+- Font names remain readable for decorative faces; samples retain the chosen face.
+- Discover Windows fonts registered outside the standard font directories and offer
+  only families with a loadable preview/export face, avoiding silent substitutions.
+- Added eight-way direction controls for Slide In/Out, including diagonal animation.
+  Existing slide presets and their editable keyframes remain compatible.
+- Fixed In/Out slide resting-pose drift when both presets are used or retimed.
+- The hand skeleton no longer overrides the separate Points visibility switch.
+- Aligned Soft Bloom and Light Wrap reset defaults with their rendering defaults.
+- Corrected synthetic hand-tracker audit setup and isolated it from real MediaPipe
+  resources; real model inference remains covered by its separate integration suite.
+- Shape value edits no longer rebuild the inspector or disturb its scroll position.
+- The YouTube import fallback now uses the same themed file picker as the editor.
+- The media library says "No imported media" for text-only projects.
+- Added an isolated, time-bounded test runner for local and release-CI checks.
+- Updated download links and added current typography screenshots to the README.
+
 ## 0.1.0-alpha.9 - 11 November 2026
 
 ### Added

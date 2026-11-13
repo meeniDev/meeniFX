@@ -25,19 +25,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r meenifx/requirements.txt
-          python -m pip install "pytest==9.2.0"
+          python -m pip install "pytest==9.2.0" "pytest-timeout>=2.4"
           python -m pip install "pyinstaller==6.11.1"
 
       - name: Run automated tests
         env:
           QT_QPA_PLATFORM: offscreen
           PYTHONPATH: .
-        run: >-
-          python -m pytest tests -q -p no:cacheprovider
-          --ignore=tests/test_project_app.py
-          --ignore=tests/test_project_large.py
-          --ignore=tests/test_project_panel.py
-          --ignore=tests/test_start_window.py
+        run: python tools/run_tests.py
 
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress

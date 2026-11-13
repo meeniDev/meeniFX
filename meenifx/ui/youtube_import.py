@@ -16,11 +16,12 @@ import os
 
 from PyQt6.QtCore import QObject, QRectF, QRunnable, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen, QPixmap
-from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
+from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
                              QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QProgressBar,
                              QPushButton, QSizePolicy, QVBoxLayout, QWidget)
 
 from .. import tokens
+from . import filedialogs as FD
 from ..constants import AUDIO_EXT, IMAGE_EXT, VIDEO_EXT
 from ..media import link_import, youtube
 from .themed import muted_text, themed_style
@@ -609,8 +610,8 @@ class YouTubeImportDialog(QDialog):
     # ---- local fallback -------------------------------------------------
     def _choose_local(self):
         patterns = " ".join("*" + ext for ext in VIDEO_EXT + AUDIO_EXT + IMAGE_EXT)
-        path, _ = QFileDialog.getOpenFileName(self, "Import a local file", "",
-                                              f"Media ({patterns});;All files (*)")
+        path = FD.open_file(self, "Import a local file", "",
+                            f"Media ({patterns});;All files (*)")
         if path and os.path.isfile(path):
             self.local_path = path
             self.accept()

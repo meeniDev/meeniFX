@@ -157,12 +157,14 @@ def test_the_environment_variable_keeps_a_run_out_of_the_list(recents, monkeypat
     assert not os.path.exists(recents["file"]), "nothing was registered"
 
 
-def test_disable_recents_blocks_the_list_and_the_session_marker(recents):
+def test_disable_recents_blocks_the_list_and_the_session_marker(recents, monkeypatch):
     path = project_file(recents["work"])
+    monkeypatch.setattr(storage, "SESSION_FILE", recents["file"])
     storage.disable_recents()
     try:
         storage.add_recent(path, recents["file"])
-        storage.mark_session_open(path, recents["file"])
+        # Exercise the application's default marker, not the explicit test-file override.
+        storage.mark_session_open(path)
         assert not os.path.exists(recents["file"])
         assert storage.crashed_session_info(recents["file"]) is None
     finally:

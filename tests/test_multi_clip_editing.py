@@ -181,15 +181,16 @@ def test_mixed_text_values_are_shown_and_only_explicit_edits_write(panel_factory
     CH.set_value(second, CH.transform_channel("opacity"), 40, 0)
     engine.session.set_selection({first.id, second.id})
     panel = panel_factory(engine)
-    combos = panel.properties.findChildren(QComboBox)
-    assert any(combo.currentText() == "Mixed" for combo in combos)
+    from meenifx.ui.font_picker import FontPickerButton
+    picker = panel.properties.findChild(FontPickerButton)
+    assert picker is not None and picker.text() == "Mixed"
     assert any(label.text() == "Mixed" for label in panel.properties.findChildren(QLabel))
     # Building the batch card must not rewrite either clip.
     assert TXT.ensure_text(engine.timeline.find_clip(first.id))["font"] == "Arial"
     assert TXT.ensure_text(engine.timeline.find_clip(second.id))["font"] == "Georgia"
 
     texts = [engine.timeline.find_clip(first.id), engine.timeline.find_clip(second.id)]
-    panel._batch_commit_text_choice(texts, ComboStub("Arial"), 0, "font", "Text font")
+    picker.familyChanged.emit("Arial")
     panel._batch_set_text_colour(texts, "color", "#112233")
     panel._batch_commit_channel(texts, CH.text_channel("stroke_width"), 4, "Stroke")
     panel._batch_commit_channel(texts, CH.text_channel("size"), 44, "Size")

@@ -2024,6 +2024,15 @@ class EffectsPanel(QWidget):
         can be edited, re-eased or deleted from the timeline and the Graph Editor - the
         preset is a starting point, not a hidden visual effect.
         """
+        section = QWidget()
+        section.setObjectName("textAnimationSection")
+        from .themed import themed_style
+        themed_style(section, lambda:
+            f"QWidget#textAnimationSection {{ background: {tokens.COLORS['panel_alt']}; }}")
+        form.addWidget(section)
+        form = QVBoxLayout(section)
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setSpacing(tokens.SP1 + 2)
         self._section_label(form, "Animation")
         settings = TXT.ensure_text(clip)
         animation = settings.get("animation") if isinstance(settings.get("animation"), dict) else {}
@@ -2032,21 +2041,42 @@ class EffectsPanel(QWidget):
         meta = next((animation.get(slot) for slot in ("in", "out")
                      if isinstance(animation.get(slot), dict)), {})
 
-        row = QWidget()
-        row_layout = QHBoxLayout(row)
-        row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setSpacing(tokens.SP2)
         in_combo = QComboBox()
-        in_combo.addItems(["None", *ANIM.TEXT_IN_PRESETS])
-        in_combo.setCurrentText((animation.get("in") or {}).get("preset") or "None")
+        in_combo.addItems(["None", "Slide In", *[name for name in ANIM.TEXT_IN_PRESETS
+                                                  if not name.startswith("Slide ")]])
+        in_preset = (animation.get("in") or {}).get("preset") or "None"
+        in_combo.setCurrentText("Slide In" if in_preset.startswith("Slide In ") else in_preset)
         out_combo = QComboBox()
-        out_combo.addItems(["None", *ANIM.TEXT_OUT_PRESETS])
-        out_combo.setCurrentText((animation.get("out") or {}).get("preset") or "None")
-        row_layout.addWidget(QLabel("In"))
-        row_layout.addWidget(in_combo, 1)
-        row_layout.addWidget(QLabel("Out"))
-        row_layout.addWidget(out_combo, 1)
-        form.addWidget(self._labelled("Animate", row, "In and Out animation for this text clip"))
+        out_combo.addItems(["None", "Slide Out", *[name for name in ANIM.TEXT_OUT_PRESETS
+                                                    if not name.startswith("Slide ")]])
+        out_preset = (animation.get("out") or {}).get("preset") or "None"
+        out_combo.setCurrentText("Slide Out" if out_preset.startswith("Slide Out ") else out_preset)
+
+
+        directions = {}
+        for slot, combo in (("in", in_combo), ("out", out_combo)):
+            box = QComboBox()
+            box.setObjectName(f"text_animation_{slot}_direction")
+            for name in ANIM.SLIDE_DIRECTIONS:
+                label = {"Up": "top", "Down": "bottom", "Left": "left", "Right": "right"}
+                edge = " ".join(label[word] for word in name.split())
+                box.addItem(edge.capitalize(), name)
+            stored = in_preset if slot == "in" else out_preset
+            prefix = "Slide In " if slot == "in" else "Slide Out "
+            direction = stored[len(prefix):] if stored.startswith(prefix) else "Left"
+            # Legacy In Up/Down name movement; the direction field names the source edge.
+            if slot == "in" and direction in ("Up", "Down"):
+                direction = "Down" if direction == "Up" else "Up"
+            box.setCurrentIndex(max(0, box.findData(direction)))
+            box.setEnabled(stored.startswith(prefix))
+            box.setToolTip("Choose a slide preset above to set its edge or corner")
+            for field in (combo, box):
+                field.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+                field.setMinimumContentsLength(8)
+                field.setMinimumWidth(0)
+            form.addWidget(self._labelled("Animate " + slot, combo))
+            form.addWidget(self._labelled("From" if slot == "in" else "To", box))
+            directions[slot] = box
 
         duration = ScrubField("Duration", int(meta.get("duration", default)), 1,
                                max(1, clip.duration), default=default, step=1, unit=" f",
@@ -2086,8 +2116,14 @@ class EffectsPanel(QWidget):
 
         def apply_slot(slot):
             combo = in_combo if slot == "in" else out_combo
+            preset = combo.currentText()
+            if preset.startswith("Slide "):
+                direction = directions[slot].currentData()
+                if slot == "in" and direction in ("Up", "Down"):
+                    direction = "Down" if direction == "Up" else "Up"
+                preset = ("Slide In " if slot == "in" else "Slide Out ") + direction
             self.engine.session.apply_text_animation(
-                clip.id, slot, combo.currentText(), int(round(duration.value())),
+                clip.id, slot, preset, int(round(duration.value())),
                 easing.currentText(), int(round(delay.value())))
             self.refresh_properties()
 
@@ -2101,13 +2137,16 @@ class EffectsPanel(QWidget):
 
         in_combo.currentTextChanged.connect(lambda _text: later(lambda: apply_slot("in")))
         out_combo.currentTextChanged.connect(lambda _text: later(lambda: apply_slot("out")))
+        for slot, box in directions.items():
+            box.currentIndexChanged.connect(
+                lambda _index, slot=slot: later(lambda: apply_slot(slot)))
         duration.committed.connect(lambda _value: later(apply_all))
         delay.committed.connect(lambda _value: later(apply_all))
         easing.currentTextChanged.connect(lambda _text: later(apply_all))
 
         generated = sum(len(times) for slot in ("in", "out")
                         for times in ((animation.get(slot) or {}).get("keys") or {}).values())
-        hint = QLabel(f"Keyframes generated: {generated}")
+        hint = QLabel(f"{generated} editable keyframes" if generated else "Choose an animation to get started")
         hint.setProperty("quiet", True)
         hint.setToolTip("These are real keyframes: edit, retime or re-ease them in the timeline "
                         "or the Graph Editor")

@@ -228,7 +228,7 @@ def _engine_for(effect_id, monkeypatch):
         runtime = engine.runtime_effects["hand_tracker"]
 
         def landmarks(_frame):
-            count = 1 if int(runtime.hand_confidence.get()) >= 50 else 2
+            count = 1 if int(runtime.hand_confidence.get()) >= 90 else 2
             count = min(count, max(1, int(runtime.max_hands.get())))
             boxes = [(40, 30, 60, 60), (200, 110, 90, 90)][:count]
             found = []
@@ -267,6 +267,10 @@ def _prepared_base(effect_id, name, params):
     base = dict(params)
     if name == "palette_text":
         base["color_mode"] = "palette"
+    if effect_id == "hand_tracker":
+        base.update(hand_confidence=30, max_hands=2, min_area=1, max_area=400000,
+                    show_points=True, thickness=5, region_amount_1=100,
+                    region_amount_2=100, region_amount_3=100)
     if effect_id == "blob_tracker":
         # Keep every blob reachable so min/max of one parameter is what changes.
         base.update(min_area=1, max_area=400000, max_blobs=80, threshold=150)
@@ -391,12 +395,13 @@ def test_text_parameter_changes_the_output(monkeypatch):
     ("hand_tracker", "thickness", 1, 12),
     ("blob_tracker", "thickness", 1, 12),
 ])
-def test_animated_parameter_follows_its_keyframes(effect_id, name, low, high):
+def test_animated_parameter_follows_its_keyframes(effect_id, name, low, high, monkeypatch):
     from meenifx.model.keyframes import AnimatedValue, parameter_value_at
 
     big = effect_id in ("mosaic", "ascii")
     frame = blob_frame() if effect_id == "blob_tracker" else synthetic_frame(640, 360) if big else synthetic_frame()
-    engine, clip = build_engine(frame=frame)
+    engine, clip = (_engine_for(effect_id, monkeypatch) if effect_id == "hand_tracker"
+                    else build_engine(frame=frame))
     animated = AnimatedValue()
     animated.set_keyframe(0, low)
     animated.set_keyframe(20, high)

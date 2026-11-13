@@ -117,6 +117,9 @@ TEXT_IN_PRESETS = ("Fade In", "Slide In Left", "Slide In Right", "Slide In Up",
                    "Rotation In", "Bounce In")
 TEXT_OUT_PRESETS = ("Fade Out", "Slide Out Left", "Slide Out Right", "Slide Out Up",
                     "Slide Out Down", "Scale Out", "Blur Out", "Rotation Out")
+SLIDE_DIRECTIONS = ("Left", "Right", "Up", "Down", "Up Left", "Up Right", "Down Left", "Down Right")
+TEXT_IN_PRESETS += tuple("Slide In " + direction for direction in SLIDE_DIRECTIONS[4:])
+TEXT_OUT_PRESETS += tuple("Slide Out " + direction for direction in SLIDE_DIRECTIONS[4:])
 TEXT_PRESETS = TEXT_IN_PRESETS + TEXT_OUT_PRESETS
 SLOTS = ("in", "out")
 
@@ -184,6 +187,18 @@ def _plan(preset, slot, length, easing, base, context):
         add("transform.opacity", [(0, 0.0), (length, opacity)])
     elif preset == "Fade Out":
         add("transform.opacity", [(0, opacity), (length, 0.0)])
+    elif preset.startswith(("Slide In ", "Slide Out ")) and preset.rsplit(" ", 2)[-2:] in (
+            ["Up", "Left"], ["Up", "Right"], ["Down", "Left"], ["Down", "Right"]):
+        vertical, horizontal = preset.split()[-2:]
+        vx = -dx if horizontal == "Left" else dx
+        vy = -dy if vertical == "Up" else dy
+        if slot == "in":
+            # In directions identify the edge/corner the text arrives from.
+            add("transform.position_x", [(0, x + vx), (length, x)])
+            add("transform.position_y", [(0, y + vy), (length, y)])
+        else:
+            add("transform.position_x", [(0, x), (length, x + vx)])
+            add("transform.position_y", [(0, y), (length, y + vy)])
     elif preset == "Slide In Left":
         add("transform.position_x", [(0, x - dx), (length, x)])
     elif preset == "Slide In Right":
@@ -278,8 +293,14 @@ def apply_text_animation(clip, slot, preset, duration=None, easing=DEFAULT_EASIN
     offset = min(offset, max(0, clip.duration - 1 - length))
 
     base = {}
+    other = animation.get("out" if slot == "in" else "in") or {}
+    resting = dict(other.get("base") or {})
+    if isinstance(previous, dict):
+        resting.update(previous.get("base") or {})
     for channel in PRESET_CHANNELS:
-        value = CH.value_at(clip, channel, 0)
+        # Frame zero can be the offscreen/transparent start of the In preset.
+        # Out and subsequent edits must use the stored resting pose instead.
+        value = resting.get(channel, CH.value_at(clip, channel, 0))
         base[channel] = 100.0 if value is None else float(value)
     plan_context = dict(context or {})
     plan_context.setdefault("project_size", frame_size)

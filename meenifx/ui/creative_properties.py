@@ -26,7 +26,7 @@ def creative_signature(clip):
                    bool(m.get("visible", True)), bool(m.get("show_outline", True)))
                   for m in MASK.masks(clip)),
             (MATTE.ensure(clip).get("source_id"), MATTE.ensure(clip).get("mode")),
-            (bool(motion.get("enabled")), motion.get("mode"),
+            (bool(motion.get("enabled")), motion.get("mode") or "replace",
              len(motion.get("path", {}).get("points") or ())))
 
 

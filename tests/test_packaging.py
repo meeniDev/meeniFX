@@ -59,7 +59,9 @@ def test_the_release_workflow_is_tag_driven_and_tests_before_building():
     assert 'tags:' in text and '"v*"' in text
     assert "workflow_dispatch" in text
     assert "permissions:\n  contents: write" in text
-    assert "python -m pytest" in text
+    assert "python tools/run_tests.py" in text
+    runner = (ROOT / "tools" / "run_tests.py").read_text(encoding="utf-8")
+    assert '"-m", "pytest"' in runner and "subprocess.run" in runner
     assert text.index("Run automated tests") < text.index("Build installer")
     assert "meeniFX-Studios-*-Windows-Setup.exe" in text
     assert "meeniFX-Studios-*-Windows-Portable.zip" in text

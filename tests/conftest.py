@@ -17,6 +17,9 @@ collect_ignore = [
     "test_project_large.py",
     "test_project_panel.py",
     "test_start_window.py",
+    # Assertion scripts are run directly by tools/run_tests.py, in their own process.
+    "test_project_format.py",
+    "test_project_storage.py",
 ]
 
 # The preview and panel tests build real widgets; offscreen keeps them headless.
@@ -41,6 +44,7 @@ def pytest_configure(config):
         return
     app = QApplication.instance() or QApplication([])
     app.setQuitOnLastWindowClosed(False)
+    config._meenifx_qapp = app
 
 
 @pytest.fixture(autouse=True)
