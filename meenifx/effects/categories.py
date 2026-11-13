@@ -29,6 +29,7 @@ CATEGORY_ORDER = (
 # Every registered effect that is shown in the browser. ``look`` is omitted: Styles are
 # their own tab and must not appear as an effect category.
 CATEGORY_BY_KEY = {
+    "lens_warp": "Distortion",
     "mosaic": "Stylize",
     "ascii": "Stylize",
     "face_tracker": "Tracking",
@@ -110,6 +111,7 @@ CATEGORY_BY_KEY = {
 EXPERIMENTAL_KEYS = {"face_tracker", "hand_tracker", "blob_tracker"}
 
 DESCRIPTIONS = {
+    "lens_warp": "A smooth local lens with bulge, pinch and chromatic fringes.",
     "mosaic": "Turns the picture into a grid of flat colour blocks.",
     "ascii": "Rebuilds the picture from typed characters.",
     "face_tracker": "Follows a face to drive masks and effects. The reference picture has "

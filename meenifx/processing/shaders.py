@@ -1,11 +1,12 @@
 """Bounded, shipped-shader rendering. Every GL object belongs to one worker."""
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from concurrent.futures import Future, TimeoutError
 from pathlib import Path
 import atexit
 import os
 import sys
 import threading
 import time
+import queue
 
 import numpy as np
 
@@ -16,6 +17,35 @@ MAX_BYTES = 512 * 1024 * 1024
 
 class ShaderUnavailable(RuntimeError):
     pass
+
+
+class _Worker:
+    """Daemon owned here, so cleanup runs before Python's executor shutdown hooks."""
+    def __init__(self):
+        self.jobs = queue.Queue(maxsize=1)
+        self.thread = threading.Thread(target=self._loop, name="meeniFX-GL", daemon=True)
+        self.thread.start()
+
+    def _loop(self):
+        while True:
+            job = self.jobs.get()
+            if job is None:
+                return
+            future, function, args = job
+            try:
+                future.set_result(function(*args))
+            except BaseException as exc:
+                future.set_exception(exc)
+
+    def submit(self, function, *args):
+        future = Future()
+        self.jobs.put((future, function, args), timeout=1)
+        return future
+
+    def shutdown(self, wait=True):
+        self.jobs.put(None, timeout=1)
+        if wait:
+            self.thread.join(timeout=30)
 
 
 def resource(name):
@@ -68,7 +98,7 @@ def sample(image, x, y, edge=0, nearest=False):
 
 class ShaderRunner:
     def __init__(self):
-        self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="meeniFX-GL")
+        self._pool = _Worker()
         self._lock = threading.RLock()
         self._ctx = None
         self._programs = {}
