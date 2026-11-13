@@ -29,6 +29,7 @@ CATEGORY_ORDER = (
 # Every registered effect that is shown in the browser. ``look`` is omitted: Styles are
 # their own tab and must not appear as an effect category.
 CATEGORY_BY_KEY = {
+    "page_curl": "Distortion",
     "lens_warp": "Distortion",
     "mosaic": "Stylize",
     "ascii": "Stylize",
@@ -111,6 +112,7 @@ CATEGORY_BY_KEY = {
 EXPERIMENTAL_KEYS = {"face_tracker", "hand_tracker", "blob_tracker"}
 
 DESCRIPTIONS = {
+    "page_curl": "Turn a cylindrical sheet with a shaded backside and transparent reveal.",
     "lens_warp": "A smooth local lens with bulge, pinch and chromatic fringes.",
     "mosaic": "Turns the picture into a grid of flat colour blocks.",
     "ascii": "Rebuilds the picture from typed characters.",
@@ -195,6 +197,8 @@ DESCRIPTIONS = {
 # A small, coherent stroke-icon vocabulary. Audio and time effects each get their own
 # glyph; picture effects share a family only where that genuinely reads as the same tool.
 ICON_BY_KEY = {
+    "page_curl": "page_curl",
+    "lens_warp": "lens_warp",
     "mosaic": "mosaic",
     "ascii": "text",
     "face_tracker": "tracking_face",

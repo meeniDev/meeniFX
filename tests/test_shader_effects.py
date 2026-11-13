@@ -3,6 +3,7 @@ import numpy as np
 import pytest
 from conftest import build_engine, synthetic_frame
 from meenifx.effects.shader_effects import LensWarpEffect
+from meenifx.effects.page_curl import PageCurlEffect
 from meenifx.processing import shaders as S
 
 
@@ -77,3 +78,73 @@ def test_lens_registry_keyframes_mix_and_parameter_defaults():
     assert not np.array_equal(first, mid) and not np.array_equal(mid, last)
     clip.effects[0]["params"]["mix"] = 0
     assert np.array_equal(first, engine.render_frame(20)[1])
+
+
+@pytest.mark.parametrize("settings", [
+    {}, {"progress": .1, "direction": "top"}, {"progress": .7, "direction": "left", "angle": 30},
+    {"radius": 45, "position_x": 20, "position_y": 70, "depth": 95},
+    {"antialias": "draft", "back_texture": "source", "thickness": 4},
+    {"shadow": 90, "highlight": 100, "softness": .1}])
+def test_page_gpu_matches_cpu(backend, settings):
+    effect = PageCurlEffect(None)
+    effect.load_params(settings)
+    source = picture(173, 91)
+    uniforms, extra = effect.uniforms(effect.values(), source)
+    cpu = S.finish(effect.cpu(S.prepare(source), uniforms))
+    gpu = backend.render(effect.key, source, uniforms)
+    diff = np.abs(cpu.astype(float) - gpu.astype(float))
+    assert diff.mean() < .1 and np.quantile(diff, .999) <= 3
+    assert not np.array_equal(gpu, source)
+
+
+def test_page_endpoints_curvature_backside_and_texture(backend, tmp_path):
+    import cv2
+    effect = PageCurlEffect(None)
+    source = picture()
+    effect.progress.set(0)
+    assert np.array_equal(effect.apply_layer(source), source)
+    effect.progress.set(1)
+    assert not effect.apply_layer(source).any()
+    effect.progress.set(.4)
+    first = effect.apply_layer(source)
+    # Curved shading has many values and changes source coordinates; it is not a wipe.
+    assert np.unique(first[:, :, :3].reshape(-1, 3), axis=0).shape[0] > 150
+    effect.back_texture.set("source")
+    assert not np.array_equal(first, effect.apply_layer(source))
+    image = tmp_path / "back.png"
+    cv2.imwrite(str(image), np.full_like(source, (20, 70, 240, 255)))
+    effect.back_texture.set("image")
+    effect.back_path.set(str(image))
+    uniforms, extra = effect.uniforms(effect.values(), source)
+    cpu = effect.apply_layer(source)
+    gpu = backend.render(effect.key, source, uniforms, extra=extra)
+    assert np.abs(cpu.astype(float) - gpu.astype(float)).mean() < .1
+    effect.back_path.set(str(tmp_path / "missing.png"))
+    with pytest.raises(ValueError, match="backside image"):
+        effect.apply_layer(source)
+
+
+@pytest.mark.parametrize("effect_type", [LensWarpEffect, PageCurlEffect])
+def test_transparent_input_has_no_invented_opaque_pixels(effect_type):
+    source = np.full((40, 80, 4), 255, np.uint8)
+    source[:, :, 3] = 0
+    assert not effect_type(None).apply_layer(source).any()
+
+
+def test_gpu_failure_has_matching_fallback_or_explicit_error(monkeypatch):
+    class Unsupported:
+        def render(self, *args, **kwargs):
+            raise S.ShaderUnavailable("unsupported test driver")
+    monkeypatch.setattr(S, "runner", lambda: Unsupported())
+    effect = LensWarpEffect(None)
+    effect.backend.set("gpu")
+    with pytest.raises(S.ShaderUnavailable, match="unsupported"):
+        effect.apply_layer(picture())
+    effect.backend.set("auto")
+    # Exercise auto fallback on a render worker, where GPU would be attempted.
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        fallback = pool.submit(effect.apply_layer, picture()).result()
+    assert "fallback" in effect.status.lower()
+    effect.backend.set("cpu")
+    assert np.array_equal(fallback, effect.apply_layer(picture()))
