@@ -29,6 +29,10 @@ CATEGORY_ORDER = (
 # Every registered effect that is shown in the browser. ``look`` is omitted: Styles are
 # their own tab and must not appear as an effect category.
 CATEGORY_BY_KEY = {
+    "heat_haze": "Distortion",
+    "ripple": "Distortion",
+    "pixel_stretch": "Distortion",
+    "light_rays": "Blur & Glow",
     "page_curl": "Distortion",
     "lens_warp": "Distortion",
     "mosaic": "Stylize",
@@ -112,6 +116,10 @@ CATEGORY_BY_KEY = {
 EXPERIMENTAL_KEYS = {"face_tracker", "hand_tracker", "blob_tracker"}
 
 DESCRIPTIONS = {
+    "heat_haze": "Animated thermal refraction with deterministic detail and height falloff.",
+    "ripple": "Smooth radial water waves from an adjustable origin.",
+    "pixel_stretch": "Pull a selectable strip into stretched ribbons at any angle.",
+    "light_rays": "Cast thresholded light shafts from bright areas toward an adjustable origin.",
     "page_curl": "Turn a cylindrical sheet with a shaded backside and transparent reveal.",
     "lens_warp": "A smooth local lens with bulge, pinch and chromatic fringes.",
     "mosaic": "Turns the picture into a grid of flat colour blocks.",
@@ -197,6 +205,10 @@ DESCRIPTIONS = {
 # A small, coherent stroke-icon vocabulary. Audio and time effects each get their own
 # glyph; picture effects share a family only where that genuinely reads as the same tool.
 ICON_BY_KEY = {
+    "heat_haze": "wave",
+    "ripple": "radial_blur",
+    "pixel_stretch": "shape_line",
+    "light_rays": "glow",
     "page_curl": "page_curl",
     "lens_warp": "lens_warp",
     "mosaic": "mosaic",

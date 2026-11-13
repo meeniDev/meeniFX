@@ -339,12 +339,17 @@ def test_numeric_parameter_extremes_change_the_output(effect_id, spec, monkeypat
     base = _prepared_base(effect_id, spec.name, _base_params(engine, effect_id))
     low = spec.minimum
     high = spec.maximum
-    if effect_id == "page_curl" and spec.name == "angle":
+    if effect_id in ("page_curl", "heat_haze", "pixel_stretch") and spec.name == "angle":
         low, high = 0, 90  # -180 and +180 are the same orientation.
+    if effect_id in ("heat_haze", "ripple") and spec.name == "evolution":
+        low, high = 0, 90
+    if effect_id in ("heat_haze", "ripple") and spec.name == "speed":
+        base["evolution"] = 70
+
     if spec.name == "palette_text":
         low, high = "#ff0000", "#00ff00"
-    image_low = render(engine, clip, effect_id, {**base, spec.name: low})
-    image_high = render(engine, clip, effect_id, {**base, spec.name: high})
+    image_low = render(engine, clip, effect_id, {**base, spec.name: low}, frame_no=7 if effect_id in ("heat_haze", "ripple") else 0)
+    image_high = render(engine, clip, effect_id, {**base, spec.name: high}, frame_no=7 if effect_id in ("heat_haze", "ripple") else 0)
     diff = frame_diff(image_low, image_high)
     assert diff > 0.2, (f"{effect_id}.{spec.name} renders identically at {low} and {high} "
                         f"(diff {diff:.3f}) - the control is dead")
@@ -387,7 +392,14 @@ def test_choice_parameter_changes_the_output(effect_id, spec, monkeypatch, tmp_p
         source = engine.timeline.new_clip("Texture source", clip.source_path, clip.track, 1000, 30,
                                           source_out=30, source_fps=30)
         base["back_source"] = str(source.id)
-    if spec.name == "backend" and effect_id in ("lens_warp", "page_curl"):
+    if spec.name == "edge":
+        if effect_id == "heat_haze":
+            base.update(amount=100, height_bias=0, angle=35)
+        elif effect_id == "ripple":
+            base.update(amount=50, center_x=0, center_y=0, radius=150, falloff=0)
+        elif effect_id == "pixel_stretch":
+            base.update(angle=45, position=0)
+    if spec.name == "backend" and effect_id in ("lens_warp", "page_curl", "heat_haze", "ripple", "pixel_stretch", "light_rays", "kaleidoscope"):
         from meenifx.processing.shaders import ShaderUnavailable
         cpu = render(engine, clip, effect_id, {**base, "backend": "cpu"})
         try:

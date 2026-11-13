@@ -1,4 +1,4 @@
-"""Measure actual Phase 1 CPU/GPU processing, compilation and readback costs."""
+"""Measure actual CPU/GPU processing, compilation and readback costs."""
 import json
 import sys
 import time
@@ -11,6 +11,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from meenifx.effects.shader_effects import LensWarpEffect
 from meenifx.effects.page_curl import PageCurlEffect
 from meenifx.processing import shaders as S
+from meenifx.effects.shader_expansion import SHADER_EXPANSION_EFFECTS
+from meenifx.effects.glitch import KaleidoscopeEffect
 
 
 def source(w, h):
@@ -30,8 +32,9 @@ def main():
     try:
         for w, h in ((1280, 720), (1920, 1080)):
             image = source(w, h)
-            for cls in (LensWarpEffect, PageCurlEffect):
+            for cls in ((*SHADER_EXPANSION_EFFECTS, KaleidoscopeEffect) if "--phase2" in sys.argv else (LensWarpEffect, PageCurlEffect)):
                 effect = cls(None)
+                effect.local_frame = 47
                 u, extra = effect.uniforms(effect.values(), image)
                 start = time.perf_counter()
                 gpu = runner.render(effect.key, image, u, extra=extra)

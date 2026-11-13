@@ -16,6 +16,8 @@ import numpy as np
 
 from ..model.values import Value
 from .base import LayerEffect, ParamSpec, param_number
+from .shader_effects import ShaderEffect
+from ..processing import shaders as S
 
 
 def _seed(*parts):
@@ -331,7 +333,7 @@ class TwirlEffect(LayerEffect):
         return _remap(layer, cx + dx * cos_t - dy * sin_t, cy + dx * sin_t + dy * cos_t)
 
 
-class KaleidoscopeEffect(LayerEffect):
+class KaleidoscopeEffect(ShaderEffect):
     """Fold the picture into mirrored wedges (or a plain kaleidoscope)."""
 
     key = "kaleidoscope"
@@ -339,6 +341,10 @@ class KaleidoscopeEffect(LayerEffect):
     category = "Glitch & Distortion"
 
     PARAMS = (
+        ParamSpec("backend", "Renderer", "choice", default="legacy",
+                  choices=("legacy", "auto", "gpu", "cpu"),
+                  choice_labels=("Original CPU (compatibility)", "Automatic", "GPU", "CPU"),
+                  advanced=True, help="Original CPU preserves saved projects; other modes use alpha-correct filtering"),
         ParamSpec("segments", "Segments", "int", 2, 16, 6, help="Number of wedges"),
         ParamSpec("mode", "Mode", "choice", choices=("kaleidoscope", "mirror"), default="mirror",
                   choice_labels=("Kaleidoscope", "Mirror"),
@@ -360,6 +366,9 @@ class KaleidoscopeEffect(LayerEffect):
         self.zoom = Value(100.0)
 
     def apply_layer(self, layer):
+        if self.backend.get() != "legacy":
+            return ShaderEffect.apply_layer(self, layer)
+        self.status = "Original CPU renderer (saved-project compatibility)"
         frame = int(self.local_frame)
         segments = max(2, int(round(self.segments.get())))
         height, width = layer.shape[:2]
@@ -375,6 +384,29 @@ class KaleidoscopeEffect(LayerEffect):
         if str(self.mode.get()) == "mirror" and segments % 2 == 0:
             folded = np.abs(folded - wedge / 2.0)
         return _remap(layer, cx + distance * np.cos(folded), cy + distance * np.sin(folded))
+
+
+    def neutral(self, p):
+        return False
+
+    def uniforms(self, p, layer):
+        h, w = layer.shape[:2]
+        return dict(center=(p["center_x"]*(w-1), p["center_y"]*(h-1)),
+                    zoom=p["zoom"]/100, rotation=math.radians(p["rotation"]),
+                    segments=p["segments"], mirrored=p["mode"] == "mirror"), ()
+
+    @staticmethod
+    def cpu(image, u, extra=()):
+        y, x = np.indices(image.shape[:2], dtype=np.float32)
+        dx, dy = x-u["center"][0], y-u["center"][1]
+        distance = np.maximum(1e-3, np.sqrt(dx*dx+dy*dy))/u["zoom"]
+        theta = np.arctan2(dy, dx)+u["rotation"]
+        wedge = math.tau/u["segments"]
+        folded = np.mod(theta, wedge)
+        if u["mirrored"] and u["segments"] % 2 == 0:
+            folded = np.abs(folded-wedge*.5)
+        return S.sample(image, u["center"][0]+distance*np.cos(folded),
+                        u["center"][1]+distance*np.sin(folded), 1)
 
 
 GLITCH_EFFECTS = (ChromaticAberrationEffect, GlitchEffect, WaveWarpEffect, BulgePinchEffect,

@@ -21,6 +21,7 @@ from .effects.glitch import (BulgePinchEffect, ChromaticAberrationEffect, Glitch
                              KaleidoscopeEffect, TwirlEffect, WaveWarpEffect)
 from .effects.shader_effects import LensWarpEffect
 from .effects.page_curl import PageCurlEffect
+from .effects.shader_expansion import SHADER_EXPANSION_EFFECTS
 from .effects.chroma import ChromaKeyEffect
 from .effects.glow import GlowEffect
 from .effects.glow_extra import (DirectionalGlowEffect, LightWrapEffect, MultiGlowEffect,
@@ -82,7 +83,7 @@ class EditorEngine:
                     TritoneEffect, LevelsEffect, ColorWheelsEffect,
                     TurbulentDisplaceEffect, DisplacementMapEffect, LensDistortionEffect,
                     GradientRampEffect, FractalNoiseEffect, CheckerboardEffect, GridEffect,
-                    MatteChokerEffect, LensWarpEffect, PageCurlEffect) + AUDIO_EFFECTS
+                    MatteChokerEffect, LensWarpEffect, PageCurlEffect) + SHADER_EXPANSION_EFFECTS + AUDIO_EFFECTS
 
     def __init__(self, fps=30):
         self.timeline = Timeline(fps=fps)

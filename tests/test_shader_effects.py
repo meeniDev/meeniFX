@@ -141,12 +141,13 @@ def test_lens_filtering_does_not_create_black_alpha_halos():
     assert visible.any() and np.all(out[:, :, :3][visible] == 255)
 
 
-def test_gpu_failure_has_matching_fallback_or_explicit_error(monkeypatch):
+@pytest.mark.parametrize("key", ["lens_warp", "page_curl", "heat_haze", "ripple", "pixel_stretch", "light_rays", "kaleidoscope"])
+def test_gpu_failure_has_matching_fallback_or_explicit_error(monkeypatch, key):
     class Unsupported:
         def render(self, *args, **kwargs):
             raise S.ShaderUnavailable("unsupported test driver")
     monkeypatch.setattr(S, "runner", lambda: Unsupported())
-    effect = LensWarpEffect(None)
+    effect = build_engine()[0].runtime_effects[key]
     effect.backend.set("gpu")
     with pytest.raises(S.ShaderUnavailable, match="unsupported"):
         effect.apply_layer(picture())
@@ -160,7 +161,7 @@ def test_gpu_failure_has_matching_fallback_or_explicit_error(monkeypatch):
     assert np.array_equal(fallback, effect.apply_layer(picture()))
 
 
-@pytest.mark.parametrize("key", ["lens_warp", "page_curl"])
+@pytest.mark.parametrize("key", ["lens_warp", "page_curl", "heat_haze", "ripple", "pixel_stretch", "light_rays", "kaleidoscope"])
 @pytest.mark.parametrize("fps", [23.976, 60.])
 def test_preview_scaling_and_absolute_frame_time(key, fps, monkeypatch):
     import cv2

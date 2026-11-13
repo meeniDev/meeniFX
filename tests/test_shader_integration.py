@@ -9,7 +9,11 @@ from test_keyframe_workflow import _roundtrip
 from meenifx.model import channels as CH, looks as LOOKS
 from meenifx.model.keyframes import AnimatedValue
 
-KEYS = ("lens_warp", "page_curl")
+KEYS = ("lens_warp", "page_curl", "heat_haze", "ripple", "pixel_stretch", "light_rays")
+
+
+def animated_parameter(key):
+    return "progress" if key == "page_curl" else "strength" if key == "light_rays" else "amount"
 
 
 @pytest.mark.parametrize("key", KEYS)
@@ -19,9 +23,9 @@ def test_project_duplicate_copy_presets_and_thumbnail(key, tmp_path):
     engine, clip = build_engine()
     runtime = engine.runtime_effects[key]
     animated = AnimatedValue()
-    name = "amount" if key == "lens_warp" else "progress"
+    name = animated_parameter(key)
     animated.set_keyframe(0, 0)
-    animated.set_keyframe(20, 70 if key == "lens_warp" else .6)
+    animated.set_keyframe(20,  .6 if key == "page_curl" else 70)
     clip.effects = [{"effect_id": key, "params": {name: animated, "backend": "cpu"}}]
     engine.session.set_selection({clip.id})
     engine.session.duplicate_selected()
@@ -30,10 +34,10 @@ def test_project_duplicate_copy_presets_and_thumbnail(key, tmp_path):
     restored, _ = _roundtrip(engine.timeline, tmp_path / f"{key}.mfxpf")
     for c in restored.all_clips():
         assert c.effects[0]["effect_id"] == key
-        assert c.effects[0]["params"][name].value_at(20) == pytest.approx(70 if key == "lens_warp" else .6)
+        assert c.effects[0]["params"][name].value_at(20) == pytest.approx( .6 if key == "page_curl" else 70)
     engine.session.copy_effects([clip.id])
     assert engine.session.paste_effects([copies[-1].id])
-    assert runtime.PRESETS and categories.category_for(key) == "Distortion"
+    assert runtime.PRESETS and categories.category_for(key) == ("Blur & Glow" if key == "light_rays" else "Distortion")
     for label, values in runtime.PRESETS.values():
         assert label and all(runtime.spec(param) is not None for param in values)
     preview = thumbnails.render_effect(engine, key, 124, 84)
@@ -78,8 +82,8 @@ def test_actual_export_parity(key, fmt, tmp_path, record_property):
     engine, clip = build_engine(frame=synthetic_frame(160, 100), fps=10, duration=4, frames=4)
     animated = AnimatedValue()
     animated.set_keyframe(0, 0)
-    animated.set_keyframe(3, 80 if key == "lens_warp" else .65)
-    parameter = "amount" if key == "lens_warp" else "progress"
+    animated.set_keyframe(3, .65 if key == "page_curl" else 80)
+    parameter = animated_parameter(key)
     clip.effects = [{"effect_id": key, "params": {"backend": "cpu", parameter: animated}}]
     # All format writers consume this same frame. Codec/palette errors have separate tolerances.
     reference = engine.render_frame(3)[1]
@@ -205,7 +209,7 @@ def test_shader_chain_preserves_existing_tracked_region_effects(key, monkeypatch
     engine, clip = build_engine()
     monkeypatch.setattr(engine.runtime_effects["blob_tracker"], "_detect",
                         lambda _frame: [Detection(box=(20, 20, 60, 50))])
-    shader = {"effect_id": key, "params": {"backend": "cpu"}}
+    shader = {"effect_id": key, "params": {"backend": "cpu", **({"amount": 30} if key == "pixel_stretch" else {})}}
     clip.effects = [shader]
     plain = engine.render_frame(0)[1]
     clip.effects = [{"effect_id": "blob_tracker", "params": {
@@ -214,4 +218,5 @@ def test_shader_chain_preserves_existing_tracked_region_effects(key, monkeypatch
         "show_labels": False, "show_numbers": False, "connector_mode": "none"}}, shader]
     tracked = engine.render_frame(0)[1]
     assert not np.array_equal(plain, tracked)
-    assert np.array_equal(tracked, engine.render_frame(17)[1])
+    engine.render_frame(17)
+    assert np.array_equal(tracked, engine.render_frame(0)[1])

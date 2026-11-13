@@ -10,7 +10,8 @@ import queue
 
 import numpy as np
 
-BUILTINS = {"identity", "lens_warp", "page_curl"}
+BUILTINS = {"identity", "lens_warp", "page_curl", "heat_haze", "ripple",
+            "pixel_stretch", "light_rays", "kaleidoscope"}
 MAX_PIXELS = 16_777_216
 MAX_BYTES = 512 * 1024 * 1024
 _BYTE = np.linspace(0, 1, 256, dtype=np.float32)
