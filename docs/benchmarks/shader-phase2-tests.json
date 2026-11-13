@@ -1,0 +1,1109 @@
+{
+  "full_run": {
+    "modules": 110,
+    "passed": 2219,
+    "skipped": 96
+  },
+  "final_verified": {
+    "modules": 110,
+    "pytest_passed": 2223,
+    "skipped": 92,
+    "scripts_passed": 2,
+    "failures": 0
+  },
+  "note": "Full run plus four real hand-model checks rerun using the existing local model. Counts do not double-count reruns.",
+  "results": [
+    {
+      "file": "test_adjustment_layers.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.04,
+      "tests": 17,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_audio_effects.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.09,
+      "tests": 19,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_audio_tools.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 0.96,
+      "tests": 18,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_av_import_ui.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 9.78,
+      "tests": 14,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_av_links.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 0.82,
+      "tests": 26,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_blur_fast_path.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 0.83,
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_browser_ui.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 3.63,
+      "tests": 24,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_caption_sources.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.01,
+      "tests": 12,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_captions.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.01,
+      "tests": 13,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_chroma_key.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.05,
+      "tests": 9,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_compositing.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 2.32,
+      "tests": 43,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_composition_alpha.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 0.89,
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_composition_ui.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 13.01,
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_composition_workflow.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.16,
+      "tests": 13,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_compositions.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 0.98,
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_crash_reporting.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.02,
+      "tests": 11,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_creative_completion.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.75,
+      "tests": 12,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_creative_part1.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.02,
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_creative_part3.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.07,
+      "tests": 9,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_duplicate_clip.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.16,
+      "tests": 9,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_easing_presets.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 0.89,
+      "tests": 11,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_edit_polish.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.44,
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_editor_bugfixes.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 108.85,
+      "tests": 20,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_effect_parameters.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 46.33,
+      "tests": 668,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 90
+    },
+    {
+      "file": "test_effect_presets.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 6.97,
+      "tests": 12,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_effects_extended.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.51,
+      "tests": 24,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_effects_new.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 4.52,
+      "tests": 42,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_export_audio.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.47,
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_filedialogs.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.64,
+      "tests": 11,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_generated_rendering.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 2.0,
+      "tests": 26,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_gif_export.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 2.83,
+      "tests": 31,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_glow_advanced.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.26,
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_graph_editor.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 12.66,
+      "tests": 22,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_graph_editor_perf.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 3.48,
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_graph_editor_robustness.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 8.16,
+      "tests": 19,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_hand_landmarks_real.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 4.97,
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_keyframe_editor.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 45.86,
+      "tests": 9,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_keyframe_selection.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 22.89,
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_keyframe_ui.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 35.83,
+      "tests": 9,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_keyframe_workflow.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 13.64,
+      "tests": 64,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_link_commands.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 3.55,
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_link_import.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 11.42,
+      "tests": 35,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_looks.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.2,
+      "tests": 12,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_media_probe.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 0.97,
+      "tests": 22,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_multi_clip_editing.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.97,
+      "tests": 13,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_numeric_fields.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 0.9,
+      "tests": 34,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_packaging.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.34,
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_pen_gui_mouse.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 2.11,
+      "tests": 14,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_posterize_time.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.03,
+      "tests": 17,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_preferences_layout.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.01,
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_preset_loops.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.2,
+      "tests": 19,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_preset_text.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.77,
+      "tests": 13,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_preset_ui.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 2.0,
+      "tests": 28,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_presets.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.15,
+      "tests": 15,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_preview_cache.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.46,
+      "tests": 15,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_preview_quality.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 0.92,
+      "tests": 18,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_preview_realtime.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 10.18,
+      "tests": 16,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_project_folders.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 3.59,
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_project_format.py",
+      "exit_code": 0,
+      "kind": "script",
+      "seconds": 2.0
+    },
+    {
+      "file": "test_project_storage.py",
+      "exit_code": 0,
+      "kind": "script",
+      "seconds": 0.69
+    },
+    {
+      "file": "test_properties_panel.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 63.99,
+      "tests": 11,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_puppet_pins.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 7.44,
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_recording.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.64,
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_recording_audio.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 3.19,
+      "tests": 16,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 2
+    },
+    {
+      "file": "test_recording_separation.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.65,
+      "tests": 13,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_roto_brush.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 5.3,
+      "tests": 17,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_roto_brush_ui.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.45,
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_roto_brush_window.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 3.97,
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_roto_model.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 7.13,
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_roto_toolbar.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.13,
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_sample_project.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.38,
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_screen_recording.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 2.27,
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_shader_backend.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.58,
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_shader_effects.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 3.67,
+      "tests": 39,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_shader_integration.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 9.29,
+      "tests": 46,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_shader_phase2.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 4.47,
+      "tests": 33,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_shape_ui.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 7.84,
+      "tests": 12,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_shapes.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 5.57,
+      "tests": 24,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_simple_choker.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 3.74,
+      "tests": 30,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_single_instance.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.57,
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_smart_key.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 13.32,
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_smart_key_ui.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 2.39,
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_smart_paste.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 32.75,
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_smart_paste_links.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 42.72,
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_smart_paste_youtube.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 44.24,
+      "tests": 14,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_start_window_cleanup.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.58,
+      "tests": 21,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_stream_frames.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.12,
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_text_features.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.39,
+      "tests": 15,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_text_generator.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.53,
+      "tests": 9,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_text_readiness.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 10.15,
+      "tests": 13,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_text_ui.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 9.22,
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_theme_switch.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.38,
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_thumbnails.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 2.86,
+      "tests": 16,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_timeline_snapping.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 6.02,
+      "tests": 12,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_tracking_advanced.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.5,
+      "tests": 13,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_tracking_visuals.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 23.14,
+      "tests": 19,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_transform_animation.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.38,
+      "tests": 14,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_transform_bounds.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.0,
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_transform_corners.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 12.96,
+      "tests": 24,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_transform_ui.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 14.17,
+      "tests": 19,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_transitions.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 2.26,
+      "tests": 21,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_ui_polish.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 5.3,
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_ui_refactor.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 47.78,
+      "tests": 11,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_ui_tokens.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.14,
+      "tests": 62,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_updates.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.27,
+      "tests": 37,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_updates_ui.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.78,
+      "tests": 16,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_version.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.14,
+      "tests": 23,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_warp_ui.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 6.93,
+      "tests": 9,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_waveform_processing.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 1.35,
+      "tests": 15,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "file": "test_youtube_media.py",
+      "exit_code": 0,
+      "kind": "pytest",
+      "seconds": 8.63,
+      "tests": 21,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  ]
+}

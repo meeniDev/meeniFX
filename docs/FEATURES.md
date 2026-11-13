@@ -507,3 +507,10 @@ or [SHORTCUTS.md](SHORTCUTS.md), [RECORDING.md](RECORDING.md) and
 - Automatic selects a matching CPU implementation when GPU shaders are unavailable.
   Forced GPU reports an error. The Properties status identifies the rendering path.
   See [the architecture and verification report](SHADER_PHASE1.md) for limits and results.
+
+### Phase 2 shader development
+
+Heat Haze, Ripple, Pixel Stretch and Light Rays use matching CPU/GPU algorithms,
+editable presets and keyframeable parameters. Kaleidoscope offers an optional
+alpha-correct GPU renderer while retaining its original renderer for existing projects.
+See [verification and limitations](SHADER_PHASE2.md).

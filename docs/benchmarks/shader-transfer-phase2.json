@@ -1,0 +1,120 @@
+{
+  "gpu": {
+    "GL_VENDOR": "Intel",
+    "GL_RENDERER": "Intel(R) UHD Graphics 770",
+    "GL_VERSION": "3.3.0 - Build 32.0.101.7077"
+  },
+  "measurements": [
+    {
+      "effect": "lens_warp",
+      "resolution": [
+        1280,
+        720
+      ],
+      "gpu_cold_ms": 97.82220000124653,
+      "gpu_warm_mean_ms": 8.661333333899771,
+      "gpu_warm_samples_ms": [
+        12.296500000957167,
+        7.033700001557008,
+        6.653799999185139
+      ],
+      "cpu_ms": 735.9604000012041,
+      "cpu_peak_python_bytes": 159477792,
+      "gpu_details": {
+        "context_ms": 69.94589999885648,
+        "lens_warp_compile_ms": 3.6106999996263767,
+        "decode_compile_ms": 1.3567000005423324,
+        "encode_compile_ms": 1.1883999995916383,
+        "upload_decode_ms": 1.2332000005699228,
+        "draw_encode_readback_ms": 3.723800000443589,
+        "upload_bytes": 3686400,
+        "readback_bytes": 3686400
+      },
+      "gpu_cpu_mae": 6.184895833333334e-05
+    },
+    {
+      "effect": "page_curl",
+      "resolution": [
+        1280,
+        720
+      ],
+      "gpu_cold_ms": 9.699100000943872,
+      "gpu_warm_mean_ms": 6.89550000000357,
+      "gpu_warm_samples_ms": [
+        6.7608000008476665,
+        6.536999999298132,
+        7.388699999864912
+      ],
+      "cpu_ms": 3128.407199999856,
+      "cpu_peak_python_bytes": 204636000,
+      "gpu_details": {
+        "context_ms": 69.94589999885648,
+        "lens_warp_compile_ms": 3.6106999996263767,
+        "decode_compile_ms": 1.3567000005423324,
+        "encode_compile_ms": 1.1883999995916383,
+        "upload_decode_ms": 1.481900000726455,
+        "draw_encode_readback_ms": 4.5678000005864305,
+        "upload_bytes": 3686400,
+        "readback_bytes": 3686400,
+        "page_curl_compile_ms": 2.5853000006463844
+      },
+      "gpu_cpu_mae": 0.000981716579861111
+    },
+    {
+      "effect": "lens_warp",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "gpu_cold_ms": 38.84919999836711,
+      "gpu_warm_mean_ms": 16.63826666602593,
+      "gpu_warm_samples_ms": [
+        24.394799998844974,
+        12.750199999572942,
+        12.769799999659881
+      ],
+      "cpu_ms": 1492.9919000005611,
+      "cpu_peak_python_bytes": 358770904,
+      "gpu_details": {
+        "context_ms": 69.94589999885648,
+        "lens_warp_compile_ms": 3.6106999996263767,
+        "decode_compile_ms": 1.3567000005423324,
+        "encode_compile_ms": 1.1883999995916383,
+        "upload_decode_ms": 2.2475999994640006,
+        "draw_encode_readback_ms": 8.290699999633944,
+        "upload_bytes": 8294400,
+        "readback_bytes": 8294400,
+        "page_curl_compile_ms": 2.5853000006463844
+      },
+      "gpu_cpu_mae": 5.738811728395062e-05
+    },
+    {
+      "effect": "page_curl",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "gpu_cold_ms": 13.230200000180048,
+      "gpu_warm_mean_ms": 12.793133333010095,
+      "gpu_warm_samples_ms": [
+        12.739899999360205,
+        12.882799999715644,
+        12.756699999954435
+      ],
+      "cpu_ms": 6483.338099998946,
+      "cpu_peak_python_bytes": 460380000,
+      "gpu_details": {
+        "context_ms": 69.94589999885648,
+        "lens_warp_compile_ms": 3.6106999996263767,
+        "decode_compile_ms": 1.3567000005423324,
+        "encode_compile_ms": 1.1883999995916383,
+        "upload_decode_ms": 2.240299998447881,
+        "draw_encode_readback_ms": 8.369799999854877,
+        "upload_bytes": 8294400,
+        "readback_bytes": 8294400,
+        "page_curl_compile_ms": 2.5853000006463844
+      },
+      "gpu_cpu_mae": 0.001036964699074074
+    }
+  ]
+}

@@ -150,3 +150,8 @@ The test runner gives every module a private QSettings/config profile, preservin
 running editor's preferences. Import tests generate their own video-only fixture, so a
 clean worktree does not need an ignored developer video. Optional hand model fixtures can
 be supplied via `MEENIFX_HAND_MODEL`; no model weights belong in a commit.
+
+Phase 2 shaders and transfer optimization are documented in [SHADER_PHASE2.md](SHADER_PHASE2.md).
+Run `python tools/benchmark_shaders.py artifacts/shader-phase2 --phase2` for the
+new effects; omit `--phase2` for Lens Warp and Page Curl. Benchmarks include upload,
+linear-premultiplied conversion, processing, encoding and CPU readback.

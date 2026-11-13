@@ -65,7 +65,9 @@ Windows 10 or 11, 64-bit. The installed application does not require Python.
 The detailed reference lives in [docs/FEATURES.md](docs/FEATURES.md).
 
 Development work also includes [Page Curl, Lens Warp and a reusable shader backend](docs/SHADER_PHASE1.md),
-with matching CPU fallbacks. This does not publish a new installer.
+with matching CPU fallbacks. The [next shader batch](docs/SHADER_PHASE2.md) adds Heat Haze,
+Ripple, Pixel Stretch and Light Rays, plus optional GPU Kaleidoscope rendering.
+These development branches do not publish a new installer.
 
 ## A look inside
 
@@ -85,6 +87,13 @@ These are actual Qt captures from the Alpha 10 development source, not mockups.
 ### Dark workspace
 
 ![meeniFX dark workspace with preview, effects and timeline](docs/design/window-dark-1420x880.png)
+
+### Shader development preview
+
+![Heat Haze rendered from a checker test plate](docs/design/heat_haze-phase2.png)
+
+This is an actual rendered test frame from the development shader branch. See the
+[Phase 2 report](docs/SHADER_PHASE2.md) for measurements and remaining verification.
 
 ## Install
 

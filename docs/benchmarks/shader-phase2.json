@@ -1,0 +1,309 @@
+{
+  "gpu": {
+    "GL_VENDOR": "Intel",
+    "GL_RENDERER": "Intel(R) UHD Graphics 770",
+    "GL_VERSION": "3.3.0 - Build 32.0.101.7077"
+  },
+  "measurements": [
+    {
+      "effect": "heat_haze",
+      "resolution": [
+        1280,
+        720
+      ],
+      "gpu_cold_ms": 93.66939999927126,
+      "gpu_warm_mean_ms": 7.066266666394465,
+      "gpu_warm_samples_ms": [
+        11.004199999661068,
+        5.074200000308338,
+        5.120399999213987
+      ],
+      "cpu_ms": 292.81780000019353,
+      "cpu_peak_python_bytes": 122712104,
+      "gpu_details": {
+        "context_ms": 63.219699999535806,
+        "heat_haze_compile_ms": 2.6240999995934544,
+        "decode_compile_ms": 1.45410000004631,
+        "encode_compile_ms": 1.166699999885168,
+        "upload_decode_ms": 1.0204000009252923,
+        "draw_encode_readback_ms": 3.1930999994074227,
+        "upload_bytes": 3686400,
+        "readback_bytes": 3686400
+      },
+      "gpu_cpu_mae": 8.165147569444444e-05
+    },
+    {
+      "effect": "ripple",
+      "resolution": [
+        1280,
+        720
+      ],
+      "gpu_cold_ms": 9.381899999425514,
+      "gpu_warm_mean_ms": 9.532033332410114,
+      "gpu_warm_samples_ms": [
+        6.613099998503458,
+        15.600299999277922,
+        6.38269999944896
+      ],
+      "cpu_ms": 389.93479999953706,
+      "cpu_peak_python_bytes": 126398752,
+      "gpu_details": {
+        "context_ms": 63.219699999535806,
+        "heat_haze_compile_ms": 2.6240999995934544,
+        "decode_compile_ms": 1.45410000004631,
+        "encode_compile_ms": 1.166699999885168,
+        "upload_decode_ms": 1.4860999999655178,
+        "draw_encode_readback_ms": 3.6819999986619223,
+        "upload_bytes": 3686400,
+        "readback_bytes": 3686400,
+        "ripple_compile_ms": 2.3277000000234693
+      },
+      "gpu_cpu_mae": 7.649739583333334e-05
+    },
+    {
+      "effect": "pixel_stretch",
+      "resolution": [
+        1280,
+        720
+      ],
+      "gpu_cold_ms": 7.153700000344543,
+      "gpu_warm_mean_ms": 5.174266666775414,
+      "gpu_warm_samples_ms": [
+        5.038200000853976,
+        5.365200000596815,
+        5.119399998875451
+      ],
+      "cpu_ms": 312.41880000015954,
+      "cpu_peak_python_bytes": 111652520,
+      "gpu_details": {
+        "context_ms": 63.219699999535806,
+        "heat_haze_compile_ms": 2.6240999995934544,
+        "decode_compile_ms": 1.45410000004631,
+        "encode_compile_ms": 1.166699999885168,
+        "upload_decode_ms": 1.0242000007565366,
+        "draw_encode_readback_ms": 3.0862000003253343,
+        "upload_bytes": 3686400,
+        "readback_bytes": 3686400,
+        "ripple_compile_ms": 2.3277000000234693,
+        "pixel_stretch_compile_ms": 1.587900000231457
+      },
+      "gpu_cpu_mae": 0.0
+    },
+    {
+      "effect": "light_rays",
+      "resolution": [
+        1280,
+        720
+      ],
+      "gpu_cold_ms": 18.66370000061579,
+      "gpu_warm_mean_ms": 16.874566666350194,
+      "gpu_warm_samples_ms": [
+        17.491299999164767,
+        17.010499999742024,
+        16.121900000143796
+      ],
+      "cpu_ms": 6626.338400001259,
+      "cpu_peak_python_bytes": 159475152,
+      "gpu_details": {
+        "context_ms": 63.219699999535806,
+        "heat_haze_compile_ms": 2.6240999995934544,
+        "decode_compile_ms": 1.45410000004631,
+        "encode_compile_ms": 1.166699999885168,
+        "upload_decode_ms": 1.3925000002927845,
+        "draw_encode_readback_ms": 13.714099999560858,
+        "upload_bytes": 3686400,
+        "readback_bytes": 3686400,
+        "ripple_compile_ms": 2.3277000000234693,
+        "pixel_stretch_compile_ms": 1.587900000231457,
+        "light_rays_compile_ms": 2.3086000001057982
+      },
+      "gpu_cpu_mae": 0.00016194661458333333
+    },
+    {
+      "effect": "kaleidoscope",
+      "resolution": [
+        1280,
+        720
+      ],
+      "gpu_cold_ms": 6.9096999995963415,
+      "gpu_warm_mean_ms": 4.754133333335631,
+      "gpu_warm_samples_ms": [
+        4.617800001142314,
+        4.782399999385234,
+        4.862199999479344
+      ],
+      "cpu_ms": 254.40610000077868,
+      "cpu_peak_python_bytes": 122711360,
+      "gpu_details": {
+        "context_ms": 63.219699999535806,
+        "heat_haze_compile_ms": 2.6240999995934544,
+        "decode_compile_ms": 1.45410000004631,
+        "encode_compile_ms": 1.166699999885168,
+        "upload_decode_ms": 0.9512000015092781,
+        "draw_encode_readback_ms": 2.9080000003887108,
+        "upload_bytes": 3686400,
+        "readback_bytes": 3686400,
+        "ripple_compile_ms": 2.3277000000234693,
+        "pixel_stretch_compile_ms": 1.587900000231457,
+        "light_rays_compile_ms": 2.3086000001057982,
+        "kaleidoscope_compile_ms": 1.769399999830057
+      },
+      "gpu_cpu_mae": 0.0009233940972222223
+    },
+    {
+      "effect": "heat_haze",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "gpu_cold_ms": 44.529300001158845,
+      "gpu_warm_mean_ms": 15.348933332764622,
+      "gpu_warm_samples_ms": [
+        24.229599999671336,
+        11.251399999309797,
+        10.56579999931273
+      ],
+      "cpu_ms": 701.9531999994797,
+      "cpu_peak_python_bytes": 275927384,
+      "gpu_details": {
+        "context_ms": 63.219699999535806,
+        "heat_haze_compile_ms": 2.6240999995934544,
+        "decode_compile_ms": 1.45410000004631,
+        "encode_compile_ms": 1.166699999885168,
+        "upload_decode_ms": 1.898599999549333,
+        "draw_encode_readback_ms": 6.672200001048623,
+        "upload_bytes": 8294400,
+        "readback_bytes": 8294400,
+        "ripple_compile_ms": 2.3277000000234693,
+        "pixel_stretch_compile_ms": 1.587900000231457,
+        "light_rays_compile_ms": 2.3086000001057982,
+        "kaleidoscope_compile_ms": 1.769399999830057
+      },
+      "gpu_cpu_mae": 8.728780864197531e-05
+    },
+    {
+      "effect": "ripple",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "gpu_cold_ms": 11.402599999200902,
+      "gpu_warm_mean_ms": 10.682533333238098,
+      "gpu_warm_samples_ms": [
+        10.584300000118674,
+        10.708899999372079,
+        10.75440000022354
+      ],
+      "cpu_ms": 616.593799999464,
+      "cpu_peak_python_bytes": 284221912,
+      "gpu_details": {
+        "context_ms": 63.219699999535806,
+        "heat_haze_compile_ms": 2.6240999995934544,
+        "decode_compile_ms": 1.45410000004631,
+        "encode_compile_ms": 1.166699999885168,
+        "upload_decode_ms": 1.9714999998541316,
+        "draw_encode_readback_ms": 7.041200000458048,
+        "upload_bytes": 8294400,
+        "readback_bytes": 8294400,
+        "ripple_compile_ms": 2.3277000000234693,
+        "pixel_stretch_compile_ms": 1.587900000231457,
+        "light_rays_compile_ms": 2.3086000001057982,
+        "kaleidoscope_compile_ms": 1.769399999830057
+      },
+      "gpu_cpu_mae": 8.077739197530865e-05
+    },
+    {
+      "effect": "pixel_stretch",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "gpu_cold_ms": 10.56119999884686,
+      "gpu_warm_mean_ms": 10.896999999507292,
+      "gpu_warm_samples_ms": [
+        10.682300000553369,
+        11.317099999359925,
+        10.69159999860858
+      ],
+      "cpu_ms": 591.5000999993936,
+      "cpu_peak_python_bytes": 251043800,
+      "gpu_details": {
+        "context_ms": 63.219699999535806,
+        "heat_haze_compile_ms": 2.6240999995934544,
+        "decode_compile_ms": 1.45410000004631,
+        "encode_compile_ms": 1.166699999885168,
+        "upload_decode_ms": 2.1541999994951766,
+        "draw_encode_readback_ms": 6.654000000708038,
+        "upload_bytes": 8294400,
+        "readback_bytes": 8294400,
+        "ripple_compile_ms": 2.3277000000234693,
+        "pixel_stretch_compile_ms": 1.587900000231457,
+        "light_rays_compile_ms": 2.3086000001057982,
+        "kaleidoscope_compile_ms": 1.769399999830057
+      },
+      "gpu_cpu_mae": 0.0
+    },
+    {
+      "effect": "light_rays",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "gpu_cold_ms": 37.5863000008394,
+      "gpu_warm_mean_ms": 35.72300000087125,
+      "gpu_warm_samples_ms": [
+        36.33280000030936,
+        35.277000000860426,
+        35.55920000144397
+      ],
+      "cpu_ms": 12828.548700001193,
+      "cpu_peak_python_bytes": 358771152,
+      "gpu_details": {
+        "context_ms": 63.219699999535806,
+        "heat_haze_compile_ms": 2.6240999995934544,
+        "decode_compile_ms": 1.45410000004631,
+        "encode_compile_ms": 1.166699999885168,
+        "upload_decode_ms": 2.2912999993423,
+        "draw_encode_readback_ms": 31.52129999944009,
+        "upload_bytes": 8294400,
+        "readback_bytes": 8294400,
+        "ripple_compile_ms": 2.3277000000234693,
+        "pixel_stretch_compile_ms": 1.587900000231457,
+        "light_rays_compile_ms": 2.3086000001057982,
+        "kaleidoscope_compile_ms": 1.769399999830057
+      },
+      "gpu_cpu_mae": 0.00020339023919753086
+    },
+    {
+      "effect": "kaleidoscope",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "gpu_cold_ms": 10.476099998413702,
+      "gpu_warm_mean_ms": 9.823733333784427,
+      "gpu_warm_samples_ms": [
+        9.833199999775388,
+        9.921000000758795,
+        9.717000000819098
+      ],
+      "cpu_ms": 577.1965000003547,
+      "cpu_peak_python_bytes": 275927360,
+      "gpu_details": {
+        "context_ms": 63.219699999535806,
+        "heat_haze_compile_ms": 2.6240999995934544,
+        "decode_compile_ms": 1.45410000004631,
+        "encode_compile_ms": 1.166699999885168,
+        "upload_decode_ms": 1.960599998710677,
+        "draw_encode_readback_ms": 6.038199999238714,
+        "upload_bytes": 8294400,
+        "readback_bytes": 8294400,
+        "ripple_compile_ms": 2.3277000000234693,
+        "pixel_stretch_compile_ms": 1.587900000231457,
+        "light_rays_compile_ms": 2.3086000001057982,
+        "kaleidoscope_compile_ms": 1.769399999830057
+      },
+      "gpu_cpu_mae": 0.0014140866126543209
+    }
+  ]
+}

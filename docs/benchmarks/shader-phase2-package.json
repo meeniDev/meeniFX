@@ -1,0 +1,21 @@
+{
+  "bytes": 333109503,
+  "sha256": "30bf3adbb6f09ba00e8bd8d85ce7251fe443850a9d8e6789a0913f8307e4edcc",
+  "crc": "passed",
+  "shaders": [
+    "decode.glsl",
+    "encode.glsl",
+    "fullscreen.vert",
+    "heat_haze.glsl",
+    "identity.glsl",
+    "kaleidoscope.glsl",
+    "lens_warp.glsl",
+    "light_rays.glsl",
+    "page_curl.glsl",
+    "pixel_stretch.glsl",
+    "ripple.glsl",
+    "sampling.glsl"
+  ],
+  "native_dependencies": "present",
+  "license": "present"
+}
