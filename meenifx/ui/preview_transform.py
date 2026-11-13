@@ -969,6 +969,14 @@ class PreviewOverlay:
 
     def _paint_warps(self, painter, clip):
         frame = self.local_frame(clip)
+        lens = self.lens_handles(clip)
+        if lens:
+            painter.save()
+            painter.setPen(QPen(QColor(tokens.COLORS["accent"]), 1.5))
+            for point in lens.values():
+                painter.drawEllipse(point, 5., 5.)
+            painter.drawLine(lens["center"], lens["radius"])
+            painter.restore()
         puppet = self._effect_entry(clip, "puppet_warp")
         if puppet is not None:
             painter.save()
@@ -1127,6 +1135,12 @@ class PreviewOverlay:
                     if callable(self.on_mode_change):
                         self.on_mode_change("pen")
                     self.widget.update()
+                    return True
+        if clip is not None and self.mode in ("select", "transform"):
+            for name, point in self.lens_handles(clip).items():
+                if (point - pos).manhattanLength() <= HIT * 1.6:
+                    self.session.begin_gesture()
+                    self._drag = {"kind": "lens", "clip": clip, "handle": name}
                     return True
         # Warp handles win over the transform handles: corner-pin corners and mesh
         # nodes sit exactly on the box corners and centre, where the box handles would
@@ -1427,6 +1441,10 @@ class PreviewOverlay:
             self._write_position(drag["clip"], state.position_x + dx, state.position_y + dy)
             self._notify()
             return True
+        if kind == "lens":
+            self._lens_drag(drag, pos)
+            self._notify()
+            return True
         if kind == "scale":
             self._scale_drag(drag, pos, ctrl=precise, shift=shift, alt=alt)
             self._notify()
@@ -1456,6 +1474,41 @@ class PreviewOverlay:
     def _write(self, clip, channel, value):
         CH.set_value(clip, channel, value, self.local_frame(clip),
                      bool(self.session.auto_keyframe.get()))
+
+    def lens_handles(self, clip):
+        entry = self._effect_entry(clip, "lens_warp")
+        if entry is None or not entry.get("enabled", True):
+            return {}
+        width, height = self.image_size(clip)
+        frame = self.local_frame(clip)
+        cx = self.param(clip, "lens_warp", "center_x", frame, 50) * (width - 1) / 100
+        cy = self.param(clip, "lens_warp", "center_y", frame, 50) * (height - 1) / 100
+        radius = self.param(clip, "lens_warp", "radius", frame, 45) * min(width, height) / 100
+        aspect = self.param(clip, "lens_warp", "aspect", frame, 1)
+        return {name: self.to_widget(*T.forward(point, self.state(clip), self.project_size(),
+                                              (width, height)))
+                for name, point in (("center", (cx, cy)), ("radius", (cx + radius * aspect, cy)))}
+
+    def _lens_drag(self, drag, pos):
+        clip = drag["clip"]
+        project = self.to_project(pos)
+        if project is None:
+            return
+        width, height = self.image_size(clip)
+        point = T.invert(project, self.state(clip), self.project_size(), (width, height))
+        if point is None:
+            return
+        if drag["handle"] == "center":
+            for name, value in (("center_x", point[0] * 100 / max(1, width - 1)),
+                                ("center_y", point[1] * 100 / max(1, height - 1))):
+                self._write(clip, CH.effect_channel("lens_warp", name), max(0, min(100, value)))
+        else:
+            frame = self.local_frame(clip)
+            cx = self.param(clip, "lens_warp", "center_x", frame, 50) * (width - 1) / 100
+            cy = self.param(clip, "lens_warp", "center_y", frame, 50) * (height - 1) / 100
+            aspect = max(.25, self.param(clip, "lens_warp", "aspect", frame, 1))
+            radius = math.hypot((point[0] - cx) / aspect, point[1] - cy) * 100 / max(1, min(width, height))
+            self._write(clip, CH.effect_channel("lens_warp", "radius"), max(1, min(150, radius)))
 
     def _write_position(self, clip, x, y):
         frame = self.local_frame(clip)
@@ -1780,7 +1833,7 @@ class PreviewOverlay:
         self._knob_pinned = False
         labels = {"move": "Move clip", "scale": "Scale clip", "rotate": "Rotate clip",
                   "anchor": "Move anchor point", "pin": "Move puppet pin",
-                  "corner": "Move corner pin", "mesh": "Move mesh node",
+                  "corner": "Move corner pin", "mesh": "Move mesh node", "lens": "Adjust Lens Warp",
                   "path_point": "Move motion path point",
                   "path_handle": "Adjust motion path", "roto": "Roto Brush stroke"}
         self.session.commit_gesture(labels.get(drag.get("kind"), "Edit transform"))
@@ -1793,7 +1846,8 @@ class PreviewOverlay:
     def cancel_shape(self):
         """Escape while drawing: drop the draft and leave the shape tool."""
         if self.mode == "pen":
-            return self.pen.cancel(finish=True)
+            # The preview's Pen branch owns Escape: finish is Enter/V, Escape cancels.
+            return False
         if self._shape_draft is None and self.mode != "shape":
             return False
         self._shape_draft = None

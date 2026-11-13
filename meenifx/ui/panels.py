@@ -3198,6 +3198,12 @@ class EffectsPanel(QWidget):
             hint.setObjectName("effectNote")
             hint.setStyleSheet(f"color: {tokens.COLORS['muted']}; font-size: 11px;")
             form.addWidget(hint)
+        if hasattr(effect, "status"):
+            status = QLabel(str(effect.status))
+            status.setWordWrap(True)
+            status.setObjectName("shaderStatus")
+            form.addWidget(status)
+            self._rows.append({"kind": "shader_status", "label": status, "effect": effect})
 
     def _param_row(self, target, clip, effect, entry, spec):
         """One parameter control (numeric, switch, choice or text) in `target`."""
@@ -3268,6 +3274,23 @@ class EffectsPanel(QWidget):
             target.addWidget(self._labelled(spec.label, holder, tip))
             self._rows.append({"kind": "colour_param", "clip_id": clip.id, "entry": entry,
                                "name": spec.name, "button": swatch, "spec": spec})
+        elif effect.key == "page_curl" and spec.name == "back_path":
+            edit = QLineEdit(str(current or ""))
+            edit.setPlaceholderText("Choose a backside image")
+            browse = QToolButton()
+            browse.setText("Browse")
+            holder = QWidget()
+            layout = QHBoxLayout(holder)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.addWidget(edit, 1)
+            layout.addWidget(browse)
+            def choose(_=False):
+                path = open_file(self, "Page Curl backside image", "", "Images (*.png *.jpg *.jpeg *.webp *.bmp)")
+                if path:
+                    self._commit_choice(clip, entry, spec.name, path, spec)
+            browse.clicked.connect(choose)
+            edit.editingFinished.connect(lambda: self._commit_choice(clip, entry, spec.name, edit.text(), spec))
+            target.addWidget(self._labelled(spec.label, holder, tip))
         elif spec.name == "palette_text":
             self._palette_row(target, clip, entry, spec, str(current or ""))
         else:
@@ -3750,6 +3773,9 @@ class EffectsPanel(QWidget):
         local = self._clip_frame(clip)
         for row in self._rows:
             kind = row["kind"]
+            if kind == "shader_status":
+                row["label"].setText(str(row["effect"].status))
+                continue
             if kind == "text":
                 editor = row.get("editor")
                 # Follow the playhead with the keyed words, but never while the user is

@@ -70,6 +70,11 @@ class ShaderEffect(LayerEffect):
 
 class LensWarpEffect(ShaderEffect):
     key, name = "lens_warp", "Lens Warp"
+    PRESETS = {
+        "soft_glass": ("Soft Glass", {"amount": 35, "radius": 45, "mode": "bulge", "chromatic": 0}),
+        "wide_view": ("Wide View", {"amount": 80, "radius": 110, "mode": "pinch", "edge": "mirror"}),
+        "prism_lens": ("Prism Lens", {"amount": 60, "radius": 55, "chromatic": 12}),
+    }
     PARAMS = (
         ParamSpec("center_x", "Center X", "float", 0, 100, 50., unit="%"),
         ParamSpec("center_y", "Center Y", "float", 0, 100, 50., unit="%"),

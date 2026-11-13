@@ -667,6 +667,19 @@ def _draw(name, p, color):
         p.drawLine(QPointF(12.5, 2.8), QPointF(12.5, 13.2))
         p.setBrush(fill); p.setPen(Qt.PenStyle.NoPen)
         p.drawPolygon(_pts(10.0, 10.4, 12.5, 13.2, 15.0, 10.4))
+    elif name == "page_curl":
+        path = QPainterPath(QPointF(3, 2))
+        path.lineTo(13, 2); path.lineTo(13, 9)
+        path.cubicTo(10, 8, 8, 11, 9, 14)
+        path.lineTo(3, 14); path.closeSubpath()
+        p.drawPath(path)
+        p.drawLine(QPointF(9, 14), QPointF(13, 9))
+    elif name == "lens_warp":
+        p.drawEllipse(QRectF(2, 2, 12, 12))
+        path = QPainterPath(QPointF(8, 3))
+        path.cubicTo(12, 6, 12, 10, 8, 13)
+        p.drawPath(path)
+        p.drawLine(QPointF(3, 8), QPointF(13, 8))
     elif name == "image":
         p.drawRoundedRect(QRectF(2.4, 3.2, 11.2, 9.6), 2, 2)
         p.drawPolyline(_pts(3.2, 11.2, 6.4, 7.6, 8.8, 10, 10.4, 8.6, 12.8, 11.2))
