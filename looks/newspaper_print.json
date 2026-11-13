@@ -1,0 +1,13 @@
+{
+  "format": "mfxlook",
+  "version": 1,
+  "id": "newspaper_print",
+  "name": "Newspaper Print",
+  "description": "Ink hatching, coarse dots and warm aged paper",
+  "stack": [
+    {"effect_id": "crosshatch", "params": {"spacing": 5, "density": 62, "paper": "#EFE6D2", "ink": "#29241D"}},
+    {"effect_id": "halftone", "params": {"dot": 5, "angle": 45, "contrast": 85}},
+    {"effect_id": "duotone", "params": {"shadow_hue": 28, "highlight_hue": 42, "intensity": 28}},
+    {"effect_id": "film_grain", "params": {"amount": 12}}
+  ]
+}

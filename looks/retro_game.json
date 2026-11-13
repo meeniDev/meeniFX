@@ -1,0 +1,12 @@
+{
+  "format": "mfxlook",
+  "version": 1,
+  "id": "retro_game",
+  "name": "Retro Game",
+  "description": "Four-colour handheld pixels with a soft LED glow",
+  "stack": [
+    {"effect_id": "pixel_art", "params": {"pixel_size": 4, "colors": 6, "outline": 45}},
+    {"effect_id": "dither", "params": {"algorithm": "bayer4", "palette": "game_boy", "pixel_size": 2, "strength": 85}},
+    {"effect_id": "glow", "params": {"threshold": 55, "radius": 8, "intensity": 12}}
+  ]
+}

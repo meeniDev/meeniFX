@@ -152,6 +152,7 @@ def test_corner_pin_corners_are_draggable_in_the_preview(editor):
     window.autokey_button.setChecked(False)
     clip = window.engine.timeline.all_clips()[0]
     window._set_overlay_mode("transform")
+    window._set_preview_controls(False)
     window.engine.session.apply_to_clips([clip.id], "Add corner pin", lambda c: c.effects.append(
         {"effect_id": "corner_pin", "enabled": True, "params": {}}))
     pump(0.1)
@@ -167,6 +168,46 @@ def test_corner_pin_corners_are_draggable_in_the_preview(editor):
     # The top-left corner moved away from the picture's own top-left corner.
     assert CH.value_at(moved, CH.effect_channel("corner_pin", "corner_tl_x"), 0) > 0.01
     assert CH.value_at(moved, CH.effect_channel("corner_pin", "corner_tl_y"), 0) > 0.005
+    window._set_preview_controls(True)
+
+
+def test_corner_pin_handle_hit_test_matches_rendered_corner(editor):
+    window = editor
+    clip = window.engine.timeline.all_clips()[0]
+    clip.effects = [{"effect_id": "corner_pin", "enabled": True, "params": {
+        "corner_tl_x": 0.18, "corner_tl_y": 0.22,
+    }}]
+    frame = window.overlay.local_frame(clip)
+    width, height = window.overlay.image_size(clip)
+    source = (0.18 * (width - 1), 0.22 * (height - 1))
+    project = T.forward(source, window.overlay.state(clip), window.overlay.project_size(),
+                        (width, height))
+    window.overlay._last_pos = window.overlay.to_widget(*project)
+    index, _point = window.overlay._corner_at(clip)
+    assert index == 0
+
+
+def test_alt_drag_frame_corner_applies_corner_pin_without_effect_setup(editor):
+    window = editor
+    window.autokey_button.setChecked(False)
+    window._set_overlay_mode("transform")
+    clip = window.engine.timeline.all_clips()[0]
+    clip.effects = [entry for entry in clip.effects if entry.get("effect_id") != "corner_pin"]
+    corner = window.overlay.to_widget(*window.overlay.clip_corners(clip)[0])
+    drag(window.preview_panel.view, corner,
+         QPointF(corner.x() + 26, corner.y() + 15),
+         modifiers=Qt.KeyboardModifier.AltModifier)
+    moved = window.engine.timeline.find_clip(clip.id)
+    assert any(entry.get("effect_id") == "corner_pin" for entry in moved.effects)
+    assert CH.value_at(moved, CH.effect_channel("corner_pin", "corner_tl_x"), 0) > 0.01
+
+
+def test_perspective_tilt_accepts_full_revolutions():
+    from meenifx.effects.warp import PerspectiveEffect
+
+    ranges = {spec.name: (spec.minimum, spec.maximum)
+              for spec in PerspectiveEffect.PARAMS if spec.name.startswith("tilt_")}
+    assert ranges == {"tilt_x": (-720.0, 720.0), "tilt_y": (-720.0, 720.0)}
 
 
 def test_mesh_warp_grid_nodes_are_draggable(editor):

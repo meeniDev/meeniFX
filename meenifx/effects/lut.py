@@ -96,8 +96,8 @@ class LutEffect(LayerEffect):
     _cache = {}
 
     PARAMS = (
-        ParamSpec("lut_file", "LUT file", "text", default="",
-                  help="Path to a .cube table; empty uses the built-in preset below"),
+        ParamSpec("lut_file", "LUT file", "media", default="", media_kind="lut",
+                  help="A .cube table; empty uses the built-in preset below"),
         ParamSpec("intensity", "Intensity", "float", 0.0, 100.0, 100.0, step=1.0, unit="%"),
         ParamSpec("preset", "Built-in", "choice", choices=tuple(key for key, _l in BUILTIN_LUTS),
                   choice_labels=tuple(label for _k, label in BUILTIN_LUTS), default="teal_orange",

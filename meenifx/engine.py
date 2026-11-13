@@ -20,6 +20,8 @@ from .effects.distort_extra import (DisplacementMapEffect, LensDistortionEffect,
 from .effects.glitch import (BulgePinchEffect, ChromaticAberrationEffect, GlitchEffect,
                              KaleidoscopeEffect, TwirlEffect, WaveWarpEffect)
 from .effects.shader_effects import LensWarpEffect
+from .effects.page_curl import PageCurlEffect
+from .effects.shader_expansion import SHADER_EXPANSION_EFFECTS
 from .effects.chroma import ChromaKeyEffect
 from .effects.glow import GlowEffect
 from .effects.glow_extra import (DirectionalGlowEffect, LightWrapEffect, MultiGlowEffect,
@@ -34,8 +36,10 @@ from .effects.matte import SimpleChokerEffect
 from .effects.matte_extra import MatteChokerEffect
 from .effects.roto_brush import RotoBrushEffect
 from .effects.smart_key import SmartKeyEffect
-from .effects.stylize import (DuotoneEffect, EdgeOutlineEffect, FilmGrainEffect, HalftoneEffect,
-                              InvertEffect, PosterizeEffect, VhsCrtEffect, VignetteEffect)
+from .effects.stylize import (DitherEffect, DuotoneEffect, EdgeOutlineEffect, FilmGrainEffect,
+                             HalftoneEffect, InvertEffect, PosterizeEffect, VhsCrtEffect,
+                             VignetteEffect)
+from .effects.stylize_extra import STYLIZE_EXTRA_EFFECTS
 from .effects.temporal import EchoEffect, PosterizeTimeEffect, StutterEffect, posterize_hold
 from .effects.warp import (CornerPinEffect, DistortionEffect, MeshWarpEffect,
                            PerspectiveEffect, PuppetWarpEffect, SkewEffect)
@@ -48,6 +52,7 @@ from .model.session import TimelineSession
 from .model.timeline import Timeline
 from .model.values import Value
 from .model import presets as preset_model
+from .model import alpha as alpha_model
 from .model import mask as mask_model
 from .model import matte as matte_model
 from .model import shape as shape_model
@@ -68,10 +73,10 @@ class EditorEngine:
                     ColorCorrectEffect, GaussianBlurEffect, BoxBlurEffect, DirectionalBlurEffect,
                     RadialBlurEffect, ZoomBlurEffect, MotionBlurEffect, GlowEffect, ChromaKeyEffect,
                     PuppetWarpEffect, CornerPinEffect, PerspectiveEffect, MeshWarpEffect, SkewEffect,
-                    DistortionEffect,
+                    DistortionEffect, *STYLIZE_EXTRA_EFFECTS,
                     ChromaticAberrationEffect, GlitchEffect, WaveWarpEffect, BulgePinchEffect,
                     TwirlEffect, KaleidoscopeEffect,
-                    VhsCrtEffect, FilmGrainEffect, HalftoneEffect, PosterizeEffect,
+                    VhsCrtEffect, FilmGrainEffect, HalftoneEffect, DitherEffect, PosterizeEffect,
                     EdgeOutlineEffect, DuotoneEffect, InvertEffect, VignetteEffect,
                     FlashEffect, ExposureFlickerEffect, LightLeakEffect, BloomStreaksEffect,
                     PosterizeTimeEffect, StutterEffect, EchoEffect, LutEffect, LookEffect,
@@ -81,7 +86,7 @@ class EditorEngine:
                     TritoneEffect, LevelsEffect, ColorWheelsEffect,
                     TurbulentDisplaceEffect, DisplacementMapEffect, LensDistortionEffect,
                     GradientRampEffect, FractalNoiseEffect, CheckerboardEffect, GridEffect,
-                    MatteChokerEffect, LensWarpEffect) + AUDIO_EFFECTS
+                    MatteChokerEffect, LensWarpEffect, PageCurlEffect) + SHADER_EXPANSION_EFFECTS + AUDIO_EFFECTS
 
     def __init__(self, fps=30):
         self.timeline = Timeline(fps=fps)
@@ -122,6 +127,10 @@ class EditorEngine:
         self.current_fx = []
         self.current_media_path = ""
         self.current_clip_local_frame = 0
+        # Optical-flow frame blending is expensive; keep a small bounded cache keyed by
+        # the actual source pair and render size so scrubbing and export reuse it.
+        self._flow_cache = {}
+        self._flow_cache_limit = 24
         self.preview_quality = Value(75)
         self.playback_fps = Value(30)
         self.speed_percent = Value(100)
@@ -135,6 +144,7 @@ class EditorEngine:
         self.render_height = Value(720)
         self.render_output_path = Value("")
         self.render_format = Value("mp4")
+        self.render_alpha = Value(False)
         self.render_gif_loop = Value("forever")
         self.render_gif_loops = Value(2)
         self.render_gif_colors = Value(256)
@@ -392,6 +402,97 @@ class EditorEngine:
             stack.extend(self.timeline.video_layers_at(track, frame_no))
         return stack
 
+    def motion_blur_for_clip(self, clip):
+        """Whether native motion blur applies to `clip` under the precedence rules."""
+        if not bool(getattr(self.timeline, "motion_blur", False)):
+            return False
+        local = (getattr(clip, "temporal", {}) or {}).get("motion_blur")
+        if local is not None:
+            return bool(local)
+        track = getattr(clip, "track", None)
+        if track is not None and getattr(track, "motion_blur", None) is not None:
+            return bool(track.motion_blur)
+        return True
+
+    def frame_blend_mode(self, clip):
+        """Effective frame blending for a clip: clip override > track > composition."""
+        composition = str(getattr(self.timeline, "frame_blending", "off") or "off")
+        if composition not in ("off", "mix", "flow"):
+            composition = "off"
+        # The composition switch is the master for this system. A clip override can
+        # choose Off/Mix/Flow under an enabled composition, but it cannot turn blending
+        # on while the composition has it switched off.
+        if composition == "off":
+            return "off"
+        local = (getattr(clip, "temporal", {}) or {}).get("frame_blend")
+        if local in ("off", "mix", "flow"):
+            return local
+        track = getattr(clip, "track", None)
+        if track is not None and getattr(track, "frame_blend", None) in ("off", "mix", "flow"):
+            return track.frame_blend
+        return composition
+
+    def _optical_flow_frame(self, previous, following, fraction, key):
+        """Synthesise a frame between two source frames with cached Farneback flow."""
+        cached = self._flow_cache.get(key)
+        if cached is None:
+            h, w = previous.shape[:2]
+            # Estimate flow at a bounded size; the resulting field is scaled back to
+            # source resolution only when remapping, keeping preview seeking responsive.
+            limit = 480.0
+            factor = min(1.0, limit / max(1.0, float(max(w, h))))
+            fw, fh = max(16, int(round(w * factor))), max(16, int(round(h * factor)))
+            pa = previous if (fw, fh) == (w, h) else cv2.resize(
+                previous, (fw, fh), interpolation=cv2.INTER_AREA)
+            fa = following if (fw, fh) == (w, h) else cv2.resize(
+                following, (fw, fh), interpolation=cv2.INTER_AREA)
+            pg = cv2.cvtColor(pa, cv2.COLOR_BGR2GRAY)
+            fg = cv2.cvtColor(fa, cv2.COLOR_BGR2GRAY)
+            flow = cv2.calcOpticalFlowFarneback(pg, fg, None, 0.5, 4, 21, 3, 5, 1.1, 0)
+            cached = (flow, (fw, fh))
+            if len(self._flow_cache) >= self._flow_cache_limit:
+                self._flow_cache.pop(next(iter(self._flow_cache)))
+            self._flow_cache[key] = cached
+        flow, (fw, fh) = cached
+        h, w = previous.shape[:2]
+        if (fw, fh) != (w, h):
+            flow = cv2.resize(flow, (w, h), interpolation=cv2.INTER_LINEAR)
+            flow[..., 0] *= w / float(fw)
+            flow[..., 1] *= h / float(fh)
+        grid_x, grid_y = np.meshgrid(np.arange(w, dtype=np.float32),
+                                     np.arange(h, dtype=np.float32))
+        back = cv2.remap(previous, grid_x + flow[..., 0] * fraction,
+                         grid_y + flow[..., 1] * fraction, cv2.INTER_LINEAR,
+                         borderMode=cv2.BORDER_REPLICATE)
+        forward = cv2.remap(following, grid_x + flow[..., 0] * (fraction - 1.0),
+                            grid_y + flow[..., 1] * (fraction - 1.0), cv2.INTER_LINEAR,
+                            borderMode=cv2.BORDER_REPLICATE)
+        return cv2.addWeighted(back, 1.0 - fraction, forward, fraction, 0.0)
+
+    def _blended_source_frame(self, clip, frame_no):
+        """The source picture at `frame_no`, with Frame Mix or Optical Flow applied."""
+        mode = self.frame_blend_mode(clip)
+        if mode == "off" or not clip.source_path:
+            return self.media.frame_for_clip(clip, frame_no, self.timeline.fps)
+        entry = self.media.load(clip.source_path)
+        if entry is None or entry.kind == "image" or not entry.frames:
+            return self.media.frame_for_clip(clip, frame_no, self.timeline.fps)
+        position = clip.source_position_at(frame_no)
+        lo = int(math.floor(position))
+        fraction = max(0.0, min(1.0, position - lo))
+        lo = max(0, min(lo, len(entry.frames) - 1))
+        hi = max(0, min(lo + 1, len(entry.frames) - 1))
+        if fraction <= 1e-4 or lo == hi:
+            return entry.frames[lo]
+        previous, following = entry.frames[lo], entry.frames[hi]
+        if previous.shape != following.shape:
+            following = cv2.resize(following, (previous.shape[1], previous.shape[0]),
+                                   interpolation=cv2.INTER_AREA)
+        if mode == "flow":
+            key = (clip.source_path, lo, hi, previous.shape[:2])
+            return self._optical_flow_frame(previous, following, fraction, key)
+        return cv2.addWeighted(previous, 1.0 - fraction, following, fraction, 0.0)
+
     def _layer_for(self, clip, frame_no, scale, unit_poses=None, spec=None):
         """(BGRA layer, picture rect) for one clip, or (None, None) when it cannot decode.
 
@@ -414,13 +515,41 @@ class EditorEngine:
             comp = self.compositions.get(clip.composition_id)
             if comp is None:
                 return None, None
-            comp_frame = clip.source_frame_at(frame_no)
-            sub = self._render_composition_frame(comp, comp_frame, scale)
-            if sub is None:
+            mode = self.frame_blend_mode(clip)
+            position = clip.source_position_at(frame_no)
+            first = int(math.floor(position))
+            fraction = max(0.0, min(1.0, position - first))
+            if mode == "off" or fraction <= 1e-4:
+                sub = self._render_composition_frame(comp, first, scale)
+                if sub is None:
+                    return None, None
+                # A transparent composition arrives BGRA; fit_layer preserves that alpha.
+                # An opaque one arrives BGR and gets the usual full-coverage alpha.
+                return layer_ops.fit_layer(sub, self.project_size(), scale)
+            second = first + 1
+            before = self._render_composition_frame(comp, first, scale)
+            after = self._render_composition_frame(comp, second, scale)
+            if before is None:
                 return None, None
-            # A transparent composition arrives BGRA; fit_layer preserves that alpha.
-            # An opaque one arrives BGR and gets the usual full-coverage alpha.
-            return layer_ops.fit_layer(sub, self.project_size(), scale)
+            if after is None or before.shape != after.shape:
+                return layer_ops.fit_layer(before, self.project_size(), scale)
+            if mode == "flow":
+                key = (f"comp:{comp.id}", first, second, before.shape[:2])
+                rgb = self._optical_flow_frame(before[:, :, :3], after[:, :, :3],
+                                               fraction, key)
+                if before.shape[2] == 4:
+                    alpha = cv2.addWeighted(before[:, :, 3], 1.0 - fraction,
+                                            after[:, :, 3], fraction, 0.0)
+                    blended = np.dstack([rgb, alpha])
+                else:
+                    blended = rgb
+            elif before.shape[2] == 4:
+                blended = cv2.addWeighted(before, 1.0 - fraction,
+                                          after, fraction, 0.0)
+            else:
+                blended = cv2.addWeighted(before, 1.0 - fraction,
+                                          after, fraction, 0.0)
+            return layer_ops.fit_layer(blended, self.project_size(), scale)
         if clip.is_text:
             # Text lives in project space, so its layer is the whole frame: the transform
             # then moves/scales it exactly like a fitted picture.
@@ -432,7 +561,7 @@ class EditorEngine:
                 return None, None
             return layer, (0.0, 0.0, float(self.project_size()[0]), float(self.project_size()[1]))
         try:
-            src = self.media.frame_for_clip(clip, frame_no, self.timeline.fps)
+            src = self._blended_source_frame(clip, frame_no)
         except Exception:
             src = None
         if src is None:
@@ -583,17 +712,18 @@ class EditorEngine:
             if src_layer is None:
                 return layer
             src_layer = mask_ops.apply(src_layer, mask_model.at(source, local), scale)
+            src_layer = alpha_model.apply(src_layer, source)
             height, width = layer.shape[:2]
             if src_layer.shape[0] != height or src_layer.shape[1] != width:
                 src_layer = cv2.resize(src_layer, (width, height), interpolation=cv2.INTER_AREA)
             source_alpha = src_layer[:, :, 3].astype(np.float32) / 255.0
-            mode = str(settings.get("mode") or "alpha")
+            mode = matte_model.base_mode(settings.get("mode") or "alpha")
             if mode.startswith("luma"):
                 b, g, r = (src_layer[:, :, index].astype(np.float32) for index in range(3))
                 coverage = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0 * source_alpha
             else:
                 coverage = source_alpha
-            if mode.endswith("inverted") or settings.get("invert"):
+            if matte_model.inverted(settings):
                 coverage = 1.0 - coverage
             alpha = layer[:, :, 3].astype(np.float32) / 255.0
             layer[:, :, 3] = np.clip(np.rint(alpha * coverage * 255.0), 0, 255).astype(np.uint8)
@@ -768,73 +898,104 @@ class EditorEngine:
                                                  alpha=alpha)
                 painted = True
                 continue
-            # The preset layer is evaluated before the picture is built: a per-unit text
-            # animation needs the glyph layout the renderer is about to draw.
-            effect = preset_model.Effect()
-            spec = None
-            if getattr(clip, "presets", None):
-                units = None
-                if clip.is_text:
-                    width, height = layer_ops.render_size(self.project_size(), scale)
-                    spec = text_model.resolve(clip, local)
-                    units = text_unit_render.layout_units(spec, width, height, scale)
-                effect = preset_model.evaluate(clip, local, units=units,
-                                               project_size=self.project_size())
-            state = transforms.evaluate(clip, local)
-            pose = effect.pose
-            if not pose.is_identity():
-                # Additive/multiplicative: the preset never replaces the clip's own
-                # transform, it is applied on top of it.
-                state = transforms.TransformState(
-                    position_x=state.position_x + pose.dx,
-                    position_y=state.position_y + pose.dy,
-                    scale_x=state.scale_x * pose.scale_x,
-                    scale_y=state.scale_y * pose.scale_y,
-                    rotation=state.rotation + pose.rotation,
-                    anchor_x=state.anchor_x, anchor_y=state.anchor_y,
-                    opacity=state.opacity, flip_h=state.flip_h, flip_v=state.flip_v)
-            # Generated layers can be rasterised at their final density. Effects need a
-            # full-frame layer, so a generated clip with an active effect keeps the
-            # established (effect first, transform second) path.
-            if clip.is_shape or clip.is_text:
-                layer = self._render_generated(clip, local, scale, state, effect, spec)
-                if layer is None:
-                    continue
-                # Generated layers are already transformed, so their effects belong in
-                # output space: a blur is the same number of pixels in the preview and
-                # the export, and it cannot enlarge a low-resolution bitmap again. A
-                # media clip keeps the historical effect-then-transform order because
-                # its source pixels come from the frame itself.
-                if clip.effects:
+            # Build the clip's picture at any clip-local moment. Native motion blur
+            # samples this function several times inside the shutter window, so the
+            # transform, presets, corner pin and shape geometry all move together.
+            def build_picture(sample_local):
+                effect = preset_model.Effect()
+                spec = None
+                if getattr(clip, "presets", None):
+                    units = None
+                    if clip.is_text:
+                        width, height = layer_ops.render_size(self.project_size(), scale)
+                        spec = text_model.resolve(clip, sample_local)
+                        units = text_unit_render.layout_units(spec, width, height, scale)
+                    effect = preset_model.evaluate(clip, sample_local, units=units,
+                                                   project_size=self.project_size())
+                state = transforms.evaluate(clip, sample_local)
+                pose = effect.pose
+                if not pose.is_identity():
+                    # Additive/multiplicative: the preset never replaces the clip's own
+                    # transform, it is applied on top of it.
+                    state = transforms.TransformState(
+                        position_x=state.position_x + pose.dx,
+                        position_y=state.position_y + pose.dy,
+                        scale_x=state.scale_x * pose.scale_x,
+                        scale_y=state.scale_y * pose.scale_y,
+                        rotation=state.rotation + pose.rotation,
+                        anchor_x=state.anchor_x, anchor_y=state.anchor_y,
+                        opacity=state.opacity, flip_h=state.flip_h, flip_v=state.flip_v)
+                sample_frame = clip.timeline_start + sample_local
+                if clip.is_shape or clip.is_text:
+                    layer = self._render_generated(clip, sample_local, scale, state, effect, spec)
+                    if layer is None:
+                        return None, state, effect
+                    # Generated layers are already transformed, so their effects belong
+                    # in output space: a blur is the same number of pixels in the preview
+                    # and the export, and it cannot enlarge a low-resolution bitmap again.
+                    if clip.effects:
+                        layer = self.apply_effects_layer(
+                            layer, clip.effects, sample_local, scale, self.track_type_of(clip),
+                            clip=clip, rect=(0, 0, layer.shape[1], layer.shape[0]))
+                else:
+                    layer, rect = self._layer_for(
+                        clip, sample_frame, scale,
+                        effect.unit_poses if clip.is_text else None, spec)
+                    if layer is None:
+                        return None, state, effect
                     layer = self.apply_effects_layer(
-                        layer, clip.effects, local, scale, self.track_type_of(clip),
-                        clip=clip, rect=(0, 0, layer.shape[1], layer.shape[0]))
-            else:
-                # Sample the *held* moment, so posterize time and stutter really do
-                # freeze the picture instead of only freezing the effect parameters.
-                layer, rect = self._layer_for(clip, clip.timeline_start + local, scale,
-                                              effect.unit_poses if clip.is_text else None,
-                                              spec)
-                if layer is None:
-                    continue
-                layer = self.apply_effects_layer(layer, clip.effects, local, scale,
-                                                 self.track_type_of(clip), clip=clip,
-                                                 rect=rect)
-                layer = layer_ops.apply_transform(layer, rect, state,
-                                                  self.project_size(), scale)
-            if not pose.is_identity():
-                layer = layer_ops.preset_look(layer, pose.blur * scale, pose.hue, pose.light)
+                        layer, clip.effects, sample_local, scale, self.track_type_of(clip),
+                        clip=clip, rect=rect)
+                    layer = layer_ops.apply_transform(layer, rect, state,
+                                                      self.project_size(), scale)
+                if not pose.is_identity():
+                    layer = layer_ops.preset_look(layer, pose.blur * scale,
+                                                  pose.hue, pose.light)
+                return layer, state, effect
+
+            layer, state, effect = build_picture(local)
+            if layer is None:
+                continue
+            pose = effect.pose
+            blur_active = self.motion_blur_for_clip(clip)
+            if blur_active:
+                shutter = max(0.0, min(360.0, float(
+                    getattr(self.timeline, "motion_blur_shutter", 180.0)))) / 360.0
+                count = max(2, min(64, int(getattr(self.timeline, "motion_blur_samples", 8))))
+                phase = float(getattr(self.timeline, "motion_blur_phase", 0.0)) / 360.0
+                if shutter > 0.0 and count > 1:
+                    first = local - shutter / 2.0 + phase
+                    positions = [first + shutter * i / float(count - 1)
+                                 for i in range(count)]
+                    positions = [max(0.0, min(float(max(0, clip.duration - 1)), position))
+                                 for position in positions]
+                    built = [build_picture(position)[0] for position in positions]
+                    built = [item for item in built if item is not None]
+                    if built:
+                        total = np.zeros(layer.shape[:2], dtype=np.float64)
+                        colour = np.zeros(layer.shape[:2] + (3,), dtype=np.float64)
+                        for item in built:
+                            coverage = item[:, :, 3].astype(np.float64) / 255.0
+                            colour += item[:, :, :3].astype(np.float64) * coverage[:, :, None]
+                            total += coverage
+                        mixed = np.empty_like(layer)
+                        safe = np.maximum(total, 1e-6)
+                        mixed[:, :, :3] = np.clip(colour / safe[:, :, None], 0, 255).astype(np.uint8)
+                        mixed[:, :, 3] = np.clip(total / max(1, len(built)) * 255.0,
+                                                 0, 255).astype(np.uint8)
+                        layer = mixed
             # Masks and mattes are alpha operations in project space, after the picture
             # has been placed. The preview and export both reach this one point.
             if not getattr(clip, "adjustment", False):
                 layer = mask_ops.apply(layer,
                                        mask_model.at(clip, local, self.project_size()), scale)
                 layer = self._apply_matte(clip, layer, frame_no, scale)
+                layer = alpha_model.apply(layer, clip)
             opacity = transforms.opacity_at(clip, local) * clip.fade_gain_at(frame_no) * pose.opacity
             opacity *= weight
             if opacity <= 0.001:
                 continue
-            if (not alpha and key is None and clip is top and len(stack) == 1
+            if (not alpha and not blur_active and key is None and clip is top and len(stack) == 1
                     and opacity >= 0.999 and pose.is_identity() and state.is_identity()
                     and layer[:, :, 3].min() == 255 and clip.blend == "normal"
                     and not getattr(clip, "adjustment", False)):
@@ -1186,6 +1347,7 @@ class EditorEngine:
                                                settings.get("height", self.source_height))
         writer = None
         writer_type = "image"
+        image_alpha = bool(fmt == "png" and settings.get("alpha", False))
         segments = settings.get("audio_segments") or ()
         with_audio = fmt in {"mp4", "avi"} and bool(segments)
         video_path = path + ".video.tmp" + os.path.splitext(path)[1] if with_audio else path
@@ -1199,9 +1361,23 @@ class EditorEngine:
             for index, frame_no in enumerate(render_indices):
                 if cancelled and cancelled():
                     raise InterruptedError("Export cancelled")
-                raw, processed = self.render_frame(frame_no)
-                if processed.shape[1] != width or processed.shape[0] != height:
-                    processed = cv2.resize(processed, (width, height), interpolation=cv2.INTER_AREA)
+                if image_alpha:
+                    rgba = self.compose_frame(frame_no, 1.0, with_alpha=True)
+                    if rgba is None:
+                        width_h, width_w = height, width
+                        rgba = np.zeros((width_h, width_w, 4), np.uint8)
+                    if rgba.shape[1] != width or rgba.shape[0] != height:
+                        rgba = cv2.resize(rgba, (width, height),
+                                          interpolation=cv2.INTER_AREA)
+                    # compose_frame already returns straight BGRA; OpenCV's PNG writer
+                    # expects that channel order, so converting it as RGBA would swap
+                    # the red and blue channels in the exported alpha image.
+                    processed = rgba
+                else:
+                    _raw, processed = self.render_frame(frame_no)
+                    if processed.shape[1] != width or processed.shape[0] != height:
+                        processed = cv2.resize(processed, (width, height),
+                                               interpolation=cv2.INTER_AREA)
                 final = processed
                 if writer_type == "video":
                     writer.write(processed)

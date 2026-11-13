@@ -10,6 +10,8 @@ import sys
 import time
 import uuid
 
+import cv2
+import numpy as np
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -17,8 +19,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QPointF, QRectF, Qt  # noqa: E402
 from PyQt6.QtGui import QMouseEvent  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QCheckBox  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QCheckBox, QComboBox  # noqa: E402
 
+from meenifx.model import channels as CH  # noqa: E402
 from meenifx.model import transform as T  # noqa: E402
 from meenifx.project.media import media_type_for  # noqa: E402
 from meenifx.project.settings import ProjectSettings  # noqa: E402
@@ -276,22 +279,223 @@ def test_ctrl_disables_snapping_while_moving(editor):
     pump(0.1)
 
 
-def test_alt_scales_from_the_centre(editor):
+@pytest.mark.parametrize(("handle", "changed"), [
+    ("nw", ("corner_tl_x", "corner_tl_y")),
+    ("ne", ("corner_tr_x", "corner_tr_y")),
+    ("se", ("corner_br_x", "corner_br_y")),
+    ("sw", ("corner_bl_x", "corner_bl_y")),
+])
+def test_alt_corner_drag_distorts_instead_of_scaling(editor, handle, changed):
+    """In the normal Select tool Alt-drag must pin/distort one corner, not scale.
+
+    The overlay's default mode is Select, which is the mode a user is in after clicking a
+    clip in the Preview. This is the regression that made Alt+corner behave like an
+    ordinary centre resize.
+    """
     window, clip = editor
+    assert window.overlay.mode == "select"
     view = window.preview_panel.view
-    corner = handle_point(window, clip, "nw")
-    centre = window.overlay.to_widget(*window.overlay.anchor_point(clip))
-    target = QPointF(corner.x() + (centre.x() - corner.x()) * 0.35,
-                     corner.y() + (centre.y() - corner.y()) * 0.35)
+    before = T.evaluate(clip, window.overlay.local_frame(clip))
+    corner = handle_point(window, clip, handle)
+    target = QPointF(corner.x() + (26 if handle in ("nw", "sw") else -26),
+                     corner.y() + 16)
     send(view, QMouseEvent.Type.MouseButtonPress, corner, Qt.KeyboardModifier.AltModifier)
     send(view, QMouseEvent.Type.MouseMove, target, Qt.KeyboardModifier.AltModifier)
     send(view, QMouseEvent.Type.MouseButtonRelease, target, Qt.KeyboardModifier.AltModifier)
     pump(0.1)
+
     live = live_clip(window, clip.id)
-    assert live.transform["scale_x"] < 99.0, "dragging a corner inward must shrink the clip"
-    # Scaling around the centre keeps the picture centred: no position change.
-    assert abs(live.transform["position_x"]) < 1.0
-    assert abs(live.transform["position_y"]) < 1.0
+    frame = window.overlay.local_frame(live)
+    entry = next(item for item in live.effects
+                 if item.get("effect_id") == "corner_pin")
+    assert entry.get("enabled", True)
+    x_name, y_name = changed
+    x_value = CH.value_at(live, CH.effect_channel("corner_pin", x_name), frame)
+    y_value = CH.value_at(live, CH.effect_channel("corner_pin", y_name), frame)
+    assert x_value is not None and y_value is not None
+    # The dragged corner must leave its identity position; the other three must not.
+    identity = {"corner_tl_x": 0.0, "corner_tl_y": 0.0,
+                "corner_tr_x": 1.0, "corner_tr_y": 0.0,
+                "corner_br_x": 1.0, "corner_br_y": 1.0,
+                "corner_bl_x": 0.0, "corner_bl_y": 1.0}
+    assert abs(x_value - identity[x_name]) + abs(y_value - identity[y_name]) > 0.01
+    for name, default in identity.items():
+        if name in changed:
+            continue
+        value = CH.value_at(live, CH.effect_channel("corner_pin", name), frame)
+        value = default if value is None else value
+        assert value == pytest.approx(default, abs=1e-6), name
+    # Alt must not fall through to the old centre-scale gesture.
+    assert live.transform["scale_x"] == pytest.approx(before.scale_x, abs=1e-6)
+    assert live.transform["scale_y"] == pytest.approx(before.scale_y, abs=1e-6)
+    assert live.transform["position_x"] == pytest.approx(before.position_x, abs=1e-6)
+    assert live.transform["position_y"] == pytest.approx(before.position_y, abs=1e-6)
+
+
+def test_alt_pressed_during_a_corner_scale_switches_to_distortion(editor):
+    window, clip = editor
+    view = window.preview_panel.view
+    before = T.evaluate(clip, window.overlay.local_frame(clip))
+    corner = handle_point(window, clip, "nw")
+    send(view, QMouseEvent.Type.MouseButtonPress, corner)
+    send(view, QMouseEvent.Type.MouseMove, QPointF(corner.x() + 18, corner.y() + 12))
+    pump(0.03)
+    assert live_clip(window, clip.id).transform["scale_x"] < before.scale_x
+    # Alt is pressed only now: the scale gesture is discarded and the same drag becomes
+    # a corner-pin gesture. It must not keep the intermediate scale.
+    send(view, QMouseEvent.Type.MouseMove, QPointF(corner.x() + 24, corner.y() + 18),
+         Qt.KeyboardModifier.AltModifier)
+    send(view, QMouseEvent.Type.MouseMove, QPointF(corner.x() + 42, corner.y() + 30),
+         Qt.KeyboardModifier.AltModifier)
+    send(view, QMouseEvent.Type.MouseButtonRelease, QPointF(corner.x() + 42, corner.y() + 30),
+         Qt.KeyboardModifier.AltModifier)
+    pump(0.1)
+    live = live_clip(window, clip.id)
+    assert live.transform["scale_x"] == pytest.approx(before.scale_x, abs=1e-6)
+    assert live.transform["scale_y"] == pytest.approx(before.scale_y, abs=1e-6)
+    assert live.transform["position_x"] == pytest.approx(before.position_x, abs=1e-6)
+    frame = window.overlay.local_frame(live)
+    value = CH.value_at(live, CH.effect_channel("corner_pin", "corner_tl_x"), frame)
+    assert value is not None and value > 0.01
+
+
+def test_alt_corner_drag_is_correct_at_a_non_fit_preview_zoom(editor):
+    window, clip = editor
+    view = window.preview_panel.view
+    view.set_zoom(1.6)
+    pump(0.1)
+    corner = handle_point(window, clip, "se")
+    send(view, QMouseEvent.Type.MouseButtonPress, corner, Qt.KeyboardModifier.AltModifier)
+    send(view, QMouseEvent.Type.MouseMove, QPointF(corner.x() - 32, corner.y() - 18),
+         Qt.KeyboardModifier.AltModifier)
+    send(view, QMouseEvent.Type.MouseButtonRelease, QPointF(corner.x() - 32, corner.y() - 18),
+         Qt.KeyboardModifier.AltModifier)
+    pump(0.1)
+    live = live_clip(window, clip.id)
+    frame = window.overlay.local_frame(live)
+    value = CH.value_at(live, CH.effect_channel("corner_pin", "corner_br_x"), frame)
+    assert value is not None and value < 0.99
+    # The corner must follow the pointer in project space, not in screen pixels.
+    assert value > 0.55
+
+
+def test_alt_corner_keyframes_survive_save_and_reopen(editor):
+    window, clip = editor
+    view = window.preview_panel.view
+    window.autokey_button.setChecked(True)
+    window.engine.session.set_playhead(5)
+    pump(0.08)
+    corner = handle_point(window, clip, "nw")
+    send(view, QMouseEvent.Type.MouseButtonPress, corner, Qt.KeyboardModifier.AltModifier)
+    send(view, QMouseEvent.Type.MouseMove, QPointF(corner.x() + 24, corner.y() + 14),
+         Qt.KeyboardModifier.AltModifier)
+    send(view, QMouseEvent.Type.MouseButtonRelease, QPointF(corner.x() + 24, corner.y() + 14),
+         Qt.KeyboardModifier.AltModifier)
+    pump(0.1)
+    window.engine.session.set_playhead(20)
+    pump(0.08)
+    live = live_clip(window, clip.id)
+    start = window.overlay.to_widget(*window.overlay._corner_project(live, 0))
+    send(view, QMouseEvent.Type.MouseButtonPress, start, Qt.KeyboardModifier.AltModifier)
+    send(view, QMouseEvent.Type.MouseMove, QPointF(start.x() + 50, start.y() + 24),
+         Qt.KeyboardModifier.AltModifier)
+    send(view, QMouseEvent.Type.MouseButtonRelease, QPointF(start.x() + 50, start.y() + 24),
+         Qt.KeyboardModifier.AltModifier)
+    pump(0.1)
+    live = live_clip(window, clip.id)
+    channel = CH.effect_channel("corner_pin", "corner_tl_x")
+    assert CH.is_animated(live, channel)
+    assert CH.key_times(live, channel) == [5, 20]
+    value_at_5 = CH.value_at(live, channel, 5)
+    value_at_20 = CH.value_at(live, channel, 20)
+    assert value_at_5 != pytest.approx(value_at_20, abs=1e-4)
+    window.autokey_button.setChecked(False)
+
+    assert window.projects.save()
+    path = window.projects.project.path
+    assert window.projects.open_path(path)
+    pump(0.2)
+    reopened = window.engine.timeline.find_clip(clip.id)
+    assert reopened is not None
+    assert CH.key_times(reopened, channel) == [5, 20]
+    assert CH.value_at(reopened, channel, 5) == pytest.approx(value_at_5, abs=1e-5)
+    assert CH.value_at(reopened, channel, 20) == pytest.approx(value_at_20, abs=1e-5)
+
+
+def test_alt_corner_distortion_exports_the_preview(editor, tmp_path):
+    window, clip = editor
+    view = window.preview_panel.view
+    corner = handle_point(window, clip, "sw")
+    target = QPointF(corner.x() + 34, corner.y() - 20)
+    send(view, QMouseEvent.Type.MouseButtonPress, corner, Qt.KeyboardModifier.AltModifier)
+    send(view, QMouseEvent.Type.MouseMove, target, Qt.KeyboardModifier.AltModifier)
+    send(view, QMouseEvent.Type.MouseButtonRelease, target, Qt.KeyboardModifier.AltModifier)
+    pump(0.1)
+    preview = window.engine.render_frame(10, 1.0)[1]
+    path, count, _fps, _size = window.engine.export({
+        "output_path": str(tmp_path / "corner-parity.png"),
+        "format": "png", "use_source_fps": True, "use_source_size": True,
+        "range_start": 10, "range_end": 11,
+    })
+    exported = cv2.imread(path)
+    assert count == 1 and exported is not None
+    assert np.abs(exported.astype(np.int16) - preview.astype(np.int16)).mean() < 1.0
+
+
+def test_alt_corner_drag_can_be_undone_and_redone(editor):
+    window, clip = editor
+    view = window.preview_panel.view
+    corner = handle_point(window, clip, "se")
+    target = QPointF(corner.x() - 20, corner.y() - 14)
+    send(view, QMouseEvent.Type.MouseButtonPress, corner, Qt.KeyboardModifier.AltModifier)
+    send(view, QMouseEvent.Type.MouseMove, target, Qt.KeyboardModifier.AltModifier)
+    send(view, QMouseEvent.Type.MouseButtonRelease, target, Qt.KeyboardModifier.AltModifier)
+    pump(0.1)
+    dragged = live_clip(window, clip.id)
+    assert any(item.get("effect_id") == "corner_pin" for item in dragged.effects)
+    window.undo()
+    pump(0.1)
+    restored = live_clip(window, clip.id)
+    assert not any(item.get("effect_id") == "corner_pin" for item in restored.effects), \
+        "undo must remove the effect created by the Alt gesture"
+    window.redo()
+    pump(0.1)
+    redone = live_clip(window, clip.id)
+    assert any(item.get("effect_id") == "corner_pin" for item in redone.effects)
+
+
+def test_native_temporal_controls_are_wired_to_the_model(editor):
+    window, clip = editor
+    window.engine.session.set_selection({clip.id})
+    window.effects_panel.refresh_properties()
+    pump(0.1)
+    combos = window.effects_panel.properties.findChildren(QComboBox)
+    motion = next(box for box in combos if box.count() == 3
+                  and box.itemText(1) == "On" and box.itemText(2) == "Off")
+    assert motion.itemData(0) is None
+    # The composition master starts off; the clip can still keep its own override.
+    window.motion_blur_action.setChecked(True)
+    pump(0.05)
+    assert window.engine.timeline.motion_blur is True
+    motion.setCurrentIndex(2)
+    motion.activated.emit(2)
+    pump(0.05)
+    assert window.engine.timeline.find_clip(clip.id).temporal["motion_blur"] is False
+    assert not window.engine.motion_blur_for_clip(window.engine.timeline.find_clip(clip.id))
+
+    window._set_composition_frame_blending("mix")
+    pump(0.05)
+    assert window.engine.timeline.frame_blending == "mix"
+    assert window.frame_blend_actions["mix"].isChecked()
+    window.effects_panel.refresh_properties()
+    pump(0.1)
+    frame_combo = next(box for box in window.effects_panel.properties.findChildren(QComboBox)
+                       if any(box.itemText(i) == "Frame Mix" for i in range(box.count())))
+    frame_combo.setCurrentIndex(3)
+    frame_combo.activated.emit(3)
+    pump(0.05)
+    assert window.engine.timeline.find_clip(clip.id).temporal["frame_blend"] == "flow"
+    window.motion_blur_action.setChecked(False)
 
 
 def test_shift_snaps_rotation_to_fifteen_degrees(editor):

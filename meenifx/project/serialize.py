@@ -22,7 +22,7 @@ CLIP_COLUMNS = ("id", "track", "media", "name", "start", "dur", "src_in", "src_o
                 "src_fps", "tl_fps", "speed", "reverse", "loop", "freeze", "offset", "volume",
                 "fade_in", "fade_out", "fade_in_curve", "fade_out_curve", "stream", "link",
                 "transform", "meta", "text", "shape", "gain", "presets", "blend", "adjust",
-                "composition")
+                "composition", "temporal")
 KF_FIELDS = ("in_influence", "out_influence", "in_value_handle", "out_value_handle")
 PIN_KEYS = ("id", "src", "locked")
 RESERVED_EFFECT_KEYS = ("effect_id", "enabled", "params", "pins")
@@ -42,7 +42,9 @@ def _split_animated(mapping):
 def timeline_to_sections(timeline, media_id_for):
     """`media_id_for(path)` returns the media-library id of a source path."""
     tracks = [{"id": t.id, "type": t.type, "name": t.name, "muted": t.muted, "solo": t.solo,
-               "locked": t.locked, "visible": t.visible, "volume": t.volume, "height": t.height}
+               "locked": t.locked, "visible": t.visible, "volume": t.volume, "height": t.height,
+               "motion_blur": getattr(t, "motion_blur", None),
+               "frame_blend": getattr(t, "frame_blend", None)}
               for t in timeline.tracks]
     max_clip = 0
     cols = {k: [] for k in CLIP_COLUMNS}
@@ -114,9 +116,10 @@ def timeline_to_sections(timeline, media_id_for):
                     c.source_fps, c.timeline_fps, c.speed, c.reverse, c.loop, c.freeze, c.source_offset,
                     c.volume, c.fade_in, c.fade_out, c.fade_in_curve, c.fade_out_curve,
                     c.stream, c.link_id, transform_static, c.transform_meta or {}, text_column,
-                    shape_column, gain_static, copy.deepcopy(getattr(c, "presets", []) or []),
+                    shape_column, gain_static,                     copy.deepcopy(getattr(c, "presets", []) or []),
                     getattr(c, "blend", "normal"), bool(getattr(c, "adjustment", False)),
-                    getattr(c, "composition_id", ""))):
+                    getattr(c, "composition_id", ""),
+                    copy.deepcopy(getattr(c, "temporal", {}) or {}))):
                 cols[key].append(val)
             for effect in c.effects:
                 static, animated = _split_animated(effect.get("params", {}))
@@ -150,7 +153,12 @@ def timeline_to_sections(timeline, media_id_for):
                                     for transition in getattr(timeline, "transitions", []) or ()]}
     return {"tracks": {"tracks": tracks, "counters": dict(timeline._counters), "max_clip": max_clip},
             "clips": cols, "effects": eff, "keyframes": kf, "markers": markers,
-            "transitions": transitions}
+            "transitions": transitions,
+            "temporal": {"motion_blur": bool(timeline.motion_blur),
+                          "motion_blur_shutter": float(timeline.motion_blur_shutter),
+                          "motion_blur_phase": float(timeline.motion_blur_phase),
+                          "motion_blur_samples": int(timeline.motion_blur_samples),
+                          "frame_blending": str(timeline.frame_blending)}}
 
 
 def _keyframes_per_owner(sections):
@@ -174,7 +182,26 @@ def sections_to_timeline(sections, fps, path_for_media):
         track.muted, track.solo = bool(t.get("muted")), bool(t.get("solo"))
         track.locked, track.visible = bool(t.get("locked")), bool(t.get("visible", True))
         track.volume = float(t.get("volume", 1.0))
+        track.motion_blur = t.get("motion_blur")
+        track.frame_blend = t.get("frame_blend")
+        if track.motion_blur not in (True, False, None):
+            track.motion_blur = None
+        if track.frame_blend not in (None, "off", "mix", "flow"):
+            track.frame_blend = None
         timeline.tracks.append(track)
+    temporal = sections.get("temporal") or {}
+    timeline.motion_blur = bool(temporal.get("motion_blur", False))
+    try:
+        timeline.motion_blur_shutter = max(0.0, min(360.0, float(
+            temporal.get("motion_blur_shutter", 180.0))))
+        timeline.motion_blur_phase = float(temporal.get("motion_blur_phase", 0.0)) % 360.0
+        timeline.motion_blur_samples = max(2, min(64, int(
+            temporal.get("motion_blur_samples", 8))))
+    except (TypeError, ValueError):
+        timeline.motion_blur_shutter, timeline.motion_blur_phase = 180.0, 0.0
+        timeline.motion_blur_samples = 8
+    mode = temporal.get("frame_blending", "off")
+    timeline.frame_blending = mode if mode in ("off", "mix", "flow") else "off"
     timeline._counters.update({k: int(v) for k, v in tdata.get("counters", {}).items() if k in timeline._counters})
     track_ids = [t["id"] for t in tdata["tracks"]]
     timeline._track_ids = itertools.count(max(track_ids, default=0) + 1)
@@ -248,6 +275,7 @@ def sections_to_timeline(sections, fps, path_for_media):
     blend_column = c.get("blend") or ["normal" for _ in range(count)]
     adjust_column = c.get("adjust") or [False for _ in range(count)]
     composition_column = c.get("composition") or ["" for _ in range(count)]
+    temporal_column = c.get("temporal") or [{} for _ in range(count)]
     for i in range(count):
         track = timeline.tracks[c["track"][i]]
         path = path_for_media(c["media"][i]) if c["media"][i] else ""
@@ -262,7 +290,8 @@ def sections_to_timeline(sections, fps, path_for_media):
                     gain=gain_column[i],
                     presets=presets_column[i] or None, blend=blend_column[i],
                     adjustment=bool(adjust_column[i]),
-                    composition_id=composition_column[i] or "")
+                    composition_id=composition_column[i] or "",
+                    temporal=temporal_column[i] or {})
         track.clips.append(clip)
         if i in gain_by_clip:
             clip.gain = gain_by_clip[i]

@@ -10,9 +10,15 @@ import queue
 
 import numpy as np
 
-BUILTINS = {"identity", "lens_warp", "page_curl"}
+BUILTINS = {"identity", "lens_warp", "page_curl", "heat_haze", "ripple",
+            "pixel_stretch", "light_rays"}
 MAX_PIXELS = 16_777_216
 MAX_BYTES = 512 * 1024 * 1024
+_BYTE = np.linspace(0, 1, 256, dtype=np.float32)
+_DECODE = np.where(_BYTE <= .04045, _BYTE / 12.92, ((_BYTE + .055) / 1.055) ** 2.4)
+_LINEAR = np.linspace(0, 1, 65536, dtype=np.float32)
+_ENCODE = np.rint(np.where(_LINEAR <= .0031308, _LINEAR * 12.92,
+                          1.055 * _LINEAR ** (1 / 2.4) - .055) * 255).astype(np.uint8)
 
 
 class ShaderUnavailable(RuntimeError):
@@ -57,10 +63,9 @@ def resource(name):
 
 
 def prepare(layer):
-    rgba = np.ascontiguousarray(layer[:, :, [2, 1, 0, 3]], dtype=np.float32) / 255.0
-    rgb = rgba[:, :, :3]
-    rgb[:] = np.where(rgb <= .04045, rgb / 12.92, ((rgb + .055) / 1.055) ** 2.4)
-    rgb *= rgba[:, :, 3:4]
+    rgba = np.empty(layer.shape, np.float32)
+    rgba[:, :, 3] = layer[:, :, 3].astype(np.float32) / 255
+    rgba[:, :, :3] = _DECODE[layer[:, :, [2, 1, 0]]] * rgba[:, :, 3:4]
     return rgba
 
 
@@ -68,9 +73,13 @@ def finish(rgba):
     rgba = np.nan_to_num(rgba, nan=0., posinf=1., neginf=0.)
     alpha = np.clip(rgba[:, :, 3:4], 0., 1.)
     rgb = np.clip(rgba[:, :, :3] / np.maximum(alpha, 1e-8), 0., 1.)
-    rgb = np.where(rgb <= .0031308, rgb * 12.92, 1.055 * rgb ** (1 / 2.4) - .055)
-    rgb = np.where(alpha > 1e-8, rgb, 0.)
-    return np.ascontiguousarray(np.rint(np.concatenate((rgb[:, :, ::-1], alpha), axis=2) * 255).astype(np.uint8))
+    # A 16-bit linear-light lookup avoids millions of CPU pow() calls per readback.
+    # It quantizes only the conversion lookup, with at most one 8-bit code difference.
+    encoded = _ENCODE[np.rint(rgb * 65535).astype(np.uint16)]
+    out = np.empty(rgba.shape, np.uint8)
+    out[:, :, :3] = np.where(alpha > 1e-8, encoded[:, :, ::-1], 0)
+    out[:, :, 3] = np.rint(alpha[:, :, 0] * 255).astype(np.uint8)
+    return out
 
 
 def sample(image, x, y, edge=0, nearest=False):
@@ -91,7 +100,7 @@ def sample(image, x, y, edge=0, nearest=False):
     if nearest:
         return fetch(np.floor(x + .5).astype(np.int32), np.floor(y + .5).astype(np.int32))
     ix, iy = np.floor(x).astype(np.int32), np.floor(y).astype(np.int32)
-    fx, fy = (x - ix)[..., None], (y - iy)[..., None]
+    fx, fy = (x - ix).astype(np.float32)[..., None], (y - iy).astype(np.float32)[..., None]
     return ((fetch(ix, iy) * (1 - fx) + fetch(ix + 1, iy) * fx) * (1 - fy)
             + (fetch(ix, iy + 1) * (1 - fx) + fetch(ix + 1, iy + 1) * fx) * fy).astype(np.float32)
 

@@ -82,6 +82,10 @@ class ExportDialog(QDialog):
                                 tooltip="Pixels down the exported frame")
         self.format=QComboBox(); self.format.addItems(["mp4","avi","gif","png","jpg","jpeg"])
         self.format.setCurrentText(engine.render_format.get())
+        self.alpha=QCheckBox("Preserve transparency (PNG)")
+        self.alpha.setChecked(bool(engine.render_alpha.get()))
+        self.alpha.setToolTip("Write the clip alpha into the PNG instead of flattening it "
+                              "onto the project background")
         self.path=QLineEdit(engine.render_output_path.get())
         browse=QPushButton("Browse")
         browse.clicked.connect(self._browse)
@@ -92,6 +96,7 @@ class ExportDialog(QDialog):
         form.addRow(self.width)
         form.addRow(self.height)
         form.addRow("Format",self.format)
+        form.addRow(self.alpha)
         self.gif_box=QWidget()
         gif_form=QFormLayout(self.gif_box)
         gif_form.setContentsMargins(0,0,0,0)
@@ -159,6 +164,7 @@ class ExportDialog(QDialog):
 
     def _sync_format(self, fmt):
         is_gif = str(fmt).lower() == "gif"
+        self.alpha.setVisible(str(fmt).lower() == "png")
         self.gif_box.setVisible(is_gif)
         if is_gif:
             self._apply_gif_rate(self.gif_rate.currentText())
@@ -215,6 +221,7 @@ class ExportDialog(QDialog):
         engine.render_height.set(self.height.value())
         engine.render_output_path.set(self.path.text())
         engine.render_format.set(fmt)
+        engine.render_alpha.set(bool(self.alpha.isChecked() and fmt.lower() == "png"))
         loop_mode=self.gif_loop.currentData() or "forever"
         engine.render_gif_loop.set(loop_mode)
         engine.render_gif_loops.set(self.gif_loops.value())
@@ -226,6 +233,7 @@ class ExportDialog(QDialog):
                 "height":self.height.value(),"output_path":self.path.text(),"format":fmt,
                 "gif_loop":loop_mode,"gif_loops":self.gif_loops.value(),
                 "gif_colors":self.gif_colors.currentData(),"gif_dither":self.gif_dither.currentData(),
+                "alpha":bool(self.alpha.isChecked() and fmt.lower() == "png"),
                 "range_start":start,"range_end":end}
 
 

@@ -12,14 +12,17 @@ from dataclasses import replace
 
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
 
 from ..config import ASSETS_DIR
-from ..constants import DEFAULT_UNICODE_CHARSET
 from ..model.values import Value
+from ..processing import ascii_art as ASCII
 from ..processing.mosaic import frame_pixel, mosaic_frame
 from . import tracking_regions as REGIONS
-from .base import EffectBase, ParamSpec, TrackerColorMixin
+from .base import EffectBase, LayerEffect, ParamSpec, TrackerColorMixin
+
+ASCII_PRESETS = ASCII.PRESETS
+ASCII_PRESET_ORDER = ASCII.PRESET_ORDER
+ASCII_DEFAULT_FONT = "Consolas"
 from .tracking_viz import Detection
 
 def _tracker_vis_params(label, contour=False):
@@ -125,94 +128,164 @@ class MosaicEffect(EffectBase):
         return mosaic_frame(frame, small_tiles, small_palette, tile_w, tile_h)
 
 
-class AsciiEffect(EffectBase):
+class AsciiEffect(LayerEffect):
+    """Conventional ASCII art with deliberate presets, fonts and glyph support.
+
+    The renderer is shared by preview and export.  It maps luminance to measured glyph
+    coverage, keeps grapheme clusters intact and replaces characters the selected font
+    cannot draw with a warned fallback instead of painting missing-glyph boxes.
+    """
+
     key = "ascii"
     name = "ASCII Art"
+    NOTE = ("Presets use a conventional dark-to-light ramp. A custom set accepts "
+            "Unicode but missing glyphs are reported and replaced, never drawn as boxes.")
 
     PARAMS = (
-        ParamSpec("charset", "Characters", "text", default="",
-                  help="Characters from dark to light; empty uses the built-in set"),
-        ParamSpec("cell_size", "Cell size", "int", 4, 40, 10, unit=" px", pixels=True,
+        ParamSpec("preset", "Preset", "choice", default="ascii",
+                  choices=ASCII_PRESET_ORDER,
+                  choice_labels=tuple(ASCII_PRESETS[key][0] for key in ASCII_PRESET_ORDER),
+                  help="A conventional ramp, blocks, binary, Unicode dots or your own set"),
+        ParamSpec("charset", "Custom characters", "text", default="",
+                  help="Used when Preset is Custom; dark to light/space is kept as written"),
+        ParamSpec("font", "Font", "font", default=ASCII_DEFAULT_FONT,
+                  help="Any installed font; preview and export resolve the same face"),
+        ParamSpec("cell_size", "Cell size", "int", 4, 60, 10, unit=" px", pixels=True,
                   help="Size of one character cell in project pixels"),
-        ParamSpec("color_mode", "Source color", "bool", default=True,
-                  help="Colour the glyphs from the frame instead of using grey levels"),
+        ParamSpec("font_size", "Font size", "int", 0, 96, 0, unit=" px",
+                  help="Glyph size in project pixels; 0 fills the cell"),
+        ParamSpec("char_spacing", "Character spacing", "float", -80.0, 200.0, 0.0,
+                  step=1.0, unit=" %", help="Horizontal cell spacing relative to Cell size"),
+        ParamSpec("line_spacing", "Line spacing", "float", -80.0, 200.0, 0.0,
+                  step=1.0, unit=" %", help="Vertical cell spacing relative to Cell size"),
+        ParamSpec("density", "Character density", "float", 10.0, 300.0, 100.0,
+                  step=1.0, unit=" %",
+                  help="Gamma of the luminance mapping; 100% is neutral"),
+        ParamSpec("contrast", "Contrast", "float", 0.0, 200.0, 100.0, step=1.0,
+                  unit=" %", help="Contrast applied before glyph selection"),
+        ParamSpec("brightness", "Brightness", "float", -100.0, 100.0, 0.0, step=1.0,
+                  help="Brightness applied before glyph selection"),
+        ParamSpec("invert_density", "Invert density", "bool", default=False,
+                  help="Swap dark and light glyph coverage without inverting colours"),
+        ParamSpec("color_mode", "Color mode", "choice", default="source",
+                  choices=("source", "mono", "custom"),
+                  choice_labels=("Source colour", "Monochrome", "Custom colour"),
+                  help="Take each cell's colour from the picture, or use one foreground colour"),
+        ParamSpec("foreground_color", "Foreground", "text", default="#FFFFFF",
+                  help="Glyph colour for Monochrome and Custom colour modes"),
+        ParamSpec("background_mode", "Background", "choice", default="transparent",
+                  choices=("transparent", "solid"),
+                  choice_labels=("Transparent", "Solid colour"),
+                  help="Transparent keeps the picture's alpha; solid fills every cell"),
+        ParamSpec("background_color", "Background colour", "text", default="#000000",
+                  help="Used by the Solid colour background (alpha is supported)"),
+        ParamSpec("opacity", "Opacity", "float", 0.0, 100.0, 100.0, step=1.0, unit=" %",
+                  help="Opacity of the drawn glyphs"),
+        ParamSpec("coverage", "Coverage mapping", "bool", default=True,
+                  help="Choose the glyph whose measured ink coverage best matches the "
+                       "luminance; turn off to map by position only"),
     )
 
     def __init__(self, app):
         super().__init__(app)
+        self.preset = Value("ascii")
         self.charset = Value("")
+        self.font = Value(ASCII_DEFAULT_FONT)
         self.cell_size = Value(10)
-        self.color_mode = Value(True)
-        self._font_cache = {}
-        self._font_path = self._resolve_font_path()
+        self.font_size = Value(0)
+        self.char_spacing = Value(0.0)
+        self.line_spacing = Value(0.0)
+        self.density = Value(100.0)
+        self.contrast = Value(100.0)
+        self.brightness = Value(0.0)
+        self.invert_density = Value(False)
+        self.color_mode = Value("source")
+        self.foreground_color = Value("#FFFFFF")
+        self.background_mode = Value("transparent")
+        self.background_color = Value("#000000")
+        self.opacity = Value(100.0)
+        self.coverage = Value(True)
+        self.last_note = ""
+        self._plan_cache = {}
 
-    def _resolve_font_path(self):
-        candidates = [
-            os.path.join(os.environ.get("WINDIR", "C:\\Windows"), "Fonts", "msyh.ttc"),
-            os.path.join(os.environ.get("WINDIR", "C:\\Windows"), "Fonts", "meiryo.ttc"),
-            os.path.join(os.environ.get("WINDIR", "C:\\Windows"), "Fonts", "msgothic.ttc"),
-            os.path.join(os.environ.get("WINDIR", "C:\\Windows"), "Fonts", "simhei.ttf"),
-            os.path.join(os.environ.get("WINDIR", "C:\\Windows"), "Fonts", "arialuni.ttf"),
-        ]
-        for path in candidates:
-            if os.path.exists(path):
-                return path
-        return None
-
-    def _get_font(self, cell_size):
-        font_size = max(6, int(round(cell_size * 0.95)))
-        cache_key = (self._font_path, font_size)
-        cached = self._font_cache.get(cache_key)
-        if cached is not None:
-            return cached
-
-        if self._font_path:
-            try:
-                font = ImageFont.truetype(self._font_path, font_size)
-                self._font_cache[cache_key] = font
-                return font
-            except Exception:
-                pass
-
-        font = ImageFont.load_default()
-        self._font_cache[cache_key] = font
-        return font
+    def load_params(self, params):
+        mapped = dict(params or {})
+        legacy = "preset" not in mapped
+        if isinstance(mapped.get("color_mode"), bool):
+            # Older projects stored a boolean "Source color" switch.
+            mapped["color_mode"] = "source" if mapped["color_mode"] else "mono"
+        if legacy:
+            raw = str(mapped.get("charset") or "")
+            # An empty legacy set meant the old huge Unicode default; new projects get
+            # the conventional ramp. A real custom set is preserved as Custom.
+            mapped["preset"] = "custom" if raw.strip() else "ascii"
+        if "font" not in mapped:
+            mapped["font"] = ASCII_DEFAULT_FONT
+        super().load_params(mapped)
 
     def on_registered(self):
-        self._font_cache.clear()
+        self._plan_cache.clear()
 
-    def apply(self, frame):
-        chars = self.charset.get()
-        if not chars:
-            chars = DEFAULT_UNICODE_CHARSET
+    def _settings(self):
+        # Do not use ``value or default`` for numbers: 0 % opacity is a real setting,
+        # and the old spelling silently turned it into 100 %.
+        opacity = self.opacity.get()
+        density = self.density.get()
+        contrast = self.contrast.get()
+        brightness = self.brightness.get()
+        font_size = self.font_size.get()
+        char_spacing = self.char_spacing.get()
+        line_spacing = self.line_spacing.get()
+        return {
+            "preset": str(self.preset.get() or "ascii"),
+            "charset": str(self.charset.get() or ""),
+            "font": str(self.font.get() or ASCII_DEFAULT_FONT),
+            "font_size": 0 if font_size is None else int(font_size),
+            "char_spacing": 0.0 if char_spacing is None else float(char_spacing),
+            "line_spacing": 0.0 if line_spacing is None else float(line_spacing),
+            "density": 100.0 if density is None else float(density),
+            "contrast": 100.0 if contrast is None else float(contrast),
+            "brightness": 0.0 if brightness is None else float(brightness),
+            "invert_density": bool(self.invert_density.get()),
+            "color_mode": str(self.color_mode.get() or "source"),
+            "foreground_color": str(self.foreground_color.get() or "#FFFFFF"),
+            "background_mode": str(self.background_mode.get() or "transparent"),
+            "background_color": str(self.background_color.get() or "#000000"),
+            "opacity": 100.0 if opacity is None else float(opacity),
+        }
 
+    def _plan(self):
         cell = max(3, self.px(self.cell_size.get()))
-        h, w = frame.shape[:2]
-        cols = max(1, w // cell)
-        rows = max(1, h // cell)
+        settings = self._settings()
+        key = (settings["preset"], settings["charset"], settings["font"], cell,
+               settings["font_size"], settings["char_spacing"], settings["line_spacing"],
+               bool(self.coverage.get()))
+        plan = self._plan_cache.get(key)
+        if plan is None:
+            plan = ASCII.build_plan(settings["preset"], settings["charset"],
+                                    settings["font"], cell,
+                                    use_coverage=bool(self.coverage.get()),
+                                    font_size=settings["font_size"],
+                                    char_spacing=settings["char_spacing"],
+                                    line_spacing=settings["line_spacing"])
+            if len(self._plan_cache) > 24:
+                self._plan_cache.clear()
+            self._plan_cache[key] = plan
+        self.last_note = " ".join(plan["warnings"])
+        return plan, settings
 
-        small = cv2.resize(frame, (cols, rows), interpolation=cv2.INTER_AREA)
-        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    def status_note(self):
+        try:
+            plan, _settings = self._plan()
+            return " ".join(plan["warnings"]) or self.NOTE
+        except Exception:
+            return self.NOTE
 
-        canvas = np.zeros_like(frame)
-        canvas_rgb = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
-        image = Image.fromarray(canvas_rgb)
-        draw = ImageDraw.Draw(image)
-        font = self._get_font(cell)
-
-        for y in range(rows):
-            for x in range(cols):
-                value = int(gray[y, x])
-                idx = int((value / 255.0) * (len(chars) - 1))
-                ch = chars[idx]
-                if self.color_mode.get():
-                    b, g, r = [int(v) for v in small[y, x]]
-                    color = (b, g, r)
-                else:
-                    color = (value, value, value)
-                draw.text((x * cell, y * cell), ch, font=font, fill=(color[2], color[1], color[0]))
-
-        return cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+    def apply_layer(self, layer):
+        if layer is None or layer.ndim != 3 or layer.shape[2] < 4 or layer.size == 0:
+            return layer
+        plan, settings = self._plan()
+        return ASCII.render(layer, plan, settings)
 
 
 class FaceTrackerEffect(TrackerColorMixin, EffectBase):
@@ -249,7 +322,8 @@ class FaceTrackerEffect(TrackerColorMixin, EffectBase):
         ParamSpec("custom_effects", "Custom effect stack", "text", default="",
                   help="Extra effects inside each face, for example blur:60, pixelate:40",
                   group="Face Effects"),
-        ParamSpec("sprite_path", "Sprite image", "text", default="",
+        ParamSpec("sprite_path", "Sprite image", "media", default="",
+                  media_kind="image",
                   help="PNG or other image attached to each face (alpha is preserved)",
                   group="Face Effects"),
         ParamSpec("sprite_scale", "Sprite size", "int", 5, 300, 70, unit=" %",

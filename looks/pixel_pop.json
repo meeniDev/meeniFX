@@ -1,0 +1,12 @@
+{
+  "format": "mfxlook",
+  "version": 1,
+  "id": "pixel_pop",
+  "name": "Pixel Pop",
+  "description": "Bold posterised pixels with crisp dark edges",
+  "stack": [
+    {"effect_id": "posterize", "params": {"levels": 6, "smooth": false}},
+    {"effect_id": "pixel_art", "params": {"pixel_size": 8, "colors": 10, "outline": 55}},
+    {"effect_id": "hue_saturation", "params": {"saturation": 135}}
+  ]
+}

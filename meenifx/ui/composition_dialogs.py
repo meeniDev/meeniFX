@@ -105,7 +105,7 @@ class CompositionSettingsDialog(QDialog):
         self.transparent = QCheckBox("Transparent background")
         self.transparent.setChecked(bool(getattr(comp, "transparent", False)))
         self.transparent.setToolTip(
-            "Transparent keeps alpha for Smart Key, Roto Brush, shapes and text; "
+            "Transparent keeps alpha for Roto Brush, shapes and text; "
             "off keeps the legacy opaque composition background")
         form.addRow("Background", self.transparent)
         layout.addLayout(form)

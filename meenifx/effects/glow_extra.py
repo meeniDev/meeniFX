@@ -39,7 +39,13 @@ _COMMON = (
               help="How the halo mixes with the picture"),
     ParamSpec("quality", "Quality", "int", 1, 4, 2,
               help="Blur passes; more is smoother on wide glows"),
+    ParamSpec("placement", "Glow placement", "choice", default="both",
+              choices=("both", "inside", "outside"),
+              choice_labels=("Inside and outside", "Inside", "Outside"),
+              help="Choose whether the halo stays inside the layer edge, extends outward, "
+                   "or does both"),
 )
+_WRAP_COMMON = tuple(spec for spec in _COMMON if spec.name != "placement")
 
 
 class _GlowVariant(LayerEffect):
@@ -122,7 +128,17 @@ class _GlowVariant(LayerEffect):
         light = light * (colour / 255.0)[None, None, :] * intensity
         mode = str(self.blend.get())
         out_rgb = np.clip(blend(rgb, light, mode), 0.0, 255.0)
+        placement_value = getattr(self, "placement", None)
+        placement = str(placement_value.get()) if placement_value is not None else "both"
+        if placement == "outside":
+            light *= (1.0 - alpha_full)[:, :, None]
+        elif placement == "inside":
+            light *= alpha_full[:, :, None]
         glow_alpha = np.clip(coverage * intensity, 0.0, 1.0)
+        if placement == "outside":
+            glow_alpha *= 1.0 - alpha_full
+        elif placement == "inside":
+            glow_alpha *= alpha_full
         if getattr(self, "preserve_alpha", None) is not None and bool(self.preserve_alpha.get()):
             glow_alpha = np.zeros_like(glow_alpha)
         out_alpha = 1.0 - (1.0 - alpha_full) * (1.0 - glow_alpha)
@@ -230,7 +246,7 @@ class LightWrapEffect(_GlowVariant):
     key = "light_wrap"
     name = "Light Wrap"
     PARAMS = tuple(replace(spec, default={"threshold": 20.0, "falloff": 100.0}.get(spec.name, spec.default))
-                   for spec in _COMMON) + (
+                   for spec in _WRAP_COMMON) + (
         ParamSpec("wrap", "Wrap distance", "float", 1.0, 120.0, 22.0, step=1.0, unit=" px",
                   pixels=True, help="How far the surrounding light spills inside the subject"),
         ParamSpec("edge_bias", "Edge bias", "float", 0.0, 100.0, 55.0, step=1.0, unit="%",

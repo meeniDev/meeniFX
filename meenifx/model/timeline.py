@@ -127,7 +127,7 @@ class Clip:
                  fade_in=0, fade_out=0, fade_in_curve=0.0, fade_out_curve=0.0,
                  link_id=0, stream=None, transform=None, transform_meta=None, text=None,
                  shape=None, gain=0.0, presets=None, blend="normal", adjustment=False,
-                 composition_id=""):
+                 composition_id="", temporal=None):
         self.id = clip_id
         self.name = name
         self.source_path = source_path
@@ -187,6 +187,15 @@ class Clip:
         # A nested composition clip points at a reusable definition by stable id. It
         # carries no copied media; the renderer resolves the definition every time.
         self.composition_id = str(composition_id or "")
+        # Native temporal rendering overrides. None means "inherit" from the track and
+        # then the composition; a concrete bool/mode is a per-clip override.
+        self.temporal = {"motion_blur": None, "frame_blend": None}
+        if isinstance(temporal, dict):
+            if temporal.get("motion_blur") in (True, False, None):
+                self.temporal["motion_blur"] = temporal.get("motion_blur")
+            mode = temporal.get("frame_blend")
+            if mode in (None, "off", "mix", "flow"):
+                self.temporal["frame_blend"] = mode
 
     @property
     def is_composition(self):
@@ -236,21 +245,31 @@ class Clip:
             gain *= fade_gain((self.end - frame) / self.fade_out, self.fade_out_curve)
         return max(0.0, min(1.0, gain))
 
-    def source_frame_at(self, timeline_frame):
-        """Map an absolute timeline frame to a source-frame index for preview and export."""
+    def source_position_at(self, timeline_frame):
+        """Fractional source-frame position, for frame blending and optical flow.
+
+        ``source_frame_at`` deliberately truncates to the frame a normal playback grid
+        samples. Frame Mix and Optical Flow need the sub-frame position between two
+        adjacent source frames, so they read this value and interpolate there. The
+        clip's trim, speed, loop and reverse rules are identical to source_frame_at.
+        """
         if self.source_out <= self.source_in:
-            return self.source_in
+            return float(self.source_in)
         span = self.source_out - self.source_in
         if self.freeze:
-            return min(self.source_out - 1, self.source_in)
+            return float(min(self.source_out - 1, self.source_in))
         elapsed = max(0.0, float(timeline_frame) - self.timeline_start)
-        source_delta = self.source_offset + elapsed * self.source_fps / max(1.0, self.timeline_fps) * self.speed
+        source_delta = (self.source_offset + elapsed * self.source_fps
+                        / max(1.0, self.timeline_fps) * self.speed)
         if self.loop:
             source_delta %= span
         else:
-            source_delta = min(source_delta, max(0, span - 1))
-        offset = int(source_delta)
-        return self.source_out - 1 - offset if self.reverse else self.source_in + offset
+            source_delta = min(source_delta, max(0.0, span - 1.0))
+        return self.source_out - 1.0 - source_delta if self.reverse else self.source_in + source_delta
+
+    def source_frame_at(self, timeline_frame):
+        """Map an absolute timeline frame to a source-frame index for preview and export."""
+        return int(self.source_position_at(timeline_frame))
 
     @property
     def source_duration_timeline(self):
@@ -300,7 +319,7 @@ class Clip:
                 copy.deepcopy(self.transform_meta), copy.deepcopy(self.text),
                 copy.deepcopy(self.gain), copy.deepcopy(self.presets),
                 self.blend, bool(self.adjustment), copy.deepcopy(getattr(self, "shape", None)),
-                self.composition_id)
+                self.composition_id, copy.deepcopy(self.temporal))
 
 
 # Fade shape presets. The stored truth is the number; the names are a convenience.
@@ -370,12 +389,17 @@ class Track:
         self.locked = False
         self.visible = True
         self.volume = 1.0
+        # Native temporal defaults for every clip on this track. None inherits the
+        # composition; a value overrides it until a clip supplies its own override.
+        self.motion_blur = None
+        self.frame_blend = None
         self.height = height or (64 if track_type == "video" else 48)
         self.clips = []
 
     def attrs(self):
         # height is view state, deliberately not part of undo snapshots
-        return (self.name, self.muted, self.solo, self.locked, self.visible, self.volume)
+        return (self.name, self.muted, self.solo, self.locked, self.visible, self.volume,
+                self.motion_blur, self.frame_blend)
 
     def sorted_clips(self):
         return sorted(self.clips, key=lambda c: c.timeline_start)
@@ -393,6 +417,13 @@ class Timeline:
         # Without a loop region, playback wraps at the end of the last clip unless
         # this is off (then it stops there).
         self.loop_at_end = True
+        # Native temporal rendering (not an effect): the master motion-blur switch and
+        # the frame-blending mode every track/clip inherits unless it overrides them.
+        self.motion_blur = False
+        self.motion_blur_shutter = 180.0
+        self.motion_blur_phase = 0.0
+        self.motion_blur_samples = 8
+        self.frame_blending = "off"
         self.min_duration = self.fps * 30
         self._clip_ids = itertools.count(1)
         self._track_ids = itertools.count(1)
@@ -929,7 +960,9 @@ class Timeline:
         comps = self.compositions.snapshot() if getattr(self, "compositions", None) else None
         transitions = tuple(t.state() for t in getattr(self, "transitions", []) or ())
         return (tracks, tuple(m.state() for m in self.markers), self.loop_in,
-                self.loop_out, comps, transitions)
+                self.loop_out, comps, transitions,
+                (self.motion_blur, self.motion_blur_shutter, self.motion_blur_phase,
+                 self.motion_blur_samples, self.frame_blending))
 
     def restore(self, snap):
         tracks, markers, loop_in, loop_out = snap[:4]
@@ -941,15 +974,22 @@ class Timeline:
             # A pre-transition snapshot has no records; clearing is what an undo of the
             # first-ever transition must restore.
             self.transitions = []
+        if len(snap) > 6:
+            (self.motion_blur, self.motion_blur_shutter, self.motion_blur_phase,
+             self.motion_blur_samples, self.frame_blending) = snap[6]
         self.tracks = []
         for track, attrs, clips in tracks:
-            track.name, track.muted, track.solo, track.locked, track.visible, track.volume = attrs
+            (track.name, track.muted, track.solo, track.locked, track.visible,
+             track.volume) = attrs[:6]
+            if len(attrs) > 6:
+                track.motion_blur, track.frame_blend = attrs[6], attrs[7]
             track.clips = []
             for (cid, name, path, start, dur, src_in, src_out, src_fps, timeline_fps,
                  speed, reverse, loop, freeze, source_offset, source_min, source_max, effects, volume,
                  fade_in, fade_out, fade_in_curve, fade_out_curve, link_id, stream,
                  transform, transform_meta, text, gain, presets, blend, adjustment,
-                 shape, composition_id) in clips:
+                 shape, composition_id, *rest) in clips:
+                temporal = rest[0] if rest else None
                 # Everything from `shape` on goes by name: a generated shape sits between
                 # text and gain in the constructor and a positional call would shift it.
                 track.clips.append(Clip(cid, name, path, track, start, dur, src_in, clone_effects(effects),
@@ -958,7 +998,8 @@ class Timeline:
                                         fade_in, fade_out, fade_in_curve, fade_out_curve,
                                         link_id, stream, transform, transform_meta, text,
                                         shape=shape, gain=gain, presets=presets, blend=blend,
-                                        adjustment=adjustment, composition_id=composition_id))
+                                        adjustment=adjustment, composition_id=composition_id,
+                                        temporal=temporal))
             self.tracks.append(track)
         self.markers = [Marker(mid, frame, name, color) for mid, frame, name, color in markers]
         self.markers.sort(key=lambda m: (m.frame, m.id))

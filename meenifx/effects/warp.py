@@ -122,9 +122,9 @@ class PerspectiveEffect(LayerEffect):
     name = "Perspective"
 
     PARAMS = (
-        ParamSpec("tilt_x", "Tilt X", "float", -75.0, 75.0, 0.0, step=0.5, unit="\u00b0",
+        ParamSpec("tilt_x", "Tilt X", "float", -720.0, 720.0, 0.0, step=0.5, unit="\u00b0",
                   help="Lean the top edge toward or away from the viewer"),
-        ParamSpec("tilt_y", "Tilt Y", "float", -75.0, 75.0, 0.0, step=0.5, unit="\u00b0",
+        ParamSpec("tilt_y", "Tilt Y", "float", -720.0, 720.0, 0.0, step=0.5, unit="\u00b0",
                   help="Lean the right edge toward or away from the viewer"),
         ParamSpec("zoom", "Zoom", "float", 50.0, 200.0, 100.0, step=0.5, unit="%"),
     )

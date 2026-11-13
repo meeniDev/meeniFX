@@ -1,0 +1,12 @@
+{
+  "format": "mfxlook",
+  "version": 1,
+  "id": "comic_print",
+  "name": "Comic Print",
+  "description": "Bold ink outlines, comic dots and saturated colour",
+  "stack": [
+    {"effect_id": "comic_dots", "params": {"cell_size": 6, "angle": 45, "contrast": 125}},
+    {"effect_id": "edge_outline", "params": {"mode": "cartoon", "strength": 80, "thickness": 2}},
+    {"effect_id": "hue_saturation", "params": {"saturation": 145, "lightness": 102}}
+  ]
+}

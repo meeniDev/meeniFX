@@ -11,6 +11,8 @@ import numpy as np
 from conftest import build_engine, frame_diff, synthetic_frame
 
 from meenifx.effects.glow import GlowEffect
+from meenifx.effects.glow_extra import (DirectionalGlowEffect, MultiGlowEffect,
+                                        NeonGlowEffect, SoftBloomEffect)
 
 
 def runtime(engine, scale=1.0, **params):
@@ -76,6 +78,33 @@ def test_glow_alpha_is_screened_instead_of_added():
     # A fully covered pixel stays fully covered; the halo cannot push it past 255.
     assert out[80, 80, 3] == 255
     assert out[20, 20, 3] == 0, "the far transparent corner must stay clear"
+
+
+def test_outer_glow_extends_past_transparent_text_edges():
+    engine, _clip = build_engine()
+    layer, core = glow_layer(colour=(255, 255, 255))
+    outer = runtime(engine, **GlowEffect.PRESETS["outer_glow"][1]).apply_layer(layer.copy())
+    inner = runtime(engine, placement="inside", radius=18.0, threshold=0.0,
+                    softness=100.0).apply_layer(layer.copy())
+    y, x = core[0].start + 12, core[1].start - 4
+    assert outer[y, x, 3] > 0, "the halo should add coverage outside the text edge"
+    assert inner[y, x, 3] == 0, "inside glow should not expand text alpha"
+    assert outer[core[0], core[1], 3].min() == 255
+
+
+def test_halo_glow_variants_offer_outer_alpha_for_text():
+    engine, _clip = build_engine()
+    layer, _core = glow_layer(colour=(255, 255, 255))
+    source_alpha = layer[:, :, 3] > 0
+    for effect_type in (MultiGlowEffect, NeonGlowEffect, SoftBloomEffect,
+                        DirectionalGlowEffect):
+        effect = effect_type(engine)
+        params = {spec.name: spec.default for spec in effect.PARAMS}
+        params.update(intensity=200.0, radius=30.0, threshold=0.0,
+                      falloff=100.0, placement="outside")
+        effect.load_params(params)
+        rendered = effect.apply_layer(layer.copy())
+        assert np.any(rendered[:, :, 3][~source_alpha] > 0), effect_type.__name__
 
 
 def test_presets_are_complete_and_remain_editable():

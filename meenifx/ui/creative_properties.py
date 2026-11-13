@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (QCheckBox, QComboBox, QHBoxLayout, QLabel, QLineEdi
                              QToolButton, QWidget)
 
 from .. import tokens
+from ..model import alpha as ALPHA
 from ..model import channels as CH
 from ..model import mask as MASK
 from ..model import matte as MATTE
@@ -25,7 +26,9 @@ def creative_signature(clip):
     return (tuple((m.get("id"), m.get("name"), m.get("mode"), bool(m.get("invert")),
                    bool(m.get("visible", True)), bool(m.get("show_outline", True)))
                   for m in MASK.masks(clip)),
-            (MATTE.ensure(clip).get("source_id"), MATTE.ensure(clip).get("mode")),
+            (MATTE.ensure(clip).get("source_id"), MATTE.ensure(clip).get("mode"),
+             bool(MATTE.ensure(clip).get("invert"))),
+            bool(ALPHA.inverted(clip)),
             (bool(motion.get("enabled")), motion.get("mode") or "replace",
              len(motion.get("path", {}).get("points") or ())))
 
@@ -60,7 +63,7 @@ def add_creative_card(panel, clip):
     panel._section_label(form, "Masks")
     masks = MASK.masks(clip)
     if not masks:
-        form.addWidget(_note("No masks. Choose Pen > Mask Path (G) and draw on this clip."))
+        form.addWidget(_note("No masks. Choose Pen > Draw Mask (G) and draw on this clip."))
     for mask in masks:
         mask_id = int(mask.get("id", 0))
         name = QLineEdit(mask.get("name") or f"Mask {mask_id}")
@@ -85,8 +88,10 @@ def add_creative_card(panel, clip):
                          "mask's look at the playhead")
         space.activated.connect(lambda index, box=space, mid=mask_id:
                                 _set_mask_space(panel, clip, mid, box.itemData(index)))
-        invert = QCheckBox("Invert")
+        invert = QCheckBox("Invert Mask")
         invert.setChecked(bool(mask.get("invert")))
+        invert.setToolTip("Invert this mask's feathered/expanded coverage (before mask "
+                          "opacity and the clip's other alpha operations)")
         invert.toggled.connect(lambda on, mid=mask_id: mask_edit(mid, invert=bool(on)))
         visible = QCheckBox("Visible")
         visible.setChecked(bool(mask.get("visible", True)))
@@ -151,9 +156,30 @@ def add_creative_card(panel, clip):
     for key, label in MATTE.MODE_LABELS.items():
         mode.addItem(label, key)
     mode.setCurrentIndex(max(0, mode.findData(matte.get("mode"))))
-    mode.activated.connect(lambda at, box=mode:
-                           _set_matte(panel, clip, matte.get("source_id"), box.itemData(at)))
+    mode.activated.connect(
+        lambda at, box=mode: _set_matte(
+            panel, clip, matte.get("source_id"), box.itemData(at),
+            invert=(False if str(box.itemData(at)).endswith("_inverted")
+                    else bool(matte.get("invert")))))
     form.addWidget(panel._labelled("Matte type", mode, "Alpha or luma, normal or inverted"))
+    matte_invert = QCheckBox("Invert Matte")
+    matte_invert.setChecked(MATTE.inverted(matte))
+    matte_invert.setToolTip("Invert the selected matte's coverage once. A legacy "
+                            "inverted matte type and this switch never double-invert.")
+    matte_invert.toggled.connect(
+        lambda on: _set_matte(panel, clip, matte.get("source_id"),
+                              MATTE.base_mode(matte.get("mode")), invert=bool(on)))
+    form.addWidget(matte_invert)
+
+    # -------------------------------------------------------------------- alpha
+    panel._section_label(form, "Clip Alpha")
+    clip_invert = QCheckBox("Invert Clip Alpha")
+    clip_invert.setChecked(ALPHA.inverted(clip))
+    clip_invert.setToolTip("Invert the clip's finished alpha after masks and track matte "
+                           "(before opacity and blending)")
+    clip_invert.toggled.connect(
+        lambda on: _set_clip_alpha(panel, clip, bool(on)))
+    form.addWidget(clip_invert)
 
     # -------------------------------------------------------------------- motion
     panel._section_label(form, "Motion Path")
@@ -285,8 +311,15 @@ def _key_motion(panel, clip):
     panel._notify()
 
 
-def _set_matte(panel, clip, source_id, mode):
-    panel.engine.session.set_clip_matte(clip.id, int(source_id or 0), mode or "alpha")
+def _set_matte(panel, clip, source_id, mode, invert=None):
+    panel.engine.session.set_clip_matte(clip.id, int(source_id or 0), mode or "alpha",
+                                       invert=invert)
+    panel.refresh_properties()
+    panel._notify()
+
+
+def _set_clip_alpha(panel, clip, invert):
+    panel.engine.session.set_clip_alpha_invert(clip.id, bool(invert))
     panel.refresh_properties()
     panel._notify()
 

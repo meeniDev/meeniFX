@@ -29,9 +29,15 @@ CATEGORY_ORDER = (
 # Every registered effect that is shown in the browser. ``look`` is omitted: Styles are
 # their own tab and must not appear as an effect category.
 CATEGORY_BY_KEY = {
+    "page_curl": "Distortion",
     "lens_warp": "Distortion",
+    "heat_haze": "Distortion",
+    "ripple": "Distortion",
+    "pixel_stretch": "Distortion",
+    "light_rays": "Blur & Glow",
     "mosaic": "Stylize",
     "ascii": "Stylize",
+    "dither": "Stylize",
     "face_tracker": "Tracking",
     "hand_tracker": "Tracking",
     "blob_tracker": "Tracking",
@@ -75,6 +81,15 @@ CATEGORY_BY_KEY = {
     "vhs_crt": "Stylize",
     "film_grain": "Stylize",
     "halftone": "Stylize",
+    "pixel_art": "Stylize",
+    "led_matrix": "Stylize",
+    "hex_mosaic": "Stylize",
+    "crosshatch": "Stylize",
+    "line_art": "Stylize",
+    "comic_dots": "Stylize",
+    "scanlines": "Stylize",
+    "vhs_noise": "Stylize",
+    "retro_crt": "Stylize",
     "posterize": "Stylize",
     "edge_outline": "Stylize",
     "duotone": "Color & Light",
@@ -111,9 +126,15 @@ CATEGORY_BY_KEY = {
 EXPERIMENTAL_KEYS = {"face_tracker", "hand_tracker", "blob_tracker"}
 
 DESCRIPTIONS = {
+    "page_curl": "Turn a cylindrical sheet with a shaded backside and transparent reveal.",
     "lens_warp": "A smooth local lens with bulge, pinch and chromatic fringes.",
+    "heat_haze": "Animated thermal refraction with deterministic detail and height falloff.",
+    "ripple": "Smooth radial water waves from an adjustable origin.",
+    "pixel_stretch": "Pull a selectable strip into stretched ribbons at any angle.",
+    "light_rays": "Cast light shafts from bright areas toward an adjustable origin.",
     "mosaic": "Turns the picture into a grid of flat colour blocks.",
     "ascii": "Rebuilds the picture from typed characters.",
+    "dither": "Quantizes colour with ordered patterns or classic error diffusion.",
     "face_tracker": "Follows a face to drive masks and effects. The reference picture has "
                     "no face or hand to detect, so the tile shows the effect icon instead.",
     "hand_tracker": "Tracks a hand so masks can follow gestures. The reference picture has "
@@ -165,6 +186,15 @@ DESCRIPTIONS = {
     "twirl": "Rotates the picture around a centre.",
     "kaleidoscope": "Mirrors the picture into a symmetrical pattern.",
     "vhs_crt": "Adds tape wobble, scanlines and CRT colour.",
+    "pixel_art": "Quantises the picture into blocky, limited-palette pixels.",
+    "led_matrix": "Rebuilds the picture as coloured dots on an LED panel.",
+    "hex_mosaic": "Tiles averaged colours into a hexagonal mosaic.",
+    "crosshatch": "Draws luminance-driven pen hatching on paper.",
+    "line_art": "Reduces the picture to clean ink outlines.",
+    "comic_dots": "Prints the picture with a comic-book dot screen.",
+    "scanlines": "Adds a CRT raster with optional RGB separation.",
+    "vhs_noise": "A noisy, wobbling analogue-tape look.",
+    "retro_crt": "A curved CRT monitor with raster lines and phosphor falloff.",
     "film_grain": "Lays fine animated grain over the picture.",
     "halftone": "Rebuilds tones as a grid of dots.",
     "posterize": "Reduces each colour channel to a few flat levels.",
@@ -195,6 +225,12 @@ DESCRIPTIONS = {
 # A small, coherent stroke-icon vocabulary. Audio and time effects each get their own
 # glyph; picture effects share a family only where that genuinely reads as the same tool.
 ICON_BY_KEY = {
+    "page_curl": "page_curl",
+    "lens_warp": "lens_warp",
+    "heat_haze": "wave",
+    "ripple": "radial_blur",
+    "pixel_stretch": "shape_line",
+    "light_rays": "glow",
     "mosaic": "mosaic",
     "ascii": "text",
     "face_tracker": "tracking_face",
@@ -373,8 +409,4 @@ def details_for(effect):
 
 def detail_line(details):
     """One compact line for the selection strip."""
-    flags = [f"Keyframes: {'Yes' if details['keyframes'] else 'No'}",
-             f"Adjustment: {'Yes' if details['adjustment'] else 'No'}"]
-    if details["experimental"]:
-        flags.append("Experimental")
-    return f"{details['name']} · {details['category']}  |  " + " · ".join(flags)
+    return f"{details['name']} · {details['category']}"

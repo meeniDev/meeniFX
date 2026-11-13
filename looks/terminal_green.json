@@ -1,0 +1,12 @@
+{
+  "format": "mfxlook",
+  "version": 1,
+  "id": "terminal_green",
+  "name": "Terminal Green",
+  "description": "A monochrome green phosphor terminal",
+  "stack": [
+    {"effect_id": "scanlines", "params": {"spacing": 3, "opacity": 38, "rgb_shift": 0}},
+    {"effect_id": "dither", "params": {"algorithm": "atkinson", "palette": "custom", "palette_text": "#02120A,#39FF72", "pixel_size": 2, "strength": 82}},
+    {"effect_id": "glow", "params": {"threshold": 48, "radius": 7, "intensity": 20, "glow_g": 255, "glow_r": 80, "glow_b": 80}}
+  ]
+}

@@ -70,6 +70,7 @@ MEDIA_MIME = "application/x-meenifx-media"
 COMPOSITION_MIME = "application/x-meenifx-composition"
 EFFECT_MIME = "application/x-meenifx-effect"
 PRESET_MIME = "application/x-meenifx-preset"
+GENERATOR_MIME = "application/x-meenifx-generator"
 
 VIDEO_EXT = (".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v")
 IMAGE_EXT = (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".gif")

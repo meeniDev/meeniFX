@@ -64,3 +64,19 @@ def clear(clip):
 def is_active(clip):
     settings = ensure(clip)
     return bool(settings.get("enabled") and settings.get("source_id"))
+
+
+def base_mode(mode):
+    text = str(mode or "alpha")
+    return text[:-len("_inverted")] if text.endswith("_inverted") else text
+
+
+def inverted(settings):
+    """Effective inversion: the legacy mode and the explicit switch are XORed once.
+
+    Older projects can carry both an ``alpha_inverted`` mode and ``invert``; treating
+    them as a toggle pair preserves exactly what those projects rendered instead of
+    inverting a second time. New edits normalise the mode to its base value.
+    """
+    mode_inverted = str((settings or {}).get("mode") or "alpha").endswith("_inverted")
+    return bool(mode_inverted) != bool((settings or {}).get("invert"))

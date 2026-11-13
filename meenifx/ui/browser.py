@@ -24,14 +24,21 @@ from PyQt6.QtWidgets import (QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel
 
 from .. import thumbnails as THUMBS
 from .. import tokens
-from ..constants import EFFECT_MIME
+from ..constants import EFFECT_MIME, GENERATOR_MIME
 from ..effects import categories as EFFECTS_META
 from ..icons import icon, paint as paint_icon
 from ..model import animation_families as FAMILIES
+from ..model import generators as GENERATORS
 from ..model import looks as LOOKS
 
-TABS = ("effects", "animations", "styles")
-TAB_LABELS = {"effects": "Effects", "animations": "Animations", "styles": "Styles"}
+TABS = ("effects", "animations", "generators", "styles")
+TAB_LABELS = {"effects": "Effects", "animations": "Animations",
+             "generators": "Generators", "styles": "Styles"}
+
+# Source-style effects stay registered for old projects but are no longer offered as
+# effects: dragging a generated clip is the workflow that can be trimmed and layered.
+LEGACY_SOURCE_EFFECTS = frozenset({"gradient_ramp", "fractal_noise", "checkerboard",
+                                   "grid", "roto_brush", "smart_key"})
 RECENT_LIMIT = 12
 CARD_W, CARD_H = 132, 128         # grid card (logical px)
 THUMB_W, THUMB_H = 124, 84        # grid thumbnail (logical px)
@@ -94,6 +101,10 @@ KEYWORDS = {
     "blob_tracker": ("tracking", "blob", "motion", "object"),
     "glitch": ("distort", "datamosh", "error", "broken"),
     "wave_warp": ("wave", "ripple", "water", "distort"),
+    "heat_haze": ("heat", "thermal", "refraction", "shimmer", "mirage"),
+    "ripple": ("water", "waves", "rings", "distort"),
+    "pixel_stretch": ("slice", "ribbon", "stretch", "glitch"),
+    "light_rays": ("shafts", "sunbeams", "god rays", "volumetric light"),
     "twirl": ("swirl", "spin", "distort"),
     "audio_gain": ("volume", "loud", "level", "db"),
     "audio_eq": ("equalizer", "bass", "treble"),
@@ -135,7 +146,9 @@ class BrowserCard(QFrame):
         if view_mode == "grid":
             self.thumb.setFixedSize(THUMB_W, THUMB_H)
             self._placeholder()
-            if item.get("kind") == "effect" and item["id"] in THUMBS.ICON_ONLY:
+            if item.get("kind") == "generator":
+                self._generator_preview()
+            elif item.get("kind") == "effect" and item["id"] in THUMBS.ICON_ONLY:
                 # Some effects have no meaningful still preview (audio and time effects).
                 # The card used to leave an empty tile; a readable, effect-specific glyph
                 # is the last fallback the browser promises. Audio cards are replaced by
@@ -239,6 +252,23 @@ class BrowserCard(QFrame):
         painter.end()
         self.thumb.setPixmap(pixmap)
 
+    def _generator_preview(self):
+        """A real default render, scaled into the card (not a placeholder icon)."""
+        try:
+            import numpy as np
+            from PyQt6.QtGui import QImage
+            from ..processing import generators as RENDER
+            spec = GENERATORS.resolve({"generator": self.item["id"],
+                                       **GENERATORS.defaults(self.item["id"])})
+            size = self.thumb.size()
+            bgra = RENDER.render_crop(spec, max(16, size.width()),
+                                      max(16, size.height()))
+            image = QImage(bgra.data, bgra.shape[1], bgra.shape[0], bgra.strides[0],
+                           QImage.Format.Format_ARGB32).copy()
+            self.thumb.setPixmap(QPixmap.fromImage(image))
+        except Exception:
+            self._words_fallback()
+
     def _tracker_preview(self):
         """Fallback for trackers: the reference picture plus a detection-reticle plate.
 
@@ -324,7 +354,8 @@ class BrowserCard(QFrame):
             return
         drag = QDrag(self)
         mime = QMimeData()
-        mime.setData(EFFECT_MIME, payload.encode("utf-8"))
+        mime_kind = GENERATOR_MIME if self.item.get("kind") == "generator" else EFFECT_MIME
+        mime.setData(mime_kind, payload.encode("utf-8"))
         drag.setMimeData(mime)
         if self.thumb.pixmap() is not None:
             drag.setPixmap(self.thumb.pixmap().scaled(
@@ -401,6 +432,7 @@ class BrowserView(QWidget):
 
     apply_requested = pyqtSignal(dict)
     remove_requested = pyqtSignal(dict)
+    generator_requested = pyqtSignal(str)
     menu_requested = pyqtSignal(QPoint)
 
     def __init__(self, engine, parent=None):
@@ -688,6 +720,7 @@ class BrowserView(QWidget):
         self.info.setVisible(False)
         self.search.setPlaceholderText({"effects": "Search effects",
                                         "animations": "Search animations",
+                                        "generators": "Search generators",
                                         "styles": "Search styles"}[self.tab])
         self._sync_buttons()
         self._sync_categories()
@@ -704,6 +737,8 @@ class BrowserView(QWidget):
             values = EFFECTS_META.available_categories(self.engine.effects)
         elif self.tab == "animations":
             values = sorted({family["behaviour"] for family in FAMILIES.families()})
+        elif self.tab == "generators":
+            values = []
         else:
             folders = {"Your styles" if not look.get("builtin") else "Shipped styles"
                        for look in LOOKS.all_looks()}
@@ -749,7 +784,7 @@ class BrowserView(QWidget):
         track = "audio" if self.selection_media == "audio" else "video"
         for effect in self.engine.effects:
             key = type(effect).key
-            if key == "look":
+            if key == "look" or key in LEGACY_SOURCE_EFFECTS:
                 continue
             details = EFFECTS_META.details_for(effect)
             category = details["category"]
@@ -767,6 +802,24 @@ class BrowserView(QWidget):
                           "partial": key in self.partial_keys,
                           "drag_key": key, "effect": effect, "unavailable": not allowed,
                           "tooltip": details["tooltip"]})
+        return items
+
+    def _generator_items(self):
+        if self.selection_media == "audio":
+            return []
+        items = []
+        for key in GENERATORS.ORDER:
+            spec = GENERATORS.SPECS[key]
+            words = " ".join([spec["label"].lower(), key, spec["summary"].lower(),
+                              "generator source background pattern"])
+            if not self._matches(words):
+                continue
+            items.append({"kind": "generator", "id": key, "name": spec["label"],
+                          "subtitle": spec["summary"], "section": "Sources",
+                          "icon": spec["icon"], "drag_key": key,
+                          "applied": False,
+                          "tooltip": f"{spec['label']} - drag onto the timeline (or "
+                                     f"double-click) to add a rendered clip"})
         return items
 
     def _animation_items(self):
@@ -856,6 +909,8 @@ class BrowserView(QWidget):
             return self._sorted(self._filtered(self._effect_items()))
         if self.tab == "animations":
             return self._sorted(self._filtered(self._animation_items()))
+        if self.tab == "generators":
+            return self._sorted(self._filtered(self._generator_items()))
         return self._sorted(self._filtered(self._style_items()))
 
     # ------------------------------------------------------------------ rendering
@@ -877,10 +932,12 @@ class BrowserView(QWidget):
             if self.term:
                 message = {"effects": "No effects match this search.",
                            "animations": "No animations match this search.",
+                           "generators": "No generators match this search.",
                            "styles": "No styles match this search."}[self.tab]
             else:
                 message = {"effects": "No effects are available.",
                            "animations": "No animations are available.",
+                           "generators": "No generators are available.",
                            "styles": "No styles are available."}[self.tab]
             self.empty.setText(message)
             self.info.setVisible(False)
@@ -1180,6 +1237,9 @@ class BrowserView(QWidget):
             self._card_selected(item)
             self._apply_selected()
             return
+        if item["kind"] == "generator":
+            self.generator_requested.emit(item["id"])
+            return
         if item.get("applied"):
             self.remove_requested.emit(item)
         else:
@@ -1188,7 +1248,7 @@ class BrowserView(QWidget):
     def _show_details(self, item):
         details = item.get("details")
         if details:
-            text = EFFECTS_META.detail_line(details) + "  \u2014  " + details["description"]
+            text = EFFECTS_META.detail_line(details)
         else:
             text = item["name"]
             if item.get("subtitle"):
@@ -1250,6 +1310,8 @@ class BrowserView(QWidget):
             choice = self.animation_choice()
             if choice:
                 self.apply_requested.emit({**self._selected_item, **choice, "explicit": True})
+        elif self._selected_item["kind"] == "generator":
+            self.generator_requested.emit(self._selected_item["id"])
         elif self._selected_item.get("applied"):
             self.remove_requested.emit(self._selected_item)
         else:
@@ -1261,7 +1323,10 @@ class BrowserView(QWidget):
         favorite = "Remove from favorites" if self.is_favorite(item) else "Add to favorites"
         menu.addAction(favorite, lambda: self.toggle_favorite(item))
         menu.addSeparator()
-        if item["kind"] == "effect":
+        if item["kind"] == "generator":
+            menu.addAction("Add generator clip",
+                           lambda: self.generator_requested.emit(item["id"]))
+        elif item["kind"] == "effect":
             menu.addAction("Add to selected clip",
                            lambda: self.apply_requested.emit(item))
             if item.get("applied"):

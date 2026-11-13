@@ -416,10 +416,12 @@ class PreviewWidget(QWidget):
                 event.accept()
                 return
             if getattr(overlay, "mode", "") == "pen":
-                if key == Qt.Key.Key_V and not (event.modifiers()
-                                                & (Qt.KeyboardModifier.ControlModifier
-                                                   | Qt.KeyboardModifier.AltModifier)):
-                    overlay.pen.cancel(finish=True)
+                finish = key in (Qt.Key.Key_V, Qt.Key.Key_Return, Qt.Key.Key_Enter)
+                if finish and not (event.modifiers()
+                                   & (Qt.KeyboardModifier.ControlModifier
+                                      | Qt.KeyboardModifier.AltModifier)):
+                    # Finish the open path (or leave cleanly when there is no draft).
+                    overlay.pen.commit()
                     event.accept()
                     return
                 if key == Qt.Key.Key_Escape:

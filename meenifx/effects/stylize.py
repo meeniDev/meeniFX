@@ -515,5 +515,199 @@ class VignetteEffect(LayerEffect):
         return out
 
 
-STYLIZE_EFFECTS = (VhsCrtEffect, FilmGrainEffect, HalftoneEffect, PosterizeEffect,
+class DitherEffect(LayerEffect):
+    """Deterministic ordered and error-diffusion palette dithering."""
+
+    key = "dither"
+    name = "Dither"
+    category = "Stylize"
+    PARAMS = (
+        ParamSpec("algorithm", "Algorithm", "choice", default="floyd_steinberg",
+                  choices=("floyd_steinberg", "atkinson", "bayer2", "bayer4", "bayer8",
+                           "jarvis_judice_ninke", "stucki", "sierra", "burkes"),
+                  choice_labels=("Floyd–Steinberg", "Atkinson", "Bayer 2×2", "Bayer 4×4",
+                                 "Bayer 8×8", "Jarvis–Judice–Ninke", "Stucki", "Sierra",
+                                 "Burkes")),
+        ParamSpec("pixel_size", "Pixel size", "int", 1, 32, 1),
+        ParamSpec("palette", "Palette", "choice", default="bw",
+                  choices=("bw", "grayscale", "retro", "game_boy", "rgb", "custom")),
+        ParamSpec("color_count", "Colour count", "int", 2, 16, 2),
+        ParamSpec("palette_text", "Custom palette", "text",
+                  default="#101010,#2B2B3A,#F5F5F5",
+                  help="Comma-separated colours used by the Custom palette"),
+        ParamSpec("custom_dark", "Legacy custom dark", "text", default="#101010",
+                  advanced=True),
+        ParamSpec("custom_light", "Legacy custom light", "text", default="#F5F5F5",
+                  advanced=True),
+        ParamSpec("contrast", "Contrast", "float", 0, 200, 100, step=1, unit="%"),
+        ParamSpec("brightness", "Brightness", "float", -100, 100, 0, step=1),
+        ParamSpec("gamma", "Gamma", "float", 0.1, 4, 1, step=0.05),
+        ParamSpec("strength", "Strength", "float", 0, 100, 100, step=1, unit="%"),
+        ParamSpec("pattern_scale", "Pattern scale", "float", 0.25, 8, 1, step=0.25),
+        ParamSpec("pattern_offset", "Pattern offset", "int", 0, 63, 0),
+        ParamSpec("invert", "Invert", "bool", default=False),
+    )
+
+    def __init__(self, app):
+        super().__init__(app)
+        for spec in self.PARAMS:
+            setattr(self, spec.name, Value(spec.default))
+
+    @staticmethod
+    def _palette_lut(palette):
+        """5-bit RGB nearest-colour table for the error-diffusion inner loop.
+
+        Per-pixel calls to argmin over the palette dominated runtime (seconds per
+        640x360 frame). A tiny quantised cube keeps the same nearest-colour decision at
+        a fraction of the cost; error diffusion remains explicitly sequential.
+        """
+        axis = np.arange(32, dtype=np.float32) * 8.0 + 4.0
+        grid = np.stack(np.meshgrid(axis, axis, axis, indexing="ij"), axis=-1).reshape(-1, 3)
+        distances = ((grid[:, None, :] - np.asarray(palette, np.float32)[None, :, :]) ** 2).sum(axis=2)
+        return distances.argmin(axis=1).astype(np.uint8).reshape(32, 32, 32)
+
+    def _custom_palette(self):
+        text = str(self.palette_text.get() or "")
+        colours = []
+        for token in text.split(","):
+            token = token.strip()
+            if not token:
+                continue
+            colour = self._hex(token, None)
+            if colour is not None:
+                colours.append(colour)
+        if len(colours) < 2:
+            return None
+        return np.stack(colours[:16])
+
+    @staticmethod
+    def _hex(value, fallback):
+        try:
+            raw = value.get() if hasattr(value, "get") else value
+            text = str(raw).lstrip("#")
+            if len(text) == 6:
+                return np.array([int(text[i:i+2], 16) for i in (0, 2, 4)], np.float32)
+        except (ValueError, TypeError, AttributeError):
+            pass
+        return None if fallback is None else np.array(fallback, np.float32)
+
+    def apply_layer(self, layer):
+        if layer is None or layer.size == 0:
+            return layer
+        frame = int(self.local_frame)
+        strength = param_number(self.strength, frame) / 100.0
+        if strength <= 0:
+            return layer
+        src = layer[:, :, :3].astype(np.float32)
+        alpha = layer[:, :, 3].copy()
+        pixel = max(1, int(round(param_number(self.pixel_size, frame) *
+                                 max(.02, float(self.param_scale)))))
+        if pixel > 1:
+            small = cv2.resize(src, (max(1, src.shape[1] // pixel),
+                                     max(1, src.shape[0] // pixel)),
+                               interpolation=cv2.INTER_AREA)
+        else:
+            small = src.copy()
+        levels = max(2, int(round(param_number(self.color_count, frame))))
+        palette_name = str(self.palette.get())
+        if palette_name == "bw":
+            # The two-colour default stays pure black/white; raising Colour count turns
+            # the same control into a true grayscale ramp instead of leaving it dead.
+            palette = (np.array([[0,0,0], [255,255,255]], np.float32) if levels <= 2
+                       else np.linspace(0, 255, levels, dtype=np.float32)[:, None].repeat(3, axis=1))
+        elif palette_name == "game_boy":
+            palette = np.array([[15,56,15], [48,98,48], [139,172,15], [155,188,15]], np.float32)
+        elif palette_name == "retro":
+            palette = np.array([[0,0,0], [36,24,111], [140,42,18], [250,210,90],
+                                [245,235,210]], np.float32)
+        elif palette_name == "rgb":
+            palette = np.array([[0,0,0], [0,0,255], [0,255,0], [0,255,255],
+                                [255,0,0], [255,0,255], [255,255,0], [255,255,255]], np.float32)
+        elif palette_name == "custom":
+            # The editable swatch strip is the authoritative custom palette. Older
+            # projects only stored the two legacy colours, so fall back to those when
+            # the new field is absent or has no valid entries.
+            palette = self._custom_palette()
+            if palette is None:
+                palette = np.stack([self._hex(self.custom_dark, [16]*3),
+                                    self._hex(self.custom_light, [245]*3)])
+        else:
+            palette = np.linspace(0, 255, max(3, levels), dtype=np.float32)[:, None].repeat(3, axis=1)
+        contrast = param_number(self.contrast, frame) / 100.0
+        brightness = param_number(self.brightness, frame) * 2.55
+        gamma = max(.1, param_number(self.gamma, frame))
+        work = np.clip((small - 127.5) * contrast + 127.5 + brightness, 0, 255) / 255.0
+        work = np.power(work, 1.0 / gamma) * 255.0
+        if bool(self.invert.get()):
+            work = 255.0 - work
+        algorithm = str(self.algorithm.get())
+        scale = max(.25, param_number(self.pattern_scale, frame))
+        offset = max(0, int(self.pattern_offset.get()))
+        if algorithm.startswith("bayer"):
+            size = int(algorithm[-1])
+            matrix = np.array([[0, 2], [3, 1]], np.float32)
+            while matrix.shape[0] < size:
+                matrix = np.block([[4*matrix, 4*matrix+2], [4*matrix+3, 4*matrix+1]])
+            yy, xx = np.indices(work.shape[:2])
+            threshold = ((matrix[(yy + offset) % size,
+                                 (xx + offset) % size] + .5) /
+                         (size * size) - .5)[:, :, None] * (255.0 / max(1, len(palette)-1)) * scale
+            work += threshold
+            out_small = palette[np.abs(work[:, :, None, :] - palette[None, None, :, :]).sum(axis=3).argmin(axis=2)]
+        else:
+            out_small = np.empty_like(work)
+            kernels = {
+                "floyd_steinberg": ([(1,0,7),( -1,1,3),(0,1,5),(1,1,1)],16),
+                "atkinson": ([(1,0,1),(2,0,1),(-1,1,1),(0,1,1),(1,1,1),(0,2,1)],8),
+                "jarvis_judice_ninke": ([(1,0,7),(2,0,5),(-2,1,3),(-1,1,5),(0,1,7),(1,1,5),(2,1,3),(-2,2,1),(-1,2,3),(0,2,5),(1,2,3),(2,2,1)],48),
+                "stucki": ([(1,0,8),(2,0,4),(-2,1,2),(-1,1,4),(0,1,8),(1,1,4),(2,1,2),(-2,2,1),(-1,2,2),(0,2,4),(1,2,2),(2,2,1)],42),
+                "sierra": ([(1,0,5),(2,0,3),(-2,1,2),(-1,1,4),(0,1,5),(1,1,4),(2,1,2),(-1,2,2),(0,2,3),(1,2,2)],32),
+                "burkes": ([(1,0,8),(2,0,4),(-2,1,2),(-1,1,4),(0,1,8),(1,1,4),(2,1,2)],32),
+            }
+            kernel, divisor = kernels.get(algorithm, kernels["floyd_steinberg"])
+            if abs(scale - 1.0) > 1e-4 or offset:
+                # Pattern Scale/Offset stay meaningful for error diffusion too: a small
+                # ordered modulation breaks flat areas into the requested texture rather
+                # than being silently ignored outside the Bayer branch.
+                yy, xx = np.indices(work.shape[:2])
+                matrix = np.array([[0, 2], [3, 1]], np.float32)
+                ordered = ((matrix[(yy + offset) % 2, (xx + offset) % 2] + .5) / 4.0 - .5)
+                work += (ordered * (scale - 1.0) * 22.0 + offset * 0.35)[:, :, None]
+            h, w = work.shape[:2]
+            original_small = (w, h)
+            # Diffusion is sequential. Cap its working grid so a full-resolution dither
+            # cannot block the UI for seconds; the quantised result is scaled back with
+            # nearest-neighbour blocks, so pixel size and palette are preserved.
+            if max(w, h) > 256:
+                factor = 256.0 / max(w, h)
+                work = cv2.resize(work, (max(1, int(round(w * factor))),
+                                         max(1, int(round(h * factor)))),
+                                  interpolation=cv2.INTER_AREA)
+                h, w = work.shape[:2]
+            lut = self._palette_lut(palette)
+            out_small = np.empty_like(work)
+            for y in range(h):
+                for x in range(w):
+                    old = work[y, x]
+                    b, g, r = (min(255, max(0, int(value))) >> 3 for value in old)
+                    new = palette[lut[b, g, r]]
+                    out_small[y, x] = new
+                    error = (old - new) * strength
+                    for dx, dy, weight in kernel:
+                        xx, yy = x + dx, y + dy
+                        if 0 <= xx < w and 0 <= yy < h:
+                            work[yy, xx] += error * (weight / divisor)
+            if (w, h) != original_small:
+                out_small = cv2.resize(out_small, original_small, interpolation=cv2.INTER_NEAREST)
+        if pixel > 1:
+            quantized = cv2.resize(out_small, (src.shape[1], src.shape[0]), interpolation=cv2.INTER_NEAREST)
+        else:
+            quantized = out_small
+        output = np.empty_like(layer)
+        output[:, :, :3] = np.clip(src * (1-strength) + quantized * strength, 0, 255).astype(np.uint8)
+        output[:, :, 3] = alpha
+        return output
+
+
+STYLIZE_EFFECTS = (VhsCrtEffect, FilmGrainEffect, HalftoneEffect, DitherEffect, PosterizeEffect,
                    EdgeOutlineEffect, DuotoneEffect, InvertEffect, VignetteEffect)

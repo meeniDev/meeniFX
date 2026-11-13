@@ -28,6 +28,7 @@ from ..model import animation as ANIM
 from ..model import animation_families as FAMILIES
 from ..model import looks as LOOKS
 from ..model import channels as CH
+from ..model import generators as GENERATORS
 from ..model import preset_library as LIB
 from ..model import presets as PM
 from ..model import shape as SHAPE
@@ -40,6 +41,7 @@ from .browser import BrowserView
 from .color_editors import ColorWheelsDialog, CurvesDialog
 from .components import EmptyState
 from .font_picker import FontPickerButton
+from .media_picker import MediaPicker
 from .widgets import ScrubField
 
 CARD_MIME = "application/x-meenifx-card"
@@ -78,6 +80,26 @@ def _swatch_button(color, tip):
     button.setToolTip(tip)
     set_swatch(button, color)
     return button
+
+
+def _theme_context_menu(menu):
+    """Give effect menus an explicit palette, refreshed when the app theme changes."""
+    from .themed import bind_theme
+
+    def apply(widget):
+        c = tokens.COLORS
+        widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        widget.setStyleSheet(
+            f"QMenu {{ background-color: {c['popup']}; color: {c['popup_text']}; "
+            f"border: 1px solid {c['popup_border']}; border-radius: {tokens.RADIUS}px; padding: 5px; }}"
+            f"QMenu::item {{ color: {c['popup_text']}; padding: 6px 26px 6px 12px; "
+            f"border-radius: {tokens.RADIUS_SM}px; background: transparent; }}"
+            f"QMenu::item:selected {{ background: {c['accent_fill']}; color: #FFFFFF; }}"
+            f"QMenu::item:disabled {{ color: {c['disabled']}; background: transparent; }}"
+            f"QMenu::separator {{ height: 1px; background: {c['border']}; margin: 5px 6px; }}"
+        )
+
+    bind_theme(menu, apply)
 
 
 def set_swatch(button, color):
@@ -168,12 +190,15 @@ class EffectsPanel(QWidget):
     roto_brush_size_changed = pyqtSignal(float)
     # Smart Key actions: analyze, reanalyze, choose, auto or stop.
     smart_key_requested = pyqtSignal(str)
+    # A generator card was double-clicked or chosen from its context menu.
+    generator_requested = pyqtSignal(str)
 
     def __init__(self, engine, parent=None):
         super().__init__(parent)
         self.engine = engine
         self.browser = BrowserView(engine, self)
         self.browser.apply_requested.connect(self._browser_apply)
+        self.browser.generator_requested.connect(self.generator_requested)
         self.browser.remove_requested.connect(self._browser_remove)
         self.browser.menu_requested.connect(self._browser_menu)
         # The browser owns the search box; the panel keeps the old name so scripts and
@@ -602,6 +627,7 @@ class EffectsPanel(QWidget):
             settings = SHAPE.ensure_shape(clip)
             shape_key = (str(settings.get("kind") or "rectangle"),
                          bool(settings.get("stroke_enabled")),
+                         bool(settings.get("gradient_enabled")),
                          tuple(sorted((name, isinstance(value, AnimatedValue))
                                       for name, value in settings.items())))
         text_animation = ()
@@ -1160,6 +1186,10 @@ class EffectsPanel(QWidget):
                 self._batch_effect_bool(form, clips, key, spec)
             elif spec.kind == "choice":
                 self._batch_effect_choice(form, clips, key, spec)
+            elif spec.kind in ("media", "font"):
+                # A multi-clip batch has no single asset to show; the individual effect
+                # cards carry the picker.  Never fall back to a raw path textbox.
+                continue
             else:
                 self._batch_effect_text(form, clips, key, spec)
 
@@ -1491,6 +1521,9 @@ class EffectsPanel(QWidget):
         settings = SHAPE.ensure_shape(clip)
         frame = self._clip_frame(clip)
         kind = str(settings.get("kind") or "rectangle")
+        if kind == "generator":
+            self._generator_card(clip)
+            return
         card, outer = self._card("shape")
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
@@ -1637,6 +1670,84 @@ class EffectsPanel(QWidget):
             self._channel_row(form, clip, CH.transform_channel(name))
         outer.addWidget(body)
         self.properties_layout.addWidget(card)
+
+    def _generator_card(self, clip):
+        """Independent settings for a generated source clip (not an effect card)."""
+        settings = SHAPE.ensure_shape(clip)
+        key = GENERATORS.normalise(settings.get("generator"))
+        frame = self._clip_frame(clip)
+        card, outer = self._card("generator")
+        card.setObjectName(f"generator-card-{key}")
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        title = QLabel(f"Generator · {GENERATORS.label(key)}")
+        title.setStyleSheet(f"font-size: {tokens.FONT_TITLE}px; font-weight: 600;")
+        header.addWidget(title)
+        header.addStretch(1)
+        outer.addLayout(header)
+        note = QLabel("Source type is fixed for this clip. Add another generator from the "
+                      "Generators browser to create a different source.")
+        note.setProperty("quiet", True)
+        note.setWordWrap(True)
+        outer.addWidget(note)
+        body, form = self._form()
+        self._section_label(form, GENERATORS.label(key))
+        for field in GENERATORS.fields(key):
+            name, label, field_kind, default, minimum, maximum, step, decimals, unit, tip = field[:10]
+            value = GENERATORS.setting(settings, name, frame)
+            if value is None:
+                value = default
+            if field_kind == "number":
+                field_widget = ScrubField(label, float(value), float(minimum), float(maximum),
+                                          default=float(default), step=float(step),
+                                          unit=unit, decimals=int(decimals),
+                                          label_width=LABEL_W, tooltip=tip)
+                field_widget.committed.connect(
+                    lambda new_value, c=clip, n=name: self._set_generator_value(
+                        c, n, float(new_value)))
+            elif field_kind == "color":
+                field_widget = _swatch_button(str(value), tip)
+                field_widget.clicked.connect(
+                    lambda _checked=False, c=clip, n=name, l=label: self._pick_generator_color(
+                        c, n, l))
+            elif field_kind == "choice":
+                field_widget = QComboBox()
+                for choice_label, choice_value in field[10]:
+                    field_widget.addItem(choice_label, choice_value)
+                field_widget.setCurrentIndex(max(0, field_widget.findData(str(value))))
+                field_widget.currentIndexChanged.connect(
+                    lambda _index, c=clip, n=name, box=field_widget: self._set_generator_value(
+                        c, n, box.currentData()))
+            else:
+                field_widget = QLineEdit(str(value))
+                field_widget.editingFinished.connect(
+                    lambda f=field_widget, c=clip, n=name: self._set_generator_value(
+                        c, n, f.text()))
+            if field_kind == "number":
+                form.addWidget(field_widget)
+            else:
+                display_label = "Gradient style" if key == "gradient" and name == "gen_type" else label
+                form.addWidget(self._labelled(display_label, field_widget, tip))
+        outer.addWidget(body)
+        self.properties_layout.addWidget(card)
+
+    def _pick_generator_color(self, clip, name, label):
+        current = SHAPE.ensure_shape(clip).get(name, "#FFFFFF")
+        chosen = QColorDialog.getColor(QColor(str(current)), self, label,
+                                       QColorDialog.ColorDialogOption.ShowAlphaChannel)
+        if not chosen.isValid():
+            return
+        self._set_generator_value(clip, name,
+                                  chosen.name(QColor.NameFormat.HexArgb))
+
+    def _set_generator_value(self, clip, name, value):
+        def action():
+            target = self.engine.timeline.find_clip(clip.id)
+            if target is not None:
+                SHAPE.ensure_shape(target)[name] = value
+        self.engine.session.stack.run("Generator setting", action)
+        self._notify()
+        self.refresh_properties()
 
     def _shape_swatch(self, layout, clip, name):
         frame = self._clip_frame(clip)
@@ -2499,6 +2610,34 @@ class EffectsPanel(QWidget):
             blend.activated.connect(lambda index, cid=clip.id, w=blend:
                                     self.engine.session.set_blend_mode(cid, w.itemData(index)))
             form.addWidget(self._labelled("Blend", blend, "How this clip is mixed with the layers below it"))
+            # Native temporal overrides. Inherit is the default; the composition switch
+            # remains the master and the track supplies the default between the two.
+            temporal = getattr(clip, "temporal", {}) or {}
+            motion = QComboBox()
+            motion.addItem("Inherit", None)
+            motion.addItem("On", True)
+            motion.addItem("Off", False)
+            motion.setCurrentIndex(max(0, [motion.itemData(i) for i in range(3)].index(
+                temporal.get("motion_blur"))))
+            motion.setToolTip("Native motion blur for this clip (composition switch still applies)")
+            motion.activated.connect(
+                lambda index, cid=clip.id, w=motion: self.engine.session.set_clip_temporal(
+                    cid, "motion_blur", w.itemData(index)))
+            form.addWidget(self._labelled("Motion blur", motion,
+                                          "Inherit the track, or force native motion blur on/off"))
+            frame_blend = QComboBox()
+            frame_blend.addItem("Inherit", None)
+            frame_blend.addItem("Off", "off")
+            frame_blend.addItem("Frame Mix", "mix")
+            frame_blend.addItem("Optical Flow", "flow")
+            frame_blend.setCurrentIndex(max(0, [frame_blend.itemData(i) for i in range(4)].index(
+                temporal.get("frame_blend"))))
+            frame_blend.setToolTip("Blend adjacent source frames when speed or frame rates differ")
+            frame_blend.activated.connect(
+                lambda index, cid=clip.id, w=frame_blend: self.engine.session.set_clip_temporal(
+                    cid, "frame_blend", w.itemData(index)))
+            form.addWidget(self._labelled("Frame blending", frame_blend,
+                                          "Off, Frame Mix or cached Optical Flow"))
         for edge, label in (("in", "Fade in"), ("out", "Fade out")):
             frames = clip.fade_in if edge == "in" else clip.fade_out
             field = ScrubField(label, frames, 0, max(1, clip.duration), default=0, step=1,
@@ -2765,6 +2904,7 @@ class EffectsPanel(QWidget):
         more = _tool("dots", "More")
         more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(more)
+        _theme_context_menu(menu)
         last = len(clip.effects) - 1
         if key == "look":
             menu.addAction("Remove look").triggered.connect(
@@ -2874,7 +3014,13 @@ class EffectsPanel(QWidget):
         stop.setToolTip("Cancel the running subject analysis")
         stop.clicked.connect(lambda _=False: self.smart_key_requested.emit("stop"))
         stop.setVisible(False)
-        for widget in (remove, reanalyze, choose, stop):
+        refine = QToolButton()
+        refine.setText("Refine in Roto Brush")
+        refine.setToolTip("Open this analysed legacy cutout in the Roto Brush tool. "
+                          "The current Smart Key result is preserved until you paint a "
+                          "new correction.")
+        refine.clicked.connect(lambda _=False: self.smart_key_requested.emit("roto"))
+        for widget in (remove, reanalyze, choose, stop, refine):
             row.addWidget(widget)
         row.addStretch(1)
 
@@ -2892,7 +3038,7 @@ class EffectsPanel(QWidget):
         form.addWidget(bar)
         self._smart_key = {"clip_id": clip.id, "entry": entry, "status": status,
                            "bar": bar, "remove": remove, "reanalyze": reanalyze,
-                           "choose": choose, "stop": stop}
+                           "choose": choose, "stop": stop, "refine": refine}
         self._refresh_smart_key_status(clip, entry)
 
     def _refresh_smart_key_status(self, clip, entry):
@@ -2988,6 +3134,7 @@ class EffectsPanel(QWidget):
         more = _tool("dots", "More")
         more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(more)
+        _theme_context_menu(menu)
         menu.addAction("Remove style").triggered.connect(
             lambda _=False, c=clip, e=entry: self._remove_look(c, e))
         menu.addAction("Save stack as style\u2026").triggered.connect(
@@ -3051,6 +3198,7 @@ class EffectsPanel(QWidget):
         more = _tool("dots", "More")
         more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(more)
+        _theme_context_menu(menu)
         reset = menu.addAction("Reset")
         reset.triggered.connect(lambda _=False, c=clip, e=entry, f=effect: self._reset_effect(c, e, f))
         up = menu.addAction("Move up in style")
@@ -3192,12 +3340,24 @@ class EffectsPanel(QWidget):
         # Some effects only apply to certain sources (the choker needs an alpha edge). A
         # short note under the controls says so instead of leaving a no-op card unexplained.
         note = str(getattr(effect, "NOTE", "") or "")
+        status_note = getattr(effect, "status_note", None)
+        if callable(status_note):
+            try:
+                note = str(status_note() or note)
+            except Exception:
+                pass
         if note:
             hint = QLabel(note)
             hint.setWordWrap(True)
             hint.setObjectName("effectNote")
             hint.setStyleSheet(f"color: {tokens.COLORS['muted']}; font-size: 11px;")
             form.addWidget(hint)
+        if hasattr(effect, "status"):
+            status = QLabel(str(effect.status))
+            status.setWordWrap(True)
+            status.setObjectName("shaderStatus")
+            form.addWidget(status)
+            self._rows.append({"kind": "shader_status", "label": status, "effect": effect})
 
     def _param_row(self, target, clip, effect, entry, spec):
         """One parameter control (numeric, switch, choice or text) in `target`."""
@@ -3247,6 +3407,25 @@ class EffectsPanel(QWidget):
             target.addWidget(box)
         elif spec.kind == "choice":
             target.addWidget(self._choice_row(clip, entry, spec, current, tip))
+        elif spec.kind == "font":
+            picker = FontPickerButton(str(current or ""), self)
+            picker.familyChanged.connect(
+                lambda family, c=clip, e=entry, n=spec.name, s=spec:
+                self._commit_choice(c, e, n, family, s))
+            self._rows.append({"kind": "font_param", "clip_id": clip.id, "entry": entry,
+                               "name": spec.name, "picker": picker, "spec": spec})
+            target.addWidget(self._labelled(spec.label, picker, tip))
+        elif spec.kind == "media":
+            picker = MediaPicker(
+                str(current or ""), self, media_kind=getattr(spec, "media_kind", "image"),
+                project_provider=self._project_for_assets, label=spec.label.lower())
+            picker.pathChanged.connect(
+                lambda path, c=clip, e=entry, n=spec.name, s=spec:
+                self._commit_choice(c, e, n, path, s))
+            picker.pathRejected.connect(self.engine.session.status.emit)
+            self._rows.append({"kind": "media_param", "clip_id": clip.id, "entry": entry,
+                               "name": spec.name, "picker": picker, "spec": spec})
+            target.addWidget(self._labelled(spec.label, picker, tip))
         elif spec.kind == "text" and spec.name.endswith("_color"):
             current = str(current or "")
             holder = QWidget()
@@ -3268,6 +3447,23 @@ class EffectsPanel(QWidget):
             target.addWidget(self._labelled(spec.label, holder, tip))
             self._rows.append({"kind": "colour_param", "clip_id": clip.id, "entry": entry,
                                "name": spec.name, "button": swatch, "spec": spec})
+        elif effect.key == "page_curl" and spec.name == "back_path":
+            edit = QLineEdit(str(current or ""))
+            edit.setPlaceholderText("Choose a backside image")
+            browse = QToolButton()
+            browse.setText("Browse")
+            holder = QWidget()
+            layout = QHBoxLayout(holder)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.addWidget(edit, 1)
+            layout.addWidget(browse)
+            def choose(_=False):
+                path = open_file(self, "Page Curl backside image", "", "Images (*.png *.jpg *.jpeg *.webp *.bmp)")
+                if path:
+                    self._commit_choice(clip, entry, spec.name, path, spec)
+            browse.clicked.connect(choose)
+            edit.editingFinished.connect(lambda: self._commit_choice(clip, entry, spec.name, edit.text(), spec))
+            target.addWidget(self._labelled(spec.label, holder, tip))
         elif spec.name == "palette_text":
             self._palette_row(target, clip, entry, spec, str(current or ""))
         else:
@@ -3293,6 +3489,12 @@ class EffectsPanel(QWidget):
             self._rows.append({"kind": "text_param", "clip_id": clip.id, "entry": entry,
                                "name": spec.name, "field": edit, "spec": spec})
             target.addWidget(self._labelled(spec.label, edit, tip))
+
+    def _project_for_assets(self):
+        """The open project's media library, when this panel belongs to a window."""
+        host = self.window()
+        controller = getattr(host, "projects", None)
+        return getattr(controller, "project", None)
 
     def _stored_effect_value(self, clip, entry, name, default=None):
         stored = (entry.get("params") or {}).get(name, default)
@@ -3711,6 +3913,8 @@ class EffectsPanel(QWidget):
                 lambda _pos, i=i: write(colors[:i] + colors[i + 1:]) if len(colors) > 1 else None)
             row.addWidget(swatch)
         add = _tool("plus", "Add a color")
+        add.setObjectName("paletteAdd")
+        add.setProperty("effectId", str(entry.get("effect_id") or ""))
         add.clicked.connect(lambda _=False: write(colors + ["#ffffff"]))
         row.addWidget(add)
         row.addStretch(1)
@@ -3750,6 +3954,9 @@ class EffectsPanel(QWidget):
         local = self._clip_frame(clip)
         for row in self._rows:
             kind = row["kind"]
+            if kind == "shader_status":
+                row["label"].setText(str(row["effect"].status))
+                continue
             if kind == "text":
                 editor = row.get("editor")
                 # Follow the playhead with the keyed words, but never while the user is
@@ -3830,6 +4037,22 @@ class EffectsPanel(QWidget):
                 row["box"].blockSignals(True)
                 row["box"].setChecked(bool(row["spec"].clamp(stored)))
                 row["box"].blockSignals(False)
+            elif kind == "media_param":
+                entry = row["entry"]
+                if not any(entry is e for e in clip.effects):
+                    continue
+                stored = (entry.get("params") or {}).get(row["name"], "")
+                value = str(parameter_value_at(stored, local) or "")
+                if row["picker"].path() != value:
+                    row["picker"].set_path(value)
+            elif kind == "font_param":
+                entry = row["entry"]
+                if not any(entry is e for e in clip.effects):
+                    continue
+                stored = (entry.get("params") or {}).get(row["name"], "")
+                value = str(parameter_value_at(stored, local) or "")
+                if row["picker"].family() != value:
+                    row["picker"].set_family(value)
             elif kind == "param":
                 entry = row["entry"]
                 if not any(entry is e for e in clip.effects):

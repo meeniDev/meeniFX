@@ -181,6 +181,50 @@ def set_points(path, values, closed=None):
     return data
 
 
+def split_segment(raw, segment_index, t):
+    """Insert an anchor at parameter ``t`` of one cubic segment without changing the curve.
+
+    De Casteljau gives the two halves exactly.  The previous point's outgoing handle and
+    the next point's incoming handle become the shortened control legs, while the new
+    anchor receives the meeting leg as its paired handles.  Returns ``(path, index)``;
+    ``index`` is -1 when the segment does not exist.
+    """
+    data = normalise(raw)
+    pts = data["points"]
+    count = len(pts) - 1 + (1 if data.get("closed") and len(pts) > 2 else 0)
+    segment_index = int(segment_index)
+    if not 0 <= segment_index < count or len(pts) < 2:
+        return data, -1
+    t = max(0.001, min(0.999, _number(t, 0.5)))
+    first = pts[segment_index]
+    next_index = (segment_index + 1) % len(pts)
+    second = pts[next_index]
+    p0 = (first["x"], first["y"])
+    c0 = (first["x"] + first["out"][0], first["y"] + first["out"][1])
+    c1 = (second["x"] + second["in"][0], second["y"] + second["in"][1])
+    p1 = (second["x"], second["y"])
+
+    def mix(a, b):
+        return _lerp(a[0], b[0], t), _lerp(a[1], b[1], t)
+
+    ab = mix(p0, c0)
+    bc = mix(c0, c1)
+    cd = mix(c1, p1)
+    abc = mix(ab, bc)
+    bcd = mix(bc, cd)
+    anchor = mix(abc, bcd)
+    first["out"] = [ab[0] - first["x"], ab[1] - first["y"]]
+    second["in"] = [cd[0] - second["x"], cd[1] - second["y"]]
+    new_point = point(anchor[0], anchor[1],
+                      in_handle=(abc[0] - anchor[0], abc[1] - anchor[1]),
+                      out_handle=(bcd[0] - anchor[0], bcd[1] - anchor[1]),
+                      smooth=True)
+    insert_at = segment_index + 1
+    pts.insert(insert_at, new_point)
+    data["points"] = pts
+    return normalise(data), insert_at
+
+
 def toggle_smooth(raw, index):
     data = normalise(raw)
     if not 0 <= int(index) < len(data["points"]):

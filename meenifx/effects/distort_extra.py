@@ -80,8 +80,8 @@ class DisplacementMapEffect(LayerEffect):
     PARAMS = (
         ParamSpec("map_source", "Map clip", "int", 0, 1000000000, 0, advanced=True,
                   help="Clip id used as the displacement map"),
-        ParamSpec("map_path", "Map image", "text", default="", advanced=True,
-                  help="Image file used when Map clip is 0"),
+        ParamSpec("map_path", "Map image", "media", default="", media_kind="image",
+                  advanced=True, help="Image file used when Map clip is 0"),
         ParamSpec("map_channel", "Map channel", "choice",
                   choices=("luma", "red", "green", "blue", "alpha"), default="luma",
                   choice_labels=("Luminance", "Red", "Green", "Blue", "Alpha")),

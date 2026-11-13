@@ -564,7 +564,8 @@ def bounds(spec, width, height, scale=1.0):
     lines, widths = layout["lines"], layout["widths"]
     ascent, descent = layout["ascent"], layout["descent"]
     line_height = layout["line_height"]
-    left, block_w, block_h, pad = layout["left"], layout["block_w"], layout["block_h"], layout["pad"]
+    left, top = layout["left"], layout["top"]
+    block_w, block_h, pad = layout["block_w"], layout["block_h"], layout["pad"]
     scratch = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
     boxes = []
     for index, line in enumerate(lines):

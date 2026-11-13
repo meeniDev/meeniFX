@@ -1,0 +1,12 @@
+{
+  "format": "mfxlook",
+  "version": 1,
+  "id": "vintage_computer",
+  "name": "Vintage Computer",
+  "description": "A curved CRT with warm phosphor and visible raster",
+  "stack": [
+    {"effect_id": "retro_crt", "params": {"scanlines": 46, "curvature": 32, "vignette": 38}},
+    {"effect_id": "tint", "params": {"shadow_color": "#3A2510", "highlight_color": "#FFE2B8", "strength": 26}},
+    {"effect_id": "film_grain", "params": {"amount": 9}}
+  ]
+}

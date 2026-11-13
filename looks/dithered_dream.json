@@ -1,0 +1,12 @@
+{
+  "format": "mfxlook",
+  "version": 1,
+  "id": "dithered_dream",
+  "name": "Dithered Dream",
+  "description": "Soft pastel diffusion with a dreamy bloom",
+  "stack": [
+    {"effect_id": "dither", "params": {"algorithm": "floyd_steinberg", "palette": "retro", "pixel_size": 2, "strength": 55, "contrast": 82}},
+    {"effect_id": "soft_bloom", "params": {"threshold": 62, "intensity": 32}},
+    {"effect_id": "tint", "params": {"shadow_color": "#3A2558", "highlight_color": "#E8D7FF", "strength": 28}}
+  ]
+}

@@ -9,9 +9,10 @@ import cv2
 import numpy as np
 from PyQt6.QtCore import QEvent, QObject, QPoint, QRunnable, Qt, QThreadPool, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QActionGroup, QKeySequence
-from PyQt6.QtWidgets import (QAbstractButton, QAbstractSpinBox, QDockWidget, QLineEdit, QMainWindow,
-                             QMessageBox, QProgressDialog, QPlainTextEdit, QStyle, QTextEdit,
-                             QToolBar)
+from PyQt6.QtWidgets import (QAbstractButton, QAbstractSpinBox, QDialog, QDialogButtonBox,
+                             QDockWidget, QDoubleSpinBox, QFormLayout, QLineEdit, QMainWindow,
+                             QMessageBox, QProgressDialog, QPlainTextEdit, QSpinBox, QStyle,
+                             QTextEdit, QToolBar)
 
 from ..audio.demo import ensure_demo_audio
 from ..audio.engine import AudioEngine
@@ -282,6 +283,7 @@ class MainWindow(QMainWindow):
         self.effects_panel.roto_cache_requested.connect(self._roto_cache_action)
         self.effects_panel.roto_outline_changed.connect(self._roto_set_outline)
         self.effects_panel.roto_brush_size_changed.connect(self._roto_set_brush_size)
+        self.effects_panel.generator_requested.connect(self.add_generator)
         self.effects_panel.effects_changed.connect(self._roto_parameters_changed)
         self.effects_panel.smart_key_requested.connect(self._smart_key_action)
         # Dedicated Roto Brush workspace above the picture. These are editing actions;
@@ -323,6 +325,8 @@ class MainWindow(QMainWindow):
             self.open_composition_clip)
         self.timeline_panel.canvas.composition_dropped.connect(
             self._composition_dropped)
+        self.timeline_panel.canvas.generator_dropped.connect(
+            lambda key, frame, track: self.add_generator(key, start=frame, track=track))
         # Selecting keys on a clip selects them in the Graph Editor; double-clicking one
         # (or "Open in Graph Editor") shows the curve there. Both read the shared
         # session keyframe selection, so the two views can never disagree.
@@ -423,7 +427,7 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator(); self._add_action(file_menu,"Preferences...",None,self.show_preferences)
         self._add_action(file_menu,"Exit","Alt+F4",self.close)
         edit=bar.addMenu("Edit")
-        self._add_action(edit,"Undo","Ctrl+Z",self.engine.session.undo); self._add_action(edit,"Redo","Ctrl+Y",self.engine.session.redo); edit.addSeparator()
+        self._add_action(edit,"Undo","Ctrl+Z",self.undo); self._add_action(edit,"Redo","Ctrl+Y",self.redo); edit.addSeparator()
         commands=(("Cut","Ctrl+X",self.engine.session.cut_selected),("Copy","Ctrl+C",self.engine.session.copy_selected),
             ("Paste","Ctrl+V",self.smart_paste.paste),("Duplicate","Ctrl+D",self.engine.session.duplicate_selected),
             ("Select All","Ctrl+A",self._select_all_focused),("Split at Playhead","C",self.engine.session.split_at_playhead),
@@ -457,6 +461,30 @@ class MainWindow(QMainWindow):
                          self.rename_current_composition)
         self._add_action(comp_menu, "Composition Settings...", None,
                          self.show_composition_settings)
+        comp_menu.addSeparator()
+        # Native temporal rendering controls: these are properties of the composition,
+        # not effects in a clip's stack. Track and clip overrides live in the timeline
+        # header menu and the Clip card respectively.
+        self.motion_blur_action = comp_menu.addAction("Motion Blur")
+        self.motion_blur_action.setCheckable(True)
+        self.motion_blur_action.setToolTip(
+            "Native sub-frame motion blur for this composition (master switch)")
+        self.motion_blur_action.toggled.connect(self._set_composition_motion_blur)
+        self._add_action(comp_menu, "Motion Blur Settings...", None,
+                         self.show_motion_blur_settings)
+        self.frame_blend_menu = comp_menu.addMenu("Frame Blending")
+        self.frame_blend_actions = {}
+        for mode, label in (("off", "Off"), ("mix", "Frame Mix"), ("flow", "Optical Flow")):
+            action = self.frame_blend_menu.addAction(label)
+            action.setCheckable(True)
+            action.setToolTip({"off": "Use the nearest source frame",
+                               "mix": "Blend adjacent source frames",
+                               "flow": "Synthesise intermediate frames with optical flow"}[mode])
+            action.triggered.connect(
+                lambda _=False, value=mode: self._set_composition_frame_blending(value))
+            self.frame_blend_actions[mode] = action
+        comp_menu.aboutToShow.connect(self._sync_temporal_actions)
+        self._sync_temporal_actions()
         comp_menu.addSeparator()
         self._open_comp_menu = comp_menu.addMenu("Open Composition")
         self._open_comp_menu.aboutToShow.connect(self._populate_open_composition_menu)
@@ -499,6 +527,8 @@ class MainWindow(QMainWindow):
         self.autokey_action=self._add_check_action(transformation_menu,"Auto-Keyframe","K",False,self._set_auto_key)
         self.motion_path_action=self._add_check_action(transformation_menu,"Show Motion Path","Ctrl+Shift+P",True,
                                                        self._set_motion_path)
+        self.show_transform_controls_action=self._add_check_action(
+            transformation_menu,"Show Clip Controls",None,True,self._set_preview_controls)
         self._add_action(transformation_menu,"Fit to Frame","Shift+F7",lambda:self.engine.session.fit_frame(sorted(self.engine.session.selected)))
         self._add_action(transformation_menu,"Fill Frame","Shift+F8",lambda:self.engine.session.fill_frame(sorted(self.engine.session.selected),self._clip_media_size))
         self._add_action(transformation_menu,"Center in Frame","Shift+F9",lambda:self.engine.session.center_in_frame(sorted(self.engine.session.selected)))
@@ -540,6 +570,11 @@ class MainWindow(QMainWindow):
         for kind in SHAPE.KINDS:
             self._add_action(shape_menu,SHAPE.LABELS[kind],None,
                              lambda k=kind:self.add_shape(k))
+        from ..model import generators as GENERATORS
+        generator_menu=add_menu.addMenu("Generator")
+        for key in GENERATORS.ORDER:
+            self._add_action(generator_menu, GENERATORS.label(key), None,
+                             lambda k=key:self.add_generator(k))
         text_menu=bar.addMenu("Text")
         self._add_action(text_menu,"Add Text Clip","Ctrl+T",self.add_text_clip)
         self._add_action(text_menu,"Add or Remove Text Keyframe at Playhead","Ctrl+Shift+T",
@@ -708,8 +743,8 @@ class MainWindow(QMainWindow):
         def icon_button(name,tip,callback):
             button=QToolButton(); button.setProperty("role","icon"); button.setIcon(icon(name)); button.setToolTip(tip)
             button.setFixedSize(tokens.CONTROL_H,tokens.CONTROL_H); button.clicked.connect(lambda _=False:callback()); toolbar.addWidget(button); return button
-        self.undo_button=icon_button("undo","Undo (Ctrl+Z)",self.engine.session.undo)
-        self.redo_button=icon_button("redo","Redo (Ctrl+Y)",self.engine.session.redo)
+        self.undo_button=icon_button("undo","Undo (Ctrl+Z)",self.undo)
+        self.redo_button=icon_button("redo","Redo (Ctrl+Y)",self.redo)
         self.qt_undo_stack.changed.connect(self._sync_undo_buttons); self._sync_undo_buttons()
         toolbar.addSeparator()
         def tool_button(name,icon_name,tip,mode):
@@ -763,7 +798,8 @@ class MainWindow(QMainWindow):
         self.pen_button.setToolTip("Pen tool (G): draw a shape, mask or motion path")
         self.pen_button.clicked.connect(lambda _=False:self._start_pen_tool())
         pen_picker=QMenu(self)
-        for _mode,_label in (("shape","Shape Path"),("mask","Mask Path"),("motion","Motion Path")):
+        for _mode,_label in (("shape","Draw Shape"),("mask","Draw Mask"),
+                             ("motion","Draw Motion Path")):
             pen_picker.addAction(_label,lambda _checked=False,m=_mode:self._start_pen_tool(m))
         self.pen_menu_button=QToolButton(); self.pen_menu_button.setProperty("role","icon")
         self.pen_menu_button.setIcon(icon("chevron_down")); self.pen_menu_button.setFixedSize(tokens.CONTROL_H-6,tokens.CONTROL_H)
@@ -791,6 +827,13 @@ class MainWindow(QMainWindow):
         self.path_button.setFixedSize(tokens.CONTROL_H,tokens.CONTROL_H)
         self.path_button.toggled.connect(self._set_motion_path)
         toolbar.addWidget(self.path_button)
+        self.transform_controls_button=QToolButton(); self.transform_controls_button.setProperty("role","icon")
+        self.transform_controls_button.setCheckable(True); self.transform_controls_button.setChecked(True)
+        self.transform_controls_button.setIcon(icon("transform"))
+        self.transform_controls_button.setToolTip("Show or hide clip controls in the preview")
+        self.transform_controls_button.setFixedSize(tokens.CONTROL_H,tokens.CONTROL_H)
+        self.transform_controls_button.toggled.connect(self._set_preview_controls)
+        toolbar.addWidget(self.transform_controls_button)
         self.autokey_button=QToolButton(); self.autokey_button.setProperty("role","icon"); self.autokey_button.setCheckable(True)
         self.autokey_button.setIcon(icon("auto_key"))
         self.autokey_button.setToolTip("Auto-Keyframe: changing an animated value at a new time creates a keyframe (K)")
@@ -806,7 +849,8 @@ class MainWindow(QMainWindow):
                     (self.transform_tool_button,"transform"),(self.puppet_tool_button,"puppet"),
                     (self.roto_tool_button,"key_mask"),(self.pen_button,"shape_polygon"),
                     (self.text_button,"text"),(self.captions_button,"captions"),(self.graph_button,"graph"),
-                    (self.path_button,"path"),(self.autokey_button,"auto_key")]
+                    (self.path_button,"path"),(self.transform_controls_button,"transform"),
+                    (self.autokey_button,"auto_key")]
         def refresh_icons(_toolbar):
             for button,name in icon_names: button.setIcon(icon(name))
             self.shape_button.setIcon(icon(SHAPE.ICONS.get(self._shape_kind,"shape_rectangle")))
@@ -815,9 +859,40 @@ class MainWindow(QMainWindow):
         from .themed import bind_theme
         bind_theme(toolbar,refresh_icons)
 
+    def undo(self):
+        """Undo the Pen draft while drawing, otherwise undo the session."""
+        from PyQt6.QtWidgets import QApplication
+        if self._is_text_entry(QApplication.focusWidget()):
+            return False
+        pen = getattr(self.overlay, "pen", None)
+        if self.overlay.mode == "pen" and pen is not None and pen.undo():
+            self._sync_undo_buttons()
+            return True
+        changed = self.engine.session.undo()
+        self._sync_undo_buttons()
+        return changed
+
+    def redo(self):
+        """Redo the Pen draft while drawing, otherwise redo the session."""
+        from PyQt6.QtWidgets import QApplication
+        if self._is_text_entry(QApplication.focusWidget()):
+            return False
+        pen = getattr(self.overlay, "pen", None)
+        if self.overlay.mode == "pen" and pen is not None and pen.redo():
+            self._sync_undo_buttons()
+            return True
+        changed = self.engine.session.redo()
+        self._sync_undo_buttons()
+        return changed
+
     def _sync_undo_buttons(self,*_):
         stack=self.qt_undo_stack
-        self.undo_button.setEnabled(bool(stack.can_undo)); self.redo_button.setEnabled(bool(stack.can_redo))
+        overlay=getattr(self,"overlay",None)
+        pen=getattr(overlay,"pen",None)
+        drafting=bool(pen is not None and getattr(overlay,"mode","")=="pen"
+                      and (pen.can_undo() or pen.can_redo()))
+        self.undo_button.setEnabled(drafting or bool(stack.can_undo))
+        self.redo_button.setEnabled(drafting or bool(stack.can_redo))
 
     def _bind_shortcuts(self):
         pass  # QAction shortcuts are ignored by Qt while a text editor has focus.
@@ -2590,6 +2665,70 @@ class MainWindow(QMainWindow):
             return nested
         return None
 
+    def _sync_temporal_actions(self):
+        timeline = self.engine.timeline
+        if getattr(self, "motion_blur_action", None) is not None:
+            self.motion_blur_action.blockSignals(True)
+            self.motion_blur_action.setChecked(bool(getattr(timeline, "motion_blur", False)))
+            self.motion_blur_action.blockSignals(False)
+        for mode, action in getattr(self, "frame_blend_actions", {}).items():
+            action.blockSignals(True)
+            action.setChecked(getattr(timeline, "frame_blending", "off") == mode)
+            action.blockSignals(False)
+
+    def _set_composition_motion_blur(self, enabled):
+        if self.engine.session.set_timeline_motion_blur(enabled=bool(enabled)):
+            self._invalidate_preview_cache()
+            self._refresh_panels()
+            self._request_preview()
+            self.timeline_panel.canvas.update()
+            self.bridge.status.emit("Composition motion blur " +
+                                    ("on" if enabled else "off"))
+
+    def _set_composition_frame_blending(self, mode):
+        if self.engine.session.set_timeline_frame_blending(str(mode)):
+            self._invalidate_preview_cache()
+            self._refresh_panels()
+            self._request_preview()
+            self.timeline_panel.canvas.update()
+            self.bridge.status.emit(f"Frame blending: {mode}")
+        self._sync_temporal_actions()
+
+    def show_motion_blur_settings(self):
+        """Shutter angle, phase and sample count for the current composition."""
+        timeline = self.engine.timeline
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Motion Blur Settings")
+        form = QFormLayout(dialog)
+        shutter = QDoubleSpinBox(dialog)
+        shutter.setRange(0.0, 360.0)
+        shutter.setDecimals(1)
+        shutter.setSuffix("\u00b0")
+        shutter.setValue(float(getattr(timeline, "motion_blur_shutter", 180.0)))
+        form.addRow("Shutter angle", shutter)
+        phase = QDoubleSpinBox(dialog)
+        phase.setRange(0.0, 359.9)
+        phase.setDecimals(1)
+        phase.setSuffix("\u00b0")
+        phase.setValue(float(getattr(timeline, "motion_blur_phase", 0.0)))
+        form.addRow("Shutter phase", phase)
+        samples = QSpinBox(dialog)
+        samples.setRange(2, 64)
+        samples.setValue(int(getattr(timeline, "motion_blur_samples", 8)))
+        form.addRow("Samples", samples)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                                   QDialogButtonBox.StandardButton.Cancel, parent=dialog)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            if self.engine.session.set_timeline_motion_blur(
+                    shutter=shutter.value(), phase=phase.value(), samples=samples.value()):
+                self._invalidate_preview_cache()
+                self._refresh_panels()
+                self._request_preview()
+                self.timeline_panel.canvas.update()
+
     def show_composition_settings(self):
         """Edit the open composition, or the one referenced by the selected clip."""
         target = self.editing_composition
@@ -2692,8 +2831,11 @@ class MainWindow(QMainWindow):
             return False
         self._set_overlay_mode("pen")
         self.preview_panel.view.setFocus()
-        label={"shape":"shape path","mask":"mask path","motion":"motion path"}.get(self._pen_mode,"path")
-        self.bridge.status.emit(f"Pen tool ({label}): click to add points, drag for curves, Esc finishes")
+        label={"shape":"shape","mask":"mask","motion":"motion path"}.get(self._pen_mode,"path")
+        self.bridge.status.emit(
+            f"Pen ({label}): click adds a corner, drag makes a curve, Shift constrains, "
+            "Alt breaks handles, Ctrl direct-selects, Enter finishes, Esc cancels")
+        self._sync_undo_buttons()
         return True
 
     def _start_shape_tool(self, kind="rectangle"):
@@ -2715,6 +2857,15 @@ class MainWindow(QMainWindow):
     def add_shape(self, kind="rectangle"):
         """Add a shape at its default size in the middle of the frame (Add menu)."""
         clip_id=self.engine.session.add_shape_clip(kind)
+        if clip_id is None:
+            return None
+        self._set_overlay_mode("transform")
+        self._refresh_panels(); self._request_preview()
+        return clip_id
+
+    def add_generator(self, kind="solid", start=None, track=None):
+        """Add a generated source clip and show its independent settings."""
+        clip_id=self.engine.session.add_generator_clip(kind, start=start, track=track)
         if clip_id is None:
             return None
         self._set_overlay_mode("transform")
@@ -2984,6 +3135,7 @@ class MainWindow(QMainWindow):
                             (getattr(self,"pen_button",None),"pen")):
             if button is not None:
                 button.blockSignals(True); button.setChecked(name==mode); button.blockSignals(False)
+        self._sync_undo_buttons()
         if mode=="puppet": self._ensure_puppet_effect()
         if mode=="roto":
             self._ensure_roto_effect()
@@ -3377,6 +3529,124 @@ class MainWindow(QMainWindow):
                     if item.get("effect_id")=="smart_key"),None)
         return clip,entry
 
+    def _smart_key_open_in_roto(self,clip,entry):
+        """Open an analysed legacy Smart Key cutout in the Roto Brush workspace.
+
+        The legacy effect and every parameter stay in the project. A Roto Brush effect is
+        inserted at the same stack position with a byte-for-byte copy of the Smart Key
+        cache, so the first render after migration is unchanged. Only a new Roto stroke
+        (or a later Roto analysis) changes the cutout.
+        """
+        from ..roto.cache import MaskCache, mask_key, mask_size
+
+        current=self.engine.timeline.find_clip(clip.id)
+        if current is None:
+            self.toast_message("The Smart Key clip is no longer in the timeline",kind="error")
+            return
+        existing=next((item for item in current.effects
+                       if item.get("effect_id")=="roto_brush"),None)
+        if existing is not None:
+            self.engine.session.set_selection({current.id})
+            self._set_overlay_mode("roto")
+            self.effects_panel.refresh_properties()
+            self._sync_roto_toolbar()
+            self.toast_message("This clip already has a Roto Brush effect",duration_ms=2400)
+            return
+        old_cache=MaskCache(scope="smart_key")
+        old_key=mask_key(entry)
+        frames=old_cache.frames(current,old_key)
+        expected=list(range(int(current.source_in),int(current.source_out)))
+        missing=sorted(set(expected)-set(frames))
+        if missing:
+            self.toast_message("Analyze every source frame of the legacy Smart Key clip "
+                               "before refining it in Roto Brush; its existing cutout is "
+                               "kept until then",kind="error",duration_ms=5200)
+            return
+        meta=old_cache.read_meta(current)
+        width,height=self.overlay.image_size(current)
+        size=tuple(int(value) for value in (meta.get("size") or mask_size(width,height))[:2])
+        try:
+            base=int((entry.get("analysis") or {}).get("seed",frames[0]))
+        except (TypeError,ValueError):
+            base=int(frames[0])
+        base=max(int(current.source_in),min(int(current.source_out)-1,base))
+        legacy_params=dict(entry.get("params") or {})
+        runtime=self.engine.runtime_effects.get("roto_brush")
+        params=dict(runtime.capture_params()) if runtime is not None else {}
+        # Only the shaping and analysis choices that Smart Key actually exposes are
+        # carried over. Roto's hidden compatibility seed stays off: the copied cache is
+        # the seed, and an empty cache must not silently redraw the subject differently.
+        for name in ("quality","smooth","feather","invert","choke","edge_contrast",
+                     "subject"):
+            if name in legacy_params:
+                params[name]=legacy_params[name]
+        params.update({"backend":"model","transparency":100.0,
+                       "matte_view":str(legacy_params.get("matte_view") or "composite"),
+                       "auto_seed":False,"decontaminate":0.0})
+        new_entry={"effect_id":"roto_brush","enabled":bool(entry.get("enabled",True)),
+                   "params":params,"strokes":[],"base_frame":int(base)}
+        point=entry.get("subject_point")
+        if point is not None:
+            new_entry["subject_point"]=point
+        new_key=mask_key(new_entry)
+        new_cache=MaskCache()
+        holder={}
+
+        def action():
+            target=self.engine.timeline.find_clip(current.id)
+            if target is None or target.track.locked:
+                return
+            legacy=next((item for item in target.effects
+                         if item is entry),None)
+            if legacy is None:
+                legacy=next((item for item in target.effects
+                             if item.get("effect_id")=="smart_key"),None)
+            if legacy is None:
+                return
+            position=target.effects.index(legacy)
+            copied=0
+            try:
+                new_cache.configure(target,new_key,size)
+                for frame in frames:
+                    matte=old_cache.load(target,int(frame),old_key)
+                    if matte is None:
+                        return
+                    new_cache.store(target,int(frame),matte,new_key,size)
+                    copied+=1
+                frozen=old_cache.frozen(target)
+                if frozen:
+                    new_cache.set_frozen(target,True)
+            except Exception:                              # noqa: BLE001 - keep old cutout
+                return
+            if copied != len(frames):
+                return
+            new_entry["cache"]={"key":new_key,"frames":copied,
+                                "frozen":bool(frozen),"scope":"roto_brush"}
+            new_entry["propagation"]={"base_frame":int(base),
+                                      "analysed":list(frames),
+                                      "range":[int(target.source_in),
+                                               int(target.source_out)-1]}
+            # Insert after the legacy node, then disable it. Effects that used to run
+            # after Smart Key still run after the replacement Roto Brush effect.
+            target.effects.insert(position+1,new_entry)
+            legacy["enabled"]=False
+            holder["ok"]=True
+
+        self.engine.session.stack.run("Refine Smart Key in Roto Brush",action)
+        if not holder.get("ok"):
+            self.toast_message("Could not open this legacy cutout in Roto Brush",
+                               kind="error",duration_ms=4200)
+            return
+        self.engine.session.set_selection({current.id})
+        self.engine.session.changed.emit()
+        self._invalidate_preview_cache()
+        self._request_preview()
+        self.effects_panel.refresh_properties()
+        self._set_overlay_mode("roto")
+        self._sync_roto_toolbar()
+        self.toast_message("Legacy Smart Key opened in Roto Brush. The current cutout is "
+                           "preserved until you paint a correction.",duration_ms=4200)
+
     def _smart_key_analyzer(self,clip,entry,frame=0):
         """A private automatic-segmentation instance for the background worker."""
         from ..effects.smart_key import SmartKeyEffect
@@ -3394,6 +3664,9 @@ class MainWindow(QMainWindow):
         clip,entry=self._smart_key_clip_entry()
         if clip is None or entry is None:
             self.toast_message("Select a clip with Smart Key first",kind="error")
+            return
+        if action=="roto":
+            self._smart_key_open_in_roto(clip,entry)
             return
         if action=="stop":
             worker=getattr(self,"_smart_key_worker",None)
@@ -3614,6 +3887,18 @@ class MainWindow(QMainWindow):
         action=getattr(self,"motion_path_action",None)
         if action is not None and action.isChecked()!=bool(on):
             action.blockSignals(True); action.setChecked(bool(on)); action.blockSignals(False)
+        self.preview_panel.view.update()
+
+    def _set_preview_controls(self, on):
+        """Show/hide preview handles without disabling normal clip selection or moving."""
+        on = bool(on)
+        self.overlay.show_transform_controls = on
+        for control in (getattr(self, "transform_controls_button", None),
+                        getattr(self, "show_transform_controls_action", None)):
+            if control is not None and control.isChecked() != on:
+                control.blockSignals(True)
+                control.setChecked(on)
+                control.blockSignals(False)
         self.preview_panel.view.update()
 
     def _activate_animation_editor(self, mode):

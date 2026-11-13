@@ -25,7 +25,7 @@ class ParamSpec:
 
     name: str
     label: str
-    kind: str = "int"           # int | float | bool | choice | text
+    kind: str = "int"           # int | float | bool | choice | text | media | font
     minimum: float = 0.0
     maximum: float = 1.0
     default: object = 0
@@ -49,6 +49,10 @@ class ParamSpec:
     # Empty means the parameter sits directly in the card; a group is only rendered when
     # the effect really declares members for it, so no card grows empty headings.
     group: str = ""
+    # Typed media parameters use the reusable asset picker.  "image" accepts still
+    # pictures; "lut" accepts .cube tables.  The stored value remains the path string,
+    # so rendering and old projects are unchanged.
+    media_kind: str = "image"
 
     def choice_items(self):
         """[(key, label)] for a choice parameter, labels falling back to a tidied key."""
@@ -80,7 +84,7 @@ class ParamSpec:
             text = str(value or "").strip().lower()
             match = next((key for key in keys if str(key).lower() == text), None)
             return match if match is not None else keys[0]
-        if self.kind == "text":
+        if self.kind in ("text", "media", "font"):
             return value
         try:
             number = float(value)

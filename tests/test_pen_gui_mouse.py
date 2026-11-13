@@ -18,7 +18,8 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QEvent, QPointF, Qt
+from PyQt6.QtGui import QMouseEvent
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
@@ -177,6 +178,32 @@ def test_qtest_drags_a_bezier_handle(qapp):
     assert point["out"][1] == pytest.approx(8.0, abs=1.5)
 
 
+def test_qtest_t_key_converts_a_smooth_point_to_a_corner_and_undoes(qapp):
+    engine = EditorEngine(30)
+    clip = shape_clip(engine)
+    mask_id = engine.session.add_clip_mask(
+        clip.id, [PATHS.point(120, 120, (0, 0), (40, 0), True),
+                  PATHS.point(260, 120), PATHS.point(260, 220)], closed=True)
+    view, overlay = preview(qapp, engine)
+    overlay.mode = "select"
+    click(view, 120, 120)
+    click(view, 120, 120)
+    assert 0 in overlay.pen.selected
+
+    QTest.keyClick(view, Qt.Key.Key_T)
+    pump(0.02)
+    point = PATHS.points(MASK.find(clip, mask_id)["path"])[0]
+    assert point["smooth"] is False
+    assert point["in"] == [0.0, 0.0] and point["out"] == [0.0, 0.0]
+
+    engine.session.undo()
+    pump(0.02)
+    restored_clip = engine.timeline.find_clip(clip.id)
+    restored = PATHS.points(MASK.find(restored_clip, mask_id)["path"])[0]
+    assert restored["smooth"] is True
+    assert restored["out"][0] == pytest.approx(40.0, abs=1.5)
+
+
 def test_qtest_moves_multiple_selected_points_together(qapp):
     engine = EditorEngine(30)
     clip = shape_clip(engine)
@@ -273,6 +300,166 @@ def test_qtest_tool_switch_and_escape_leave_the_pen(qapp):
     pump(0.02)
     assert overlay.mode == "select"
     assert not engine.timeline.all_clips()
+
+
+def test_qtest_insert_anchor_preserves_the_curve(qapp):
+    engine = EditorEngine(30)
+    clip = shape_clip(engine)
+    mask_id = engine.session.add_clip_mask(
+        clip.id, [PATHS.point(120, 120, (0, 0), (80, -30), True),
+                  PATHS.point(300, 140, (0, 0), (-40, 90), True),
+                  PATHS.point(260, 280, (-30, -30), (0, 0), True)],
+        closed=True)
+    view, overlay = preview(qapp, engine)
+    overlay.mode = "select"
+    click(view, 120, 120)
+    click(view, 120, 120)
+    stored_before = PATHS.sampled(MASK.find(clip, mask_id)["path"], steps=64)
+    before_count = len(PATHS.points(MASK.find(clip, mask_id)["path"]))
+
+    # Insert on the curve between the first two anchors, not on a straight chord.
+    t = 0.35
+    project_path = MASK.project_path(clip, MASK.find(clip, mask_id), 0,
+                                    engine.session.project_size)
+    p0, c0, c1, p1 = PATHS.segments(project_path)[0]
+    mt = 1.0 - t
+    point = (mt ** 3 * p0[0] + 3 * mt * mt * t * c0[0]
+             + 3 * mt * t * t * c1[0] + t ** 3 * p1[0],
+             mt ** 3 * p0[1] + 3 * mt * mt * t * c0[1]
+             + 3 * mt * t * t * c1[1] + t ** 3 * p1[1])
+    click(view, *point)
+    after = MASK.find(clip, mask_id)["path"]
+    assert len(PATHS.points(after)) == before_count + 1
+    stored_after = PATHS.sampled(after, steps=64)
+    # Sampling redistributes parameters but not geometry: every point on one sampled
+    # curve must lie close to the other, otherwise the insertion cornered the segment.
+    def nearest(point, samples):
+        return min(abs(point[0] - other[0]) + abs(point[1] - other[1])
+                   for other in samples)
+    assert max(nearest(point, stored_after) for point in stored_before) < 2.5
+    assert max(nearest(point, stored_before) for point in stored_after) < 2.5
+
+
+
+def test_qtest_shift_constrains_new_points_and_anchor_moves(qapp):
+    engine = EditorEngine(30)
+    clip = shape_clip(engine)
+    mask_id = engine.session.add_clip_mask(
+        clip.id, [(120, 120), (300, 120), (300, 220)], closed=True)
+    view, overlay = preview(qapp, engine)
+    overlay.mode = "select"
+    click(view, 120, 120)
+    click(view, 120, 120)
+    click(view, 300, 120)
+    click(view, 300, 220, Qt.KeyboardModifier.ShiftModifier)
+    drag(view, (300, 120), (330, 150), modifier=Qt.KeyboardModifier.ShiftModifier)
+    moved = project_points(engine, clip, mask_id)
+    assert abs((moved[1][0] - 300) - (moved[1][1] - 120)) < 1.2
+    assert abs((moved[2][0] - 300) - (moved[2][1] - 220)) < 1.2
+
+    # A fresh shape path also honours Shift while placing a point.
+    engine2 = EditorEngine(30)
+    view2, overlay2 = preview(qapp, engine2)
+    assert overlay2.pen.set_mode("shape")
+    click(view2, 200, 200)
+    click(view2, 350, 340, Qt.KeyboardModifier.ShiftModifier)
+    points = PATHS.points(overlay2.pen.path)
+    dx = points[1]["x"] - 200
+    dy = points[1]["y"] - 200
+    assert dx > 0 and dy > 0
+    assert abs(dx - dy) < 0.7, "Shift did not snap the new point to 45 degrees"
+
+
+
+def test_qtest_alt_breaks_paired_handles_and_ctrl_direct_selects(qapp):
+    engine = EditorEngine(30)
+    clip = shape_clip(engine)
+    mask_id = engine.session.add_clip_mask(
+        clip.id, [PATHS.point(140, 140, (-40, 0), (40, 0), True),
+                  PATHS.point(320, 140), PATHS.point(320, 260)], closed=True)
+    view, overlay = preview(qapp, engine)
+    overlay.mode = "select"
+    click(view, 140, 140)
+    click(view, 140, 140)
+    before_count = len(PATHS.points(MASK.find(clip, mask_id)["path"]))
+    click(view, 560, 300, Qt.KeyboardModifier.ControlModifier)
+    assert len(PATHS.points(overlay.pen.path)) == before_count, \
+        "Ctrl-click must not insert another anchor"
+    assert not overlay.pen.selected
+
+    # Alt-dragging the outgoing handle breaks the pair; the incoming handle stays put.
+    # QTest.mouseMove has no modifier argument, so hold Alt as a real key for the drag.
+    QTest.keyPress(view, Qt.Key.Key_Alt)
+    press(view, 180, 140, modifier=Qt.KeyboardModifier.AltModifier)
+    position = widget_point(view, 200, 170)
+    QApplication.sendEvent(view, QMouseEvent(
+        QEvent.Type.MouseMove, QPointF(position), QPointF(view.mapToGlobal(position)),
+        Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.AltModifier))
+    pump(0.01)
+    release(view, 200, 170)
+    QTest.keyRelease(view, Qt.Key.Key_Alt)
+    pump(0.01)
+    point = PATHS.points(MASK.find(clip, mask_id)["path"])[0]
+    assert point["smooth"] is False
+    assert point["out"][0] == pytest.approx(60.0, abs=2.0)
+    assert point["out"][1] == pytest.approx(30.0, abs=2.0)
+    assert point["in"] == pytest.approx([-40.0, 0.0], abs=0.5)
+
+
+
+def test_qtest_pen_draft_undo_redo_is_one_step_per_gesture(qapp):
+    engine = EditorEngine(30)
+    view, overlay = preview(qapp, engine)
+    assert overlay.pen.set_mode("shape")
+    click(view, 100, 100)
+    press(view, 240, 180)
+    move(view, 300, 120)
+    release(view, 300, 120)
+    assert len(PATHS.points(overlay.pen.path)) == 2
+    # Two complete gestures (a click and a click-drag) produced exactly two drafts.
+    assert len(overlay.pen._history) == 2
+    assert overlay.pen.undo()
+    assert len(PATHS.points(overlay.pen.path)) == 1
+    assert overlay.pen.redo()
+    assert len(PATHS.points(overlay.pen.path)) == 2
+
+
+def test_qtest_edits_a_transformed_custom_shape_path_with_undo(qapp):
+    engine = EditorEngine(30)
+    engine.source_width, engine.source_height = 640, 360
+    engine.session.project_size = (640, 360)
+    clip_id = engine.session.add_path_shape_clip(
+        [PATHS.point(140, 100, (0, 0), (70, 20), True),
+         PATHS.point(360, 120, (0, 0), (-40, 80), True),
+         PATHS.point(320, 260, (-40, -20), (0, 0), True)], closed=True)
+    clip = engine.timeline.find_clip(clip_id)
+    T.set_channel(clip, "position_x", 35.0)
+    T.set_channel(clip, "position_y", -18.0)
+    T.set_channel(clip, "rotation", 12.0)
+    T.set_channel(clip, "scale_x", 118.0)
+    T.set_channel(clip, "scale_y", 118.0)
+    engine.session.set_selection({clip_id})
+
+    view, overlay = preview(qapp, engine)
+    matrix = overlay.matrix(clip)
+    project_before = PATHS.transform(PATHS.at(clip.shape["path"], 0), matrix)
+    start = project_before["points"][0]
+    click(view, start["x"], start["y"])
+    assert overlay.mode == "pen"
+    assert overlay.pen._editing_shape == clip_id
+
+    drag(view, (start["x"], start["y"]), (start["x"] + 24, start["y"] + 14))
+    project_after = PATHS.transform(
+        PATHS.at(engine.timeline.find_clip(clip_id).shape["path"], 0), matrix)
+    moved = project_after["points"][0]
+    assert moved["x"] == pytest.approx(start["x"] + 24, abs=1.5)
+    assert moved["y"] == pytest.approx(start["y"] + 14, abs=1.5)
+
+    engine.session.undo()
+    restored = PATHS.transform(
+        PATHS.at(engine.timeline.find_clip(clip_id).shape["path"], 0), matrix)
+    assert restored["points"][0]["x"] == pytest.approx(start["x"], abs=1.5)
 
 
 def test_layer_masks_follow_transforms_and_legacy_masks_stay_fixed():

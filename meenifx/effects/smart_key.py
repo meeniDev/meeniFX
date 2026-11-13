@@ -19,7 +19,7 @@ from ..model.values import Value
 from ..roto import (MaskCache, finish_matte, mask_key, mask_size, model_status,
                     segment_subject)
 from ..roto.segment import quality_settings
-from .base import LayerEffect, ParamSpec
+from .base import LayerEffect, ParamSpec, param_number
 
 PREVIEWS = ("composite", "isolated", "alpha")
 PREVIEW_LABELS = ("Composite", "Isolated", "Matte")
@@ -51,6 +51,9 @@ class SmartKeyEffect(LayerEffect):
                   help="Smooth the matte before its edge is shaped"),
         ParamSpec("feather", "Feather", "float", 0.0, 40.0, 1.5, step=0.5, unit=" px",
                   pixels=True, help="Soften the finished matte edge"),
+        ParamSpec("invert", "Invert Matte", "bool", default=False,
+                  help="Swap subject and background after shaping; legacy projects keep "
+                       "their saved value"),
         ParamSpec("choke", "Expand / Shrink", "float", -30.0, 30.0, 0.0, step=0.5,
                   unit=" px", pixels=True,
                   help="Positive expands the matte outward; negative shrinks it inward"),
@@ -68,6 +71,7 @@ class SmartKeyEffect(LayerEffect):
         self.quality = Value("balanced")
         self.smooth = Value(1.0)
         self.feather = Value(1.5)
+        self.invert = Value(False)
         self.choke = Value(0.0)
         self.matte_view = Value("composite")
         self.edge_contrast = Value(25.0)
@@ -251,6 +255,8 @@ class SmartKeyEffect(LayerEffect):
             "choke": float(self.choke.get()),
             "edge_contrast": float(self.edge_contrast.get()),
         }, scale=max(0.05, float(self.param_scale)))
+        if bool(param_number(self.invert, self.local_frame)):
+            shaped = 1.0 - np.clip(shaped, 0.0, 1.0)
         matte = np.zeros((height, width), np.float32)
         matte[y0:y1, x0:x1] = cv2.resize(shaped, (x1 - x0, y1 - y0),
                                          interpolation=cv2.INTER_LINEAR)

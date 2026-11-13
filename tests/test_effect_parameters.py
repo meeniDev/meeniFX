@@ -171,7 +171,13 @@ CONTEXT_SWITCHES = {("gaussian_blur", "keep_edges"), ("motion_blur", "follow_mot
     ("hue_saturation", "preserve_luma"),
     ("hue_saturation", "colorize_saturation"),
     ("matte_choker", "close_holes"), ("light_wrap", "quality"),
-    ("gradient_ramp", "center_y"), ("displacement_map", "map_source")}
+    ("gradient_ramp", "center_y"), ("displacement_map", "map_source"),
+    # Custom with no characters deliberately falls back to the ASCII preset; the
+    # dedicated ASCII tests exercise custom sets and every real preset.
+    ("ascii", "preset"),
+    # The synthetic audit frame is not a keyed green screen. tests/test_smart_key.py
+    # measures legacy invert against an actual alpha matte.
+    ("smart_key", "invert")}
 
 
 def roto_frame(width=320, height=180):
@@ -265,6 +271,9 @@ def _missing_backend_reason(effect_id, name, engine):
 def _prepared_base(effect_id, name, params):
     """Parameters that must be open for a test value to be reachable."""
     base = dict(params)
+    if effect_id == "lens_warp" and name == "edge":
+        # Pinching near the boundary actually exercises out-of-frame sampling.
+        base.update(amount=-100, radius=100)
     if name == "palette_text":
         base["color_mode"] = "palette"
     if effect_id == "hand_tracker":
@@ -292,6 +301,10 @@ def _prepared_base(effect_id, name, params):
         base["region_effect_2"] = "invert"
     elif name == "region_amount_3":
         base["region_effect_3"] = "invert"
+    if effect_id == "ascii" and name == "background_mode":
+        # Transparent is composited over black in this audit; make the solid choice a
+        # contrasting white so the test measures the background, not the alpha mode.
+        base["background_color"] = "#FFFFFF"
     if effect_id == "motion_blur":
         # A still clip has no measured movement, so the shutter has nothing to smear:
         # give the effect an explicit manual smear to work with.
@@ -336,6 +349,8 @@ def test_numeric_parameter_extremes_change_the_output(effect_id, spec, monkeypat
     base = _prepared_base(effect_id, spec.name, _base_params(engine, effect_id))
     low = spec.minimum
     high = spec.maximum
+    if effect_id == "page_curl" and spec.name == "angle":
+        low, high = 0, 90  # -180 and +180 are the same orientation.
     if spec.name == "palette_text":
         low, high = "#ff0000", "#00ff00"
     image_low = render(engine, clip, effect_id, {**base, spec.name: low})
@@ -362,7 +377,7 @@ def test_toggle_parameter_changes_the_output(effect_id, spec, monkeypatch):
 
 
 @pytest.mark.parametrize("effect_id,spec", CHOICE_CASES, ids=[f"{k}.{s.name}" for k, s in CHOICE_CASES])
-def test_choice_parameter_changes_the_output(effect_id, spec, monkeypatch):
+def test_choice_parameter_changes_the_output(effect_id, spec, monkeypatch, tmp_path):
     if effect_id in MODEL_ONLY_EFFECTS:
         pytest.skip("requires the optional subject model; covered by tests/test_smart_key.py")
     if (effect_id, spec.name) in CONTEXT_SWITCHES:
@@ -374,6 +389,21 @@ def test_choice_parameter_changes_the_output(effect_id, spec, monkeypatch):
     if reason:
         pytest.skip(reason)
     base = _prepared_base(effect_id, spec.name, _base_params(engine, effect_id))
+    if effect_id == "page_curl" and spec.name == "back_texture":
+        import cv2
+        path = tmp_path / "back.png"
+        cv2.imwrite(str(path), np.full((180, 320, 3), (40, 170, 230), np.uint8))
+        base["back_path"] = str(path)
+    if spec.name == "backend" and effect_id in ("lens_warp", "page_curl"):
+        from meenifx.processing.shaders import ShaderUnavailable
+        cpu = render(engine, clip, effect_id, {**base, "backend": "cpu"})
+        try:
+            gpu = render(engine, clip, effect_id, {**base, "backend": "gpu"})
+        except ShaderUnavailable as exc:
+            assert str(exc), "Unsupported GPU must report an error"
+        else:
+            assert frame_diff(cpu, gpu) < .2, "Backend selection must preserve the picture"
+        return
     images = [render(engine, clip, effect_id, {**base, spec.name: choice}) for choice in spec.choices]
     for index in range(1, len(images)):
         assert frame_diff(images[0], images[index]) > 0.2, (
@@ -384,8 +414,8 @@ def test_choice_parameter_changes_the_output(effect_id, spec, monkeypatch):
 def test_text_parameter_changes_the_output(monkeypatch):
     engine, clip = _engine_for("ascii", monkeypatch)
     base = _base_params(engine, "ascii")
-    plain = render(engine, clip, "ascii", {**base, "charset": ""})
-    hashes = render(engine, clip, "ascii", {**base, "charset": "#"})
+    plain = render(engine, clip, "ascii", {**base, "preset": "custom", "charset": ""})
+    hashes = render(engine, clip, "ascii", {**base, "preset": "custom", "charset": "#"})
     assert frame_diff(plain, hashes) > 0.2, "the character set is ignored"
 
 

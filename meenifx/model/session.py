@@ -2229,6 +2229,92 @@ class TimelineSession:
         self.apply_to_clips([clip_id], "Blend mode", lambda c: setattr(c, "blend", key))
         return True
 
+    def set_clip_temporal(self, clip_id, key, value):
+        """Set a clip's motion-blur / frame-blending override (one undo step)."""
+        if key not in ("motion_blur", "frame_blend"):
+            return False
+        clip = self.timeline.find_clip(clip_id)
+        if clip is None:
+            return False
+        if key == "motion_blur" and value not in (True, False, None):
+            return False
+        if key == "frame_blend" and value not in (None, "off", "mix", "flow"):
+            return False
+        if clip.temporal.get(key) == value:
+            return False
+
+        def action():
+            target = self.timeline.find_clip(clip_id)
+            if target is not None and not target.track.locked:
+                target.temporal[key] = value
+
+        self.stack.run("Clip motion blur" if key == "motion_blur" else "Clip frame blending",
+                       action)
+        self.changed.emit()
+        return True
+
+    def set_track_temporal(self, track_id, key, value):
+        """Set the default motion blur or frame blending for one track."""
+        if key not in ("motion_blur", "frame_blend"):
+            return False
+        track = next((t for t in self.timeline.tracks if t.id == track_id), None)
+        if track is None:
+            return False
+        if key == "motion_blur" and value not in (True, False, None):
+            return False
+        if key == "frame_blend" and value not in (None, "off", "mix", "flow"):
+            return False
+        if getattr(track, key) == value:
+            return False
+
+        def action():
+            target = next((t for t in self.timeline.tracks if t.id == track_id), None)
+            if target is not None:
+                setattr(target, key, value)
+
+        self.stack.run("Track motion blur" if key == "motion_blur" else "Track frame blending",
+                       action)
+        self.changed.emit()
+        return True
+
+    def set_timeline_motion_blur(self, enabled=None, shutter=None, phase=None, samples=None):
+        """Composition-level native motion blur controls (one undo step)."""
+        changes = {}
+        if enabled is not None:
+            changes["motion_blur"] = bool(enabled)
+        if shutter is not None:
+            changes["motion_blur_shutter"] = max(0.0, min(360.0, float(shutter)))
+        if phase is not None:
+            changes["motion_blur_phase"] = float(phase) % 360.0
+        if samples is not None:
+            changes["motion_blur_samples"] = max(2, min(64, int(round(float(samples)))))
+        if not changes or all(getattr(self.timeline, key) == value
+                              for key, value in changes.items()):
+            return False
+
+        def action():
+            for key, value in changes.items():
+                setattr(self.timeline, key, value)
+
+        label = "Composition motion blur"
+        self.stack.run(label, action)
+        self.changed.emit()
+        return True
+
+    def set_timeline_frame_blending(self, mode):
+        """Composition-level frame blending: off, mix or flow."""
+        if mode not in ("off", "mix", "flow"):
+            return False
+        if self.timeline.frame_blending == mode:
+            return False
+
+        def action():
+            self.timeline.frame_blending = mode
+
+        self.stack.run("Composition frame blending", action)
+        self.changed.emit()
+        return True
+
     def add_adjustment_clip(self, start=None, duration=None, track=None):
         """Create an adjustment layer on a video track and select it.
 
@@ -2354,6 +2440,50 @@ class TimelineSession:
         self.set_selection({clip.id})
         self.reveal_requested.emit(clip.timeline_start)
         self.status.emit(f"{SHAPE.LABELS.get(kind, 'Shape')} added")
+        return clip.id
+
+    def add_generator_clip(self, generator="solid", start=None, duration=None, track=None):
+        """Create a rendered, editable generator source on a video track.
+
+        It is a generated-layer clip (``shape.kind == "generator"``), not an effect and
+        not a placeholder that needs imported footage.  Move, trim, split, duplicate,
+        effects, masks, undo, save/reopen and export use the ordinary clip machinery.
+        """
+        from . import generators as GENERATORS
+        from . import shape as SHAPE
+        from . import transform as T
+
+        key = GENERATORS.normalise(generator)
+        tl = self.timeline
+        start = max(0, int(self.playhead if start is None else start))
+        duration = max(1, int(duration if duration is not None else round(tl.fps * 5)))
+        settings = SHAPE.blank("generator", generator=key)
+        transform = T.default_transform()
+        holder = {}
+
+        def free_track():
+            for lane in tl.tracks_of_type("video"):
+                busy = any(not (clip.end <= start or clip.timeline_start >= start + duration)
+                           for clip in lane.clips)
+                if not busy and not lane.locked:
+                    return lane
+            return tl.add_track("video")
+
+        def action():
+            target = track
+            if target is None or target.type != "video":
+                target = free_track()
+            holder["clip"] = tl.new_clip(
+                name=GENERATORS.label(key), source_path="", track=target,
+                start=start, duration=duration, transform=transform, shape=settings)
+
+        self.stack.run(f"Add {GENERATORS.label(key)}", action)
+        clip = holder.get("clip")
+        if clip is None:
+            return None
+        self.set_selection({clip.id})
+        self.reveal_requested.emit(clip.timeline_start)
+        self.status.emit(f"{GENERATORS.label(key)} clip added")
         return clip.id
 
     def add_path_shape_clip(self, points, closed=True, start=None, duration=None,
@@ -2483,6 +2613,26 @@ class TimelineSession:
         self.changed.emit()
         return True
 
+    def set_shape_path(self, clip_id, path, frame=None):
+        """Commit a Pen edit to a custom shape path as one undoable operation."""
+        from . import shape as SHAPE
+        holder = {"changed": False}
+
+        def action():
+            clip = self._find_clip(clip_id)
+            if clip is None or not getattr(clip, "is_shape", False):
+                return
+            local = (int(frame) if frame is not None
+                     else max(0, int(self.playhead) - int(clip.timeline_start)))
+            SHAPE.set_path(clip, path, local)
+            holder["changed"] = True
+
+        self.stack.run("Edit shape path", action)
+        if holder["changed"]:
+            self.status.emit("Shape path updated")
+            self.changed.emit()
+        return holder["changed"]
+
     def set_clip_mask_path(self, clip_id, mask_id, path, frame=None):
         """Commit a path edited in the preview back to its mask."""
         from . import mask as MASK
@@ -2564,7 +2714,8 @@ class TimelineSession:
         self.stack.run("Remove mask", action)
         return holder["removed"]
 
-    def set_clip_matte(self, clip_id, source_id=0, mode="alpha", enabled=None):
+    def set_clip_matte(self, clip_id, source_id=0, mode="alpha", enabled=None,
+                       invert=None):
         from . import matte as MATTE
 
         def action():
@@ -2575,9 +2726,23 @@ class TimelineSession:
             settings["source_id"] = max(0, int(source_id or 0))
             settings["mode"] = mode if mode in MATTE.MODES else "alpha"
             settings["enabled"] = bool(source_id) if enabled is None else bool(enabled)
+            if invert is not None:
+                settings["invert"] = bool(invert)
 
         self.stack.run("Set matte", action)
         self.status.emit("Matte source updated")
+
+    def set_clip_alpha_invert(self, clip_id, invert):
+        """Invert the clip's finished alpha (after masks/matte, before opacity)."""
+        from . import alpha as ALPHA
+
+        def action():
+            clip = self._find_clip(clip_id)
+            if clip is not None:
+                ALPHA.set_inverted(clip, bool(invert))
+
+        self.stack.run("Invert clip alpha", action)
+        self.status.emit("Clip alpha inversion updated")
 
     def set_motion_path(self, clip_id, points, closed=False, enabled=True):
         """Attach a center-relative motion path to a clip (undoable)."""

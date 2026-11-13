@@ -31,6 +31,7 @@ ICONS = {
     "star": "shape_star",
     "line": "shape_line",
     "path": "shape_polygon",
+    "generator": "sparkles",
 }
 
 LABELS = {
@@ -41,6 +42,7 @@ LABELS = {
     "star": "Star",
     "line": "Line",
     "path": "Custom Path",
+    "generator": "Generator",
 }
 
 DEFAULTS = {
@@ -110,10 +112,19 @@ SPECS = {
 }
 
 
-def blank(kind="rectangle"):
-    """A fresh settings dict for a new shape clip."""
+def blank(kind="rectangle", generator=None):
+    """A fresh settings dict for a new shape clip.
+
+    ``kind="generator"`` makes a full-frame generated source clip; ``generator`` picks
+    which of the five definitions it starts from.
+    """
     data = copy.deepcopy(DEFAULTS)
-    if kind in KINDS:
+    if kind == "generator":
+        from . import generators as GENERATORS
+        data["kind"] = "generator"
+        data["generator"] = GENERATORS.normalise(generator)
+        GENERATORS.ensure(data, data["generator"])
+    elif kind in KINDS:
         data["kind"] = kind
     return data
 
@@ -141,6 +152,9 @@ def ensure_shape(clip):
                 converted = {int(frame): str(colour) for frame, colour in keys.items()}
                 if converted != keys:
                     stored["keys"] = converted
+    if data.get("kind") == "generator":
+        from . import generators as GENERATORS
+        GENERATORS.ensure(data, data.get("generator"))
     return data
 
 
@@ -638,6 +652,30 @@ def resolve(clip, frame):
     data = ensure_shape(clip)
     frame = int(frame)
     kind = str(data.get("kind") or "rectangle")
+    if kind == "generator":
+        from . import generators as GENERATORS
+        spec = {
+            "kind": "generator",
+            "generator": GENERATORS.resolve(data, frame),
+            "fill_color": "#000000",
+            "stroke_color": "#000000",
+            "stroke_enabled": False,
+            "gradient_enabled": False,
+            "gradient_type": "linear",
+            "gradient_stops": [],
+            "stroke_join": "miter",
+            "path": {"points": [], "closed": False},
+            "align": "center",
+            "cap": "butt",
+            "arrow_start": False,
+            "arrow_end": False,
+        }
+        for name in NUMERIC:
+            spec[name] = float(value_at(clip, name, frame) or 0.0)
+        spec.update({"fill_opacity": 0.0, "stroke_opacity": 0.0,
+                     "width": float(spec.get("width") or 1.0),
+                     "height": float(spec.get("height") or 1.0)})
+        return spec
     spec = {
         "kind": kind if kind in KINDS else "rectangle",
         "fill_color": color_at(clip, "fill_color", frame),
@@ -672,6 +710,30 @@ def resolve(clip, frame):
     spec["sides"] = max(3.0, min(24.0, spec["sides"]))
     spec["points"] = max(3.0, min(24.0, spec["points"]))
     return spec
+
+
+def set_path(clip, path, frame=None):
+    """Write an edited custom-shape path, keeping its existing path keyframes.
+
+    A keyed shape path stores the current pose like a mask: editing at the playhead
+    updates that frame's key and leaves the other poses alone. Without keys the path is
+    simply replaced.
+    """
+    data = ensure_shape(clip)
+    current = PATHS.normalise(data.get("path") or {})
+    edited = PATHS.normalise(path)
+    if frame is None or not PATHS.key_frames(current):
+        data["path"] = edited
+        return data["path"]
+    template = current if PATHS.points(current) else edited
+    result = PATHS.normalise({"points": template.get("points") or [],
+                              "closed": bool(template.get("closed")),
+                              "keys": current.get("keys") or {}})
+    result = PATHS.set_key(result, int(frame),
+                           {"points": edited.get("points") or [],
+                            "closed": bool(edited.get("closed"))})
+    data["path"] = result
+    return result
 
 
 def clone_settings(source, target):

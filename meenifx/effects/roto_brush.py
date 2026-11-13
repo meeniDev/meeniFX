@@ -67,6 +67,9 @@ class RotoBrushEffect(LayerEffect):
                   help="Smooth the matte before its edge is shaped"),
         ParamSpec("feather", "Feather", "float", 0.0, 40.0, 1.5, step=0.5, unit=" px",
                   pixels=True, group="Matte", help="Soften the finished matte edge"),
+        ParamSpec("invert", "Invert Matte", "bool", default=False, group="Matte",
+                  help="Swap subject and background after smoothing, feather and choke; "
+                       "used once, so it cannot double-invert"),
         ParamSpec("choke", "Expand / Shrink", "float", -30.0, 30.0, 0.0, step=0.5,
                   unit=" px", pixels=True, group="Matte",
                   help="Positive expands the matte outward; negative shrinks it inward"),
@@ -96,6 +99,7 @@ class RotoBrushEffect(LayerEffect):
         self.quality = Value("balanced")
         self.smooth = Value(1.0)
         self.feather = Value(1.5)
+        self.invert = Value(False)
         self.choke = Value(0.0)
         self.edge_contrast = Value(35.0)
         self.decontaminate = Value(0.0)
@@ -368,6 +372,8 @@ class RotoBrushEffect(LayerEffect):
             "edge_contrast": float(param_number(self.edge_contrast, self.local_frame)),
         }
         shaped = finish_matte(raw, settings, scale=max(0.05, float(self.param_scale)))
+        if bool(param_number(self.invert, self.local_frame)):
+            shaped = 1.0 - np.clip(shaped, 0.0, 1.0)
         matte = np.zeros((height, width), np.float32)
         matte[y0:y1, x0:x1] = cv2.resize(shaped, (x1 - x0, y1 - y0),
                                          interpolation=cv2.INTER_LINEAR)

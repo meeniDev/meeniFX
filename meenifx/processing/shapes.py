@@ -509,8 +509,11 @@ def bounds(spec, project_w, project_h):
     """(x, y, width, height) of the shape's visible geometry in project pixels.
 
     A custom path is measured from its sampled Bezier geometry, not from the primitive
-    width/height box, so the preview's selection box follows the drawn path.
+    width/height box, so the preview's selection box follows the drawn path.  A
+    generated source fills the frame, so its editable box is the whole canvas.
     """
+    if str(spec.get("kind") or "") == "generator":
+        return 0.0, 0.0, max(1.0, float(project_w)), max(1.0, float(project_h))
     if str(spec.get("kind") or "") == "path":
         path = spec.get("path") or {}
         values = PATHS.sampled(path, steps=20)
@@ -602,6 +605,10 @@ def render(spec, width, height, scale=1.0, crop=None):
     """
     width, height = max(1, int(width)), max(1, int(height))
     view_x, view_y, canvas_w, canvas_h = _view(width, height, crop)
+    if spec is not None and str(spec.get("kind") or "") == "generator":
+        from . import generators as GENERATOR_RENDER
+        return GENERATOR_RENDER.render_crop(spec.get("generator") or {}, width, height,
+                                            (view_x, view_y, canvas_w, canvas_h))
     canvas = np.zeros((canvas_h, canvas_w, 4), dtype=np.uint8)
     if spec is None:
         return canvas

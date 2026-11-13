@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
+
 from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QBrush, QColor, QPainterPath, QPen, QPolygonF
 
@@ -95,6 +97,7 @@ class PreviewOverlay:
         self.engine = engine
         self.session = session
         self.enabled = True
+        self.show_transform_controls = True
         self.show_motion_path = True
         self.show_mesh = False
         self.mode = "select"          # select | transform | puppet | roto | corner | mesh | shape
@@ -406,6 +409,31 @@ class PreviewOverlay:
                 previous = current
         return None if best is None else best[1]
 
+    def _shape_path_hit(self, clip, pos):
+        """Whether the pointer is on a custom shape's visible outline."""
+        from ..model import mask as MASK
+        from ..model import path as PATHS
+        from ..model import shape as SHAPE
+
+        if clip is None or not getattr(clip, "is_shape", False):
+            return False
+        data = SHAPE.ensure_shape(clip)
+        if str(data.get("kind") or "") != "path":
+            return False
+        path = PATHS.at(data.get("path") or {}, self.local_frame(clip))
+        matrix = self.matrix(clip)
+        if matrix is not None:
+            path = PATHS.transform(path, np.asarray(matrix, dtype=np.float64))
+        if len(PATHS.points(path)) < 2:
+            return False
+        previous = None
+        for x, y in PATHS.sampled(path, steps=24):
+            current = self.to_widget(x, y)
+            if previous is not None and _segment_distance(pos, previous, current) <= HIT * 1.5:
+                return True
+            previous = current
+        return False
+
     def _pin_at(self, clip):
         """(effect_entry, pin) under the pointer, for puppet warp."""
         entry = self._effect_entry(clip, "puppet_warp")
@@ -419,7 +447,8 @@ class PreviewOverlay:
         if inverse is None:
             return None, None
         width, height = self.image_size(clip)
-        nx, ny = inverse[0] / width, inverse[1] / height
+        nx = inverse[0] / max(1.0, width - 1.0)
+        ny = inverse[1] / max(1.0, height - 1.0)
         frame = self.local_frame(clip)
         best, best_distance = None, None
         for pin in entry.get("pins") or ():
@@ -511,7 +540,7 @@ class PreviewOverlay:
         if inverse is None:
             return None, None
         width, height = self.image_size(clip)
-        nx, ny = inverse[0] / width, inverse[1] / height
+        nx, ny = inverse[0] / max(1, width - 1), inverse[1] / max(1, height - 1)
         frame = self.local_frame(clip)
         for index, (corner_x, corner_y) in enumerate((
                 ("corner_tl_x", "corner_tl_y"), ("corner_tr_x", "corner_tr_y"),
@@ -786,6 +815,10 @@ class PreviewOverlay:
             self.pen.paint(painter)
             self._paint_guides(painter)
             return
+        if not self.show_transform_controls:
+            if self._shape_draft is not None:
+                self._paint_shape_draft(painter)
+            return
         for clip in self.video_clips():
             self._paint_clip(painter, clip)
         self.pen.paint_masks(painter)
@@ -969,6 +1002,14 @@ class PreviewOverlay:
 
     def _paint_warps(self, painter, clip):
         frame = self.local_frame(clip)
+        lens = self.lens_handles(clip)
+        if lens:
+            painter.save()
+            painter.setPen(QPen(QColor(tokens.COLORS["accent"]), 1.5))
+            for point in lens.values():
+                painter.drawEllipse(point, 5., 5.)
+            painter.drawLine(lens["center"], lens["radius"])
+            painter.restore()
         puppet = self._effect_entry(clip, "puppet_warp")
         if puppet is not None:
             painter.save()
@@ -1033,7 +1074,8 @@ class PreviewOverlay:
                 nx = self.param(clip, "corner_pin", cx_name, frame)
                 ny = self.param(clip, "corner_pin", cy_name, frame)
                 width, height = self.image_size(clip)
-                project = T.forward((nx * width, ny * height), self.state(clip),
+                project = T.forward((nx * max(0, width - 1), ny * max(0, height - 1)),
+                                    self.state(clip),
                                     self.project_size(), (width, height))
                 point = self.to_widget(*project)
                 size = 6.0 if index == self._selected_corner else 4.5
@@ -1119,7 +1161,12 @@ class PreviewOverlay:
             self.widget.update()
             return True
         clip = self.primary()
-        if clip is not None and self.mode in ("select", "transform"):
+        if clip is not None and not clip.track.locked and self.mode in ("select", "transform"):
+            if self._shape_path_hit(clip, pos) and self.pen.edit_shape(clip.id):
+                if callable(self.on_mode_change):
+                    self.on_mode_change("pen")
+                self.widget.update()
+                return True
             mask_id = self._mask_at(clip, pos)
             if mask_id is not None:
                 self.session.select_clip_mask(clip.id, mask_id)
@@ -1128,10 +1175,16 @@ class PreviewOverlay:
                         self.on_mode_change("pen")
                     self.widget.update()
                     return True
+        if clip is not None and not clip.track.locked and self.mode in ("select", "transform"):
+            for name, point in self.lens_handles(clip).items():
+                if (point - pos).manhattanLength() <= HIT * 1.6:
+                    self.session.begin_gesture()
+                    self._drag = {"kind": "lens", "clip": clip, "handle": name}
+                    return True
         # Warp handles win over the transform handles: corner-pin corners and mesh
         # nodes sit exactly on the box corners and centre, where the box handles would
         # otherwise swallow every click on them.
-        if clip is not None and self.mode in ("corner", "transform"):
+        if clip is not None and not clip.track.locked and self.mode in ("corner", "transform"):
             node = self._mesh_node_at(clip)
             if node is not None:
                 row, col, _nx, _ny = node
@@ -1139,7 +1192,28 @@ class PreviewOverlay:
                 self._drag = {"kind": "mesh", "clip": clip, "row": row, "col": col}
                 self.widget.update()
                 return True
-        if clip is not None and self.mode in ("corner", "transform"):
+        if clip is not None and not clip.track.locked and self.mode in ("select", "corner", "transform"):
+            # Alt-dragging a frame corner is the direct perspective gesture. This must
+            # be resolved before _begin_transform, which otherwise treats Alt as a
+            # centre scale and consumes the press. The normal (unmodified) corner drag
+            # still falls through to the established scale handler below.
+            if event.modifiers() & Qt.KeyboardModifier.AltModifier:
+                corners = self.clip_corners(clip)
+                corner_points = [self.to_widget(*point) for point in corners]
+                corner_index = min(range(4), key=lambda i:
+                                   (corner_points[i] - pos).manhattanLength())
+                if (corner_points[corner_index] - pos).manhattanLength() <= HIT * 2.0:
+                    # Snapshot before creating the effect: an Alt drag on a clip with no
+                    # Corner Pin must undo to the original clip, not to an empty effect.
+                    self.session.begin_gesture()
+                    if self._effect_entry(clip, "corner_pin") is None:
+                        clip.effects.append({"effect_id": "corner_pin", "enabled": True,
+                                             "params": {}})
+                    self._selected_corner = corner_index
+                    self._drag = {"kind": "corner", "clip": clip,
+                                  "index": corner_index}
+                    self.widget.update()
+                    return True
             index, _point = self._corner_at(clip)
             if index is not None:
                 self._selected_corner = index
@@ -1147,9 +1221,28 @@ class PreviewOverlay:
                 self._drag = {"kind": "corner", "clip": clip, "index": index}
                 self.widget.update()
                 return True
+        if not self.show_transform_controls:
+            hit = self._clip_at(pos)
+            if hit is not None:
+                if hit.id not in self.session.selected:
+                    self.session.set_selection({hit.id}, expand=True)
+                # Locked tracks remain selectable, but preview dragging must not start.
+                if hit.track.locked:
+                    self.widget.update()
+                    return True
+                clips = [item for item in (self.video_clips() or [hit])
+                         if not item.track.locked]
+                self.session.begin_gesture()
+                starts = [(item, T.evaluate(item, self.local_frame(item))) for item in clips]
+                self._drag = {"kind": "move", "clips": starts, "origin": self.to_project(pos),
+                              "moved": False}
+            else:
+                self.session.set_selection(set(), expand=False)
+            self.widget.update()
+            return True
         if clip is not None and self.mode in ("transform", "select", "puppet", "corner"):
             handle = self._handle_at_priority(clip, pos)
-            if handle is not None:
+            if handle is not None and not clip.track.locked:
                 return self._begin_transform(clip, handle, pos, event.modifiers())
         if self.mode in ("puppet", "transform"):
             hit_entry, pin = self._pin_at(clip) if clip is not None else (None, None)
@@ -1201,6 +1294,9 @@ class PreviewOverlay:
                 self.session.set_selection(ids, expand=False)
             elif hit.id not in self.session.selected:
                 self.session.set_selection({hit.id}, expand=True)
+            if hit.track.locked:
+                self.widget.update()
+                return True
             self._selected_path_key = None
             self._selected_pin = None
             self._selected_corner = None
@@ -1325,6 +1421,14 @@ class PreviewOverlay:
         if self.mode == "pen":
             return self.pen.move(event)
         drag = self._drag
+        if (drag is not None and drag.get("kind") == "scale"
+                and drag.get("handle") in ("nw", "ne", "se", "sw")
+                and event.modifiers() & Qt.KeyboardModifier.AltModifier):
+            # Alt can be pressed after the mouse went down. Cancel the scale gesture
+            # (restoring its pre-drag snapshot) and continue as a corner-pin gesture.
+            # The corner starts where it was, and follows the pointer's subsequent
+            # delta, so switching modifiers does not make the picture jump.
+            drag = self._scale_to_corner_drag(drag, pos)
         if drag is not None and drag.get("kind") == "roto":
             clip = drag.get("clip")
             point = self.roto_picture_point(pos)
@@ -1348,6 +1452,10 @@ class PreviewOverlay:
             if self.mode in ("shape", "roto"):
                 self._hover = None
                 self.widget.setCursor(Qt.CursorShape.CrossCursor)
+                return False
+            if not self.show_transform_controls:
+                self._hover = None
+                self.widget.setCursor(Qt.CursorShape.ArrowCursor)
                 return False
             clip = self.primary()
             self._hover = self._handle_at_priority(clip, pos) if clip is not None else None
@@ -1427,6 +1535,10 @@ class PreviewOverlay:
             self._write_position(drag["clip"], state.position_x + dx, state.position_y + dy)
             self._notify()
             return True
+        if kind == "lens":
+            self._lens_drag(drag, pos)
+            self._notify()
+            return True
         if kind == "scale":
             self._scale_drag(drag, pos, ctrl=precise, shift=shift, alt=alt)
             self._notify()
@@ -1456,6 +1568,41 @@ class PreviewOverlay:
     def _write(self, clip, channel, value):
         CH.set_value(clip, channel, value, self.local_frame(clip),
                      bool(self.session.auto_keyframe.get()))
+
+    def lens_handles(self, clip):
+        entry = self._effect_entry(clip, "lens_warp")
+        if entry is None or not entry.get("enabled", True):
+            return {}
+        width, height = self.image_size(clip)
+        frame = self.local_frame(clip)
+        cx = self.param(clip, "lens_warp", "center_x", frame, 50) * (width - 1) / 100
+        cy = self.param(clip, "lens_warp", "center_y", frame, 50) * (height - 1) / 100
+        radius = self.param(clip, "lens_warp", "radius", frame, 45) * min(width, height) / 100
+        aspect = self.param(clip, "lens_warp", "aspect", frame, 1)
+        return {name: self.to_widget(*T.forward(point, self.state(clip), self.project_size(),
+                                              (width, height)))
+                for name, point in (("center", (cx, cy)), ("radius", (cx + radius * aspect, cy)))}
+
+    def _lens_drag(self, drag, pos):
+        clip = drag["clip"]
+        project = self.to_project(pos)
+        if project is None:
+            return
+        width, height = self.image_size(clip)
+        point = T.invert(project, self.state(clip), self.project_size(), (width, height))
+        if point is None:
+            return
+        if drag["handle"] == "center":
+            for name, value in (("center_x", point[0] * 100 / max(1, width - 1)),
+                                ("center_y", point[1] * 100 / max(1, height - 1))):
+                self._write(clip, CH.effect_channel("lens_warp", name), max(0, min(100, value)))
+        else:
+            frame = self.local_frame(clip)
+            cx = self.param(clip, "lens_warp", "center_x", frame, 50) * (width - 1) / 100
+            cy = self.param(clip, "lens_warp", "center_y", frame, 50) * (height - 1) / 100
+            aspect = max(.25, self.param(clip, "lens_warp", "aspect", frame, 1))
+            radius = math.hypot((point[0] - cx) / aspect, point[1] - cy) * 100 / max(1, min(width, height))
+            self._write(clip, CH.effect_channel("lens_warp", "radius"), max(1, min(150, radius)))
 
     def _write_position(self, clip, x, y):
         frame = self.local_frame(clip)
@@ -1624,21 +1771,64 @@ class PreviewOverlay:
             self.session.status.emit(
                 f"Keyframed {count} puppet pin{'s' if count != 1 else ''} at frame {frame}")
 
+    def _corner_project(self, clip, index):
+        """The project-space position of one Corner Pin corner."""
+        names = (("corner_tl_x", "corner_tl_y"), ("corner_tr_x", "corner_tr_y"),
+                 ("corner_br_x", "corner_br_y"), ("corner_bl_x", "corner_bl_y"))[index]
+        frame = self.local_frame(clip)
+        width, height = self.image_size(clip)
+        nx = self.param(clip, "corner_pin", names[0], frame, 0.0 if index in (0, 3) else 1.0)
+        ny = self.param(clip, "corner_pin", names[1], frame, 0.0 if index in (0, 1) else 1.0)
+        return T.forward((nx * max(0, width - 1), ny * max(0, height - 1)),
+                         self.state(clip), self.project_size(), (width, height))
+
+    def _scale_to_corner_drag(self, drag, pos):
+        """Turn an in-progress corner scale into a no-jump Corner Pin drag."""
+        handle_index = {"nw": 0, "ne": 1, "se": 2, "sw": 3}.get(drag.get("handle"))
+        if handle_index is None:
+            return drag
+        clip_id = drag["clip"].id
+        self.session.cancel_gesture()
+        clip = self.engine.timeline.find_clip(clip_id)
+        if clip is None or clip.track.locked:
+            self._drag = None
+            return None
+        project = self.to_project(pos)
+        if project is None:
+            self._drag = None
+            return None
+        self.session.begin_gesture()
+        if self._effect_entry(clip, "corner_pin") is None:
+            clip.effects.append({"effect_id": "corner_pin", "enabled": True,
+                                 "params": {}})
+        corner = self._corner_project(clip, handle_index)
+        self._selected_corner = handle_index
+        self._drag = {"kind": "corner", "clip": clip, "index": handle_index,
+                      "origin": project, "start_corner": corner}
+        self.widget.update()
+        return self._drag
+
     def _corner_drag(self, drag, pos):
         clip, index = drag["clip"], drag["index"]
         project = self.to_project(pos)
         if project is None:
             return
+        target = project
+        if drag.get("start_corner") is not None and drag.get("origin") is not None:
+            target = (drag["start_corner"][0] + project[0] - drag["origin"][0],
+                      drag["start_corner"][1] + project[1] - drag["origin"][1])
         width, height = self.image_size(clip)
-        source = T.invert(project, self.state(clip), self.project_size(), (width, height))
+        source = T.invert(target, self.state(clip), self.project_size(), (width, height))
         if source is None:
             return
         names = (("corner_tl_x", "corner_tl_y"), ("corner_tr_x", "corner_tr_y"),
                  ("corner_br_x", "corner_br_y"), ("corner_bl_x", "corner_bl_y"))[index]
         frame = self.local_frame(clip)
         auto = bool(self.session.auto_keyframe.get())
-        CH.set_value(clip, CH.effect_channel("corner_pin", names[0]), source[0] / width, frame, auto)
-        CH.set_value(clip, CH.effect_channel("corner_pin", names[1]), source[1] / height, frame, auto)
+        CH.set_value(clip, CH.effect_channel("corner_pin", names[0]),
+                     source[0] / max(1, width - 1), frame, auto)
+        CH.set_value(clip, CH.effect_channel("corner_pin", names[1]),
+                     source[1] / max(1, height - 1), frame, auto)
 
     def _mesh_drag(self, drag, pos):
         clip, row, col = drag["clip"], drag["row"], drag["col"]
@@ -1780,7 +1970,7 @@ class PreviewOverlay:
         self._knob_pinned = False
         labels = {"move": "Move clip", "scale": "Scale clip", "rotate": "Rotate clip",
                   "anchor": "Move anchor point", "pin": "Move puppet pin",
-                  "corner": "Move corner pin", "mesh": "Move mesh node",
+                  "corner": "Move corner pin", "mesh": "Move mesh node", "lens": "Adjust Lens Warp",
                   "path_point": "Move motion path point",
                   "path_handle": "Adjust motion path", "roto": "Roto Brush stroke"}
         self.session.commit_gesture(labels.get(drag.get("kind"), "Edit transform"))
@@ -1793,7 +1983,8 @@ class PreviewOverlay:
     def cancel_shape(self):
         """Escape while drawing: drop the draft and leave the shape tool."""
         if self.mode == "pen":
-            return self.pen.cancel(finish=True)
+            # The preview's Pen branch owns Escape: finish is Enter/V, Escape cancels.
+            return False
         if self._shape_draft is None and self.mode != "shape":
             return False
         self._shape_draft = None

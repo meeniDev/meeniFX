@@ -1,4 +1,4 @@
-"""The browser contract: three tabs, double-click apply/remove, instance choice, styles.
+"""The browser contract: four tabs, double-click apply/remove, instance choice, styles.
 
 Thumbnail rendering itself is covered by test_thumbnails.py; this file drives the parts a
 person touches, without a MainWindow, so it stays fast.
@@ -9,15 +9,16 @@ import time
 
 import pytest
 from PyQt6.QtCore import QSettings
-from PyQt6.QtWidgets import QFrame
+from PyQt6.QtWidgets import QFrame, QMenu
 
 from conftest import build_engine
 from meenifx import thumbnails as THUMBS
+from meenifx import tokens
 from meenifx.effects import categories as EFFECTS_META
 from meenifx.icons import icon
 from meenifx.model import looks as LOOKS
 from meenifx.ui.panels import EffectsPanel
-from meenifx.ui.browser import LIST_H
+from meenifx.ui.browser import LEGACY_SOURCE_EFFECTS, LIST_H
 
 
 @pytest.fixture
@@ -45,12 +46,16 @@ def effects_of(engine, clip):
 
 
 # ----------------------------------------------------------------------- tabs
-def test_the_browser_has_effects_animations_and_styles_tabs(panel_and_clip):
+def test_the_browser_has_effects_animations_generators_and_styles_tabs(panel_and_clip):
     panel, _engine, _clip = panel_and_clip
     browser = panel.browser
     assert [browser.tabs.tabText(index) for index in range(browser.tabs.count())] == \
-        ["Effects", "Animations", "Styles"]
-    assert "mosaic" in cards(panel)
+        ["Effects", "Animations", "Generators", "Styles"]
+    effect_ids = set(cards(panel))
+    assert "mosaic" in effect_ids
+    assert not effect_ids & LEGACY_SOURCE_EFFECTS, (
+        "Roto Brush, Smart Key and source-style generators must not be effect cards")
+    assert "chroma_key" in effect_ids
 
     browser.tabs.setCurrentIndex(1)
     assert browser.tab == "animations"
@@ -59,6 +64,11 @@ def test_the_browser_has_effects_animations_and_styles_tabs(panel_and_clip):
     assert "Looks" not in {card.item["subtitle"] for card in browser._cards}
 
     browser.tabs.setCurrentIndex(2)
+    assert browser.tab == "generators"
+    assert {card.item["id"] for card in browser._cards} == {
+        "solid", "gradient", "checkerboard", "fractal_noise", "grid"}
+
+    browser.tabs.setCurrentIndex(3)
     assert browser.tab == "styles"
     assert len(browser._cards) >= 10
     assert all(card.item["kind"] == "style" for card in browser._cards)
@@ -385,16 +395,61 @@ def test_the_chosen_view_and_sort_are_remembered(panel_and_clip, tmp_path):
     browser.set_sort_mode("category")
 
 
-def test_selection_explains_keyframes_adjustment_and_experimental_state(panel_and_clip):
+def test_selection_strip_stays_compact_with_capabilities_in_tooltip(panel_and_clip):
     panel, _engine, _clip = panel_and_clip
     browser = panel.browser
     browser._card_selected(cards(panel)["posterize_time"].item)
     text = browser.info.text()
-    assert "Time & Motion" in text
-    assert "Keyframes: Yes" in text and "Adjustment: Yes" in text
+    assert text == "Posterize Time · Time & Motion"
+    assert "Keyframes:" not in text and "Adjustment:" not in text
+    assert "—" not in text and "hold" not in text.lower()
     assert "Experimental" not in text
     browser._card_selected(cards(panel)["face_tracker"].item)
-    assert "Experimental" in browser.info.text()
+    assert "Experimental" not in browser.info.text()
+    assert "Experimental: Yes" in cards(panel)["face_tracker"].toolTip()
+
+
+def test_generator_cards_render_real_source_previews(panel_and_clip):
+    panel, _engine, _clip = panel_and_clip
+    browser = panel.browser
+    browser.tabs.setCurrentIndex(2)
+    assert len(browser._cards) == 5
+    for card in browser._cards:
+        assert card.item["kind"] == "generator"
+        pixmap = card.thumb.pixmap()
+        assert pixmap is not None and not pixmap.isNull(), card.item["id"]
+        image = pixmap.toImage()
+        assert image.width() > 1 and image.height() > 1
+        assert image.pixelColor(image.width() // 2, image.height() // 2).alpha() > 0, \
+            card.item["id"]
+
+
+def test_shader_expansion_effects_are_in_the_effects_browser(panel_and_clip):
+    panel, _engine, _clip = panel_and_clip
+    browser = panel.browser
+    by_id = {card.item["id"]: card.item for card in browser._cards}
+    assert {"heat_haze", "ripple", "pixel_stretch", "light_rays"} <= set(by_id)
+    assert by_id["heat_haze"]["section"] == "Distortion"
+    assert by_id["ripple"]["section"] == "Distortion"
+
+
+def test_effect_context_menu_tracks_the_light_palette(panel_and_clip, qapp):
+    from meenifx.theme import configure_theme
+    from meenifx.ui.panels import _theme_context_menu
+
+    panel, _engine, _clip = panel_and_clip
+    previous = tokens.theme_name()
+    menu = QMenu(panel)
+    _theme_context_menu(menu)
+    try:
+        configure_theme(qapp, "light")
+        assert "background-color: #FFFFFF" in menu.styleSheet()
+        assert "color: #333A40" in menu.styleSheet()
+        configure_theme(qapp, "dark")
+        assert "background-color: #353C3F" in menu.styleSheet()
+    finally:
+        configure_theme(qapp, previous or "light")
+        menu.deleteLater()
 
 
 def test_multiple_selected_clips_receive_the_same_compatible_effect(panel_and_clip):

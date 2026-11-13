@@ -54,6 +54,7 @@ PRESETS = {
         "intensity": 160.0, "radius": 18.0, "threshold": 0.0, "softness": 100.0,
         "saturation": 100.0, "bloom": 0.0, "glow_r": 255, "glow_g": 255,
         "glow_b": 255, "opacity": 100.0, "blend": "screen", "quality": 2,
+        "placement": "outside",
     }),
 }
 
@@ -128,6 +129,11 @@ class GlowEffect(LayerEffect):
                   help="How the halo is mixed with the picture"),
         ParamSpec("quality", "Quality", "int", 1, 4, 2,
                   help="Blur passes: more is smoother on wide glows and slower"),
+        ParamSpec("placement", "Glow placement", "choice", default="both",
+                  choices=("both", "inside", "outside"),
+                  choice_labels=("Inside and outside", "Inside", "Outside"),
+                  help="Choose whether the halo stays inside the text or image edge, extends "
+                       "outward, or does both"),
     )
 
     def __init__(self, app):
@@ -144,6 +150,7 @@ class GlowEffect(LayerEffect):
         self.opacity = Value(100.0)
         self.blend = Value("screen")
         self.quality = Value(2)
+        self.placement = Value("both")
 
     def apply_layer(self, layer):
         frame = self.local_frame
@@ -229,6 +236,11 @@ class GlowEffect(LayerEffect):
         colour = np.array([float(self.glow_b.get()), float(self.glow_g.get()),
                            float(self.glow_r.get())], dtype=np.float32) / 255.0
         light = blurred * colour * intensity * gain
+        placement = str(self.placement.get())
+        if placement == "outside":
+            light *= (1.0 - alpha)[:, :, None]
+        elif placement == "inside":
+            light *= alpha[:, :, None]
         weight = opacity
         mode = str(self.blend.get())
         if mode == "add":
@@ -242,6 +254,10 @@ class GlowEffect(LayerEffect):
         # Screen the alpha too. Adding it would make overlapping halo and source
         # coverage exceed 1 and flatten the soft edge into a hard white fringe.
         glow_alpha = np.clip(glow_mask * opacity, 0.0, 1.0)
+        if placement == "outside":
+            glow_alpha *= 1.0 - alpha
+        elif placement == "inside":
+            glow_alpha *= alpha
         out_alpha = 1.0 - (1.0 - alpha) * (1.0 - glow_alpha)
         out = np.empty_like(data)
         out[:, :, :3] = np.clip(out_rgb, 0.0, 255.0)

@@ -16,7 +16,8 @@ from PyQt6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLa
 from .. import tokens
 from ..audio import processed_waveform
 from ..audio.waveform import envelope
-from ..constants import COMPOSITION_MIME, EFFECT_MIME, MEDIA_MIME, PRESET_MIME
+from ..constants import (COMPOSITION_MIME, EFFECT_MIME, GENERATOR_MIME, MEDIA_MIME,
+                         PRESET_MIME)
 from ..icons import icon
 from ..model import animation as ANIM
 from ..model import channels as CH
@@ -156,6 +157,8 @@ class TimelineCanvas(QWidget):
     composition_open_requested = pyqtSignal(object)
     # A composition dragged from the Project panel becomes one nested clip.
     composition_dropped = pyqtSignal(list, int, object)
+    # A source generator dragged from the Generators tab: key, start frame, lane.
+    generator_dropped = pyqtSignal(str, int, object)
 
     HEADER_W = 156
     TOP_H = 0           # the old "Timeline | timecode" row is gone; the timecode lives in the preview
@@ -3866,6 +3869,25 @@ class TimelineCanvas(QWidget):
             height_menu.addAction(label, lambda _=False, v=value: self.set_track_height(v))
         height_menu.addSeparator()
         height_menu.addAction("Reset Track Height", self.reset_track_heights)
+        if track.type == "video":
+            motion_menu = menu.addMenu("Motion Blur")
+            for label, value in (("Inherit from composition", None), ("On", True), ("Off", False)):
+                action = motion_menu.addAction(label)
+                action.setCheckable(True)
+                action.setChecked(getattr(track, "motion_blur", None) is value
+                                  or getattr(track, "motion_blur", None) == value)
+                action.triggered.connect(
+                    lambda _=False, v=value: self.session.set_track_temporal(
+                        track.id, "motion_blur", v))
+            blend_menu = menu.addMenu("Frame Blending")
+            for label, value in (("Inherit from composition", None), ("Off", "off"),
+                                 ("Frame Mix", "mix"), ("Optical Flow", "flow")):
+                action = blend_menu.addAction(label)
+                action.setCheckable(True)
+                action.setChecked(getattr(track, "frame_blend", None) == value)
+                action.triggered.connect(
+                    lambda _=False, v=value: self.session.set_track_temporal(
+                        track.id, "frame_blend", v))
         menu.addSeparator()
         if track.type == "video":
             toggle = menu.addAction("Hidden", lambda: self._toggle_header_action(track, "visible"))
@@ -3939,7 +3961,8 @@ class TimelineCanvas(QWidget):
             self._update_media_drop(event)
             event.acceptProposedAction()
             return
-        if mime.hasFormat(EFFECT_MIME) or mime.hasFormat(PRESET_MIME) or mime.hasUrls():
+        if (mime.hasFormat(EFFECT_MIME) or mime.hasFormat(PRESET_MIME)
+                or mime.hasFormat(GENERATOR_MIME) or mime.hasUrls()):
             self._drop_highlight = True
             self.update()
             event.acceptProposedAction()
@@ -3959,6 +3982,10 @@ class TimelineCanvas(QWidget):
             return
         if mime.hasFormat(EFFECT_MIME) or mime.hasFormat(PRESET_MIME):
             self._fx_drop_highlight = self._clip_at(event.position().x(), event.position().y())[1]
+            self.update()
+            event.acceptProposedAction()
+            return
+        if mime.hasFormat(GENERATOR_MIME):
             self.update()
             event.acceptProposedAction()
             return
@@ -3987,6 +4014,21 @@ class TimelineCanvas(QWidget):
                 event.ignore()
                 return
             self.media_dropped.emit(media_ids, frame, track)
+            event.acceptProposedAction()
+            return
+        if mime.hasFormat(GENERATOR_MIME):
+            key = bytes(mime.data(GENERATOR_MIME)).decode("utf-8").strip()
+            self._drop_highlight = False
+            self.update()
+            if not key:
+                event.ignore()
+                return
+            if track is not None and (track.locked or track.type != "video"):
+                reason = "locked" if track.locked else "an audio track"
+                self.session.status.emit(f"{track.name} is {reason} - nothing was inserted")
+                event.ignore()
+                return
+            self.generator_dropped.emit(key, int(frame), track)
             event.acceptProposedAction()
             return
         if mime.hasFormat(COMPOSITION_MIME):

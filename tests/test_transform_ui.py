@@ -263,6 +263,40 @@ def test_inspector_shows_transform_values_and_edits_them(editor):
     assert abs(field.value() - 30.0) < 0.01
 
 
+def test_preview_controls_can_be_hidden_without_disabling_clip_moves(editor):
+    window = editor
+    clip = window.engine.timeline.all_clips()[0]
+    window._set_overlay_mode("transform")
+    window.show_transform_controls_action.setChecked(False)
+    pump(0.05)
+    assert not window.overlay.show_transform_controls
+    assert not window.transform_controls_button.isChecked()
+
+    view = window.preview_panel.view
+    start = window.overlay.to_widget(300, 170)
+    drag(view, start, QPointF(start.x() + 24, start.y() + 10))
+    moved = window.engine.timeline.find_clip(clip.id)
+    assert abs(T.evaluate(moved, 0).position_x) > 1.0
+    window.show_transform_controls_action.setChecked(True)
+    assert window.overlay.show_transform_controls
+    assert window.transform_controls_button.isChecked()
+
+
+def test_locked_track_clip_cannot_be_moved_in_hidden_controls_mode(editor):
+    window = editor
+    clip = window.engine.timeline.all_clips()[0]
+    clip.track.locked = True
+    window._set_overlay_mode("transform")
+    window._set_preview_controls(False)
+    before = T.evaluate(clip, 0)
+    view = window.preview_panel.view
+    start = window.overlay.to_widget(300, 170)
+    drag(view, start, QPointF(start.x() + 30, start.y() + 18))
+    after = T.evaluate(window.engine.timeline.find_clip(clip.id), 0)
+    assert after.position_x == pytest.approx(before.position_x)
+    assert after.position_y == pytest.approx(before.position_y)
+
+
 def test_diamond_adds_and_removes_a_keyframe(editor):
     window = editor
     clip = window.engine.timeline.all_clips()[0]
