@@ -64,6 +64,9 @@ Windows 10 or 11, 64-bit. The installed application does not require Python.
 
 The detailed reference lives in [docs/FEATURES.md](docs/FEATURES.md).
 
+Development work also includes [Page Curl, Lens Warp and a reusable shader backend](docs/SHADER_PHASE1.md),
+with matching CPU fallbacks. This does not publish a new installer.
+
 ## A look inside
 
 ### Text and editable motion

@@ -132,3 +132,21 @@ python tools/capture_text_workspace.py
 The script uses a temporary project and isolated layout/font preferences. On Windows
 it uses the native Qt platform so font previews match the application. It writes three
 PNG files under `docs/design/` and closes the test window without saving user state.
+
+## Shader effects
+
+`assets/shaders/` contains only allowlisted, shipped GLSL; `processing/shaders.py` owns
+ModernGL context creation and resources on one dedicated worker. `effects/shader_effects.py`
+and `effects/page_curl.py` expose the existing parameter/keyframe interface and matching
+CPU algorithms. Never accept arbitrary downloaded shaders through this backend.
+
+Run `python tools/benchmark_shaders.py` for actual compilation, upload/readback, processing
+and Python allocation measurements. `python tools/shader_probe.py` checks the native GL
+path. A standalone frozen ShaderProbe was also built and run on Windows; this is separate
+from a full installer smoke test. `packaging/build_windows.py --skip-installer` builds the
+application and portable ZIP without publishing a release.
+
+The test runner gives every module a private QSettings/config profile, preserving the
+running editor's preferences. Import tests generate their own video-only fixture, so a
+clean worktree does not need an ignored developer video. Optional hand model fixtures can
+be supplied via `MEENIFX_HAND_MODEL`; no model weights belong in a commit.

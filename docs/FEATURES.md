@@ -474,7 +474,7 @@ or [SHORTCUTS.md](SHORTCUTS.md), [RECORDING.md](RECORDING.md) and
 - **Performance overlay**: real playback FPS, target FPS, dropped frames (clock ticks that produced no new picture), last/average render time, cache frames and hit rate, preview resolution and the active backend. Nothing is estimated or hardcoded.
 - **Robustness**: a crash guard replaces `sys.excepthook` at startup so an exception inside a Qt slot is logged to the app-config `meenifx-errors.log` instead of aborting the application, and the render thread is stopped deterministically on exit.
 - **Still expensive**: Glow is the one everyday effect the shortcut does not help - it is full-frame float maths by design (198 ms/frame at 1080p Full, 80 ms at 720p), and Mosaic is 40 ms at 1080p. Auto quality is what keeps playback responsive there; those kernels have not been reduced, so lowering the preview quality is the honest fix for a glow-heavy timeline.
-- **Limits**: OpenCL compositing is slower than the CPU path on typical hardware, so GPU acceleration of frame operations is *available but not selected* by Auto; there is no CUDA build of OpenCV in the wheel, no shader pipeline, and no hardware decode in this OpenCV build. Prerendering is single-threaded by design (it must never compete with playback). Proxies are generated one file per source and are not reused across projects.
+- **Limits**: OpenCL compositing is slower than the CPU path on typical hardware, so GPU acceleration of frame operations is *available but not selected* by Auto; there is no CUDA build of OpenCV in the wheel and no hardware decode in this OpenCV build. The separate Phase 1 shader backend accelerates Page Curl and Lens Warp, rather than replacing the OpenCV frame-operation backend. Prerendering is single-threaded by design (it must never compete with playback). Proxies are generated one file per source and are not reused across projects.
 - **Measured** with `python tests/preview_bench.py` on this machine (RTX 3070, 16 threads, 1080p synthetic source, 30 fps project): 1080p no effects renders in 23 ms/frame at Full and 7.6 ms at 1/2; the old discard rule showed **1 distinct frame in 2 s while the playhead advanced 59 frames**, the new pipeline shows **30.8 fps with 0 dropped frames**; three stacked 1080p layers at 1/2 play at 13.2 fps uncached (33 dropped) and 30.6 fps from the cache; puppet-warp and animated-transform timelines play at 30.3 fps cached; a 4K/three-effect timeline runs 26.7 fps uncached and 27.5 fps cached; forced OpenCL takes 15.4 ms/frame versus 9.3 ms on the CPU; NVENC encodes 200 1080p frames in 1.27 s versus 1.36 s for the OpenCV writer (and 80 4K frames in 1.59 s versus 1.22 s - the pipe overhead dominates short exports, which is why the writer is chosen per machine and reported).
 
 ## Projects
@@ -488,3 +488,22 @@ or [SHORTCUTS.md](SHORTCUTS.md), [RECORDING.md](RECORDING.md) and
 - The **Project** dock (on the left) lists the project's media in grid or list view with background thumbnails (cached in `Cache/thumbs`), search, bins, Import, drag to the timeline/preview, double-click to insert at the playhead, Rename, Relink, Remove. Missing media shows a warning icon in the timeline and the panel instead of failing.
 - A `.mfxpf` path passed on the command line is opened on startup, so double-clicking a project works once the association exists. `packaging\associate_mfxpf.ps1` registers the extension (per user, no administrator rights) for the packaged `dist\meeniFX\meeniFX.exe`; `-Remove` undoes it.
 - Tests: `python tests\test_project_format.py`, `test_project_storage.py`, `test_project_app.py`, `test_start_window.py`, `test_project_panel.py`, `test_project_large.py`, plus `tests\test_start_window_cleanup.py` (missing/temp pruning, the Recycle Bin rules and the no-recent switch).
+
+## Phase 1 shader effects (development)
+
+- **Lens Warp** (`lens_warp`): a localized elliptical bulge/pinch with center/radius
+  preview handles, signed distortion, aspect, transparent/clamp/mirror boundaries,
+  chromatic aberration and smooth/nearest sampling.
+- **Page Curl** (`page_curl`): a cylindrical sheet turn with distinct front/back shading,
+  position, angle, direction, radius, thickness, shadow, highlight, foreshortening and
+  four-sample edge antialiasing. The backside can use color, the page, an image or a
+  timeline clip. Progress 0 preserves the source; 1 reveals the layer underneath.
+- Both use the existing Mix, masks, adjustment layers, compositions, editable keyframes,
+  Graph Editor, copy/duplicate and project serialization. Original names and stable IDs
+  are used throughout. Existing Lens Distortion and Kaleidoscope keep their own IDs.
+- The Properties preset menu offers Corner Lift, Broad Turn, Top Fold, Soft Glass,
+  Wide View and Prism Lens. They set real editable parameters through the existing
+  effect-preset system. Existing Looks can include either effect as a normal stack entry.
+- Automatic selects a matching CPU implementation when GPU shaders are unavailable.
+  Forced GPU reports an error. The Properties status identifies the rendering path.
+  See [the architecture and verification report](SHADER_PHASE1.md) for limits and results.
