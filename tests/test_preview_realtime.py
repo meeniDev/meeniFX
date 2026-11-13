@@ -359,6 +359,40 @@ def test_alt_pressed_during_a_corner_scale_switches_to_distortion(editor):
     assert value is not None and value > 0.01
 
 
+def test_alt_corner_drag_respects_clip_rotation_and_scale(editor):
+    window, clip = editor
+    clip.transform["rotation"] = 24.0
+    clip.transform["scale_x"] = 74.0
+    clip.transform["scale_y"] = 82.0
+    window.engine.session.set_selection(set())
+    window.engine.session.set_selection({clip.id})
+    window._refresh_panels()
+    pump(0.15)
+    view = window.preview_panel.view
+    before = T.evaluate(clip, window.overlay.local_frame(clip))
+    corner = handle_point(window, clip, "se")
+    target = QPointF(corner.x() - 22, corner.y() - 14)
+    send(view, QMouseEvent.Type.MouseButtonPress, corner, Qt.KeyboardModifier.AltModifier)
+    send(view, QMouseEvent.Type.MouseMove, target, Qt.KeyboardModifier.AltModifier)
+    send(view, QMouseEvent.Type.MouseButtonRelease, target, Qt.KeyboardModifier.AltModifier)
+    pump(0.1)
+    live = live_clip(window, clip.id)
+    frame = window.overlay.local_frame(live)
+    value = CH.value_at(live, CH.effect_channel("corner_pin", "corner_br_x"), frame)
+    assert value is not None and value < 0.99
+    for name, default in (("corner_tl_x", 0.0), ("corner_tl_y", 0.0),
+                          ("corner_tr_x", 1.0), ("corner_tr_y", 0.0),
+                          ("corner_bl_x", 0.0), ("corner_bl_y", 1.0)):
+        other = CH.value_at(live, CH.effect_channel("corner_pin", name), frame)
+        assert (default if other is None else other) == pytest.approx(default, abs=1e-6)
+    after = T.evaluate(live, frame)
+    assert after.position_x == pytest.approx(before.position_x, abs=1e-6)
+    assert after.position_y == pytest.approx(before.position_y, abs=1e-6)
+    assert after.scale_x == pytest.approx(before.scale_x, abs=1e-6)
+    assert after.scale_y == pytest.approx(before.scale_y, abs=1e-6)
+    assert after.rotation == pytest.approx(before.rotation, abs=1e-6)
+
+
 def test_alt_corner_drag_is_correct_at_a_non_fit_preview_zoom(editor):
     window, clip = editor
     view = window.preview_panel.view
